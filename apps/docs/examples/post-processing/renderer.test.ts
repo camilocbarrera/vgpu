@@ -6,7 +6,7 @@ const vgpuFns = vi.hoisted(() => Object.fromEntries(
     // The gpu double each test builds is still method-shaped; these stand in for vgpu's free functions.
     .map((name) => [name, (gpu: any, ...args: any[]) => (name === 'frameLoop' ? gpu.frame.loop(...args) : gpu[name](...args))]),
 )) as Record<string, unknown>;
-const mocks=vi.hoisted(()=>({init:vi.fn()}));vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns }));
+const mocks=vi.hoisted(()=>({init:vi.fn()}));vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, clock: (gpu: any) => ({ get time() { return gpu.time ?? 0; }, get deltaTime() { return gpu.deltaTime ?? 0; }, get frameCount() { return gpu.frameCount ?? 0; }, advance() {} }) }));
 import { Controls } from './controls'; import { DEFAULT_POST_PROCESSING_CONTROLS } from './types'; import { createRenderer, renderThumbnail } from './renderer';
 afterEach(()=>{vi.unstubAllGlobals();vi.clearAllMocks();});
 test('uses shared all-on defaults in accessible controlled toggles',()=>{const html=renderToStaticMarkup(createElement(Controls, { value: DEFAULT_POST_PROCESSING_CONTROLS, onChange: () => {} }));expect(DEFAULT_POST_PROCESSING_CONTROLS).toEqual({bloom:true,ca:true});expect(html).toContain('Post-processing effects');expect(html.match(/checked=""/g)).toHaveLength(2);expect(html).toContain('Chromatic Aberration');});

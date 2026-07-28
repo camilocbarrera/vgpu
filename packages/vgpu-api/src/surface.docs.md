@@ -54,6 +54,7 @@ interface Surface extends Target {
 | opts.format | `GPUTextureFormat` | ✖ | `navigator.gpu.getPreferredCanvasFormat() ?? "bgra8unorm"` | Canvas swapchain format. |
 | opts.alphaMode | `GPUCanvasAlphaMode` | ✖ | `"premultiplied"` | Passed to `GPUCanvasContext.configure`. |
 | opts.colorSpace | `PredefinedColorSpace` | ✖ | `"srgb"` | Passed to `GPUCanvasContext.configure`. |
+| opts.clearColor | `ClearColor` | ✖ | `[0, 0, 0, 1]` | Default clear color of this surface, used by passes that clear without naming one. Writable at runtime as `surface.clearColor`; a pass `clear` color still wins for that pass. Four finite numbers, or a `GPUColor` object. |
 | opts.label | `string` | ✖ | `undefined` | Used in error messages and texture labels. |
 | onResize.cb | `(event: SurfaceResizeEvent) => void` | ✔ | — | Called synchronously immediately on subscription and after future size changes. |
 | event.width | `number` | ✔ | — | Physical pixel width, equal to `surface.size[0]` and `canvas.width`. |
@@ -168,4 +169,4 @@ frame(gpu, (currentFrame) => currentFrame.pass({ target: canvasSurface }, (pass)
 - `surface.read()` returns RGBA bytes. Canvas formats `bgra8unorm` and `bgra8unorm-srgb` are supported and swizzled to RGBA, which matters on platforms where `navigator.gpu.getPreferredCanvasFormat()` returns BGRA.
 - `surface.readFloats()` returns the same pixels decoded to a `Float32Array` of components (`unorm8` canvas formats normalized to `[0, 1]`); it is the readback to use if a surface is ever configured with a float format.
 - A canvas can have only one live surface. Call `surface.dispose()` before creating another one for the same canvas.
-- **See also:** `init`, `Gpu.surface`, `Target`, `Frame`, `Bundle`.
+- **See also:** `init`, `surface`, `Target`, `Frame`, `Bundle`.

@@ -166,4 +166,4 @@ GPU-driven dispatch: the first pass writes the workgroup counts from GPU-side st
 - Dispatch counts are forwarded to WebGPU; validate domain-specific bounds in your app.
 - Write indirect counts from another compute pass (bind the same buffer as storage) or from JS via `write()`. The same option shape drives GPU-driven draws via `DrawCallOptions.indirect`.
 - `storage(gpu)` creates storage buffers with `copy_src` and `copy_dst`, so they can be read back and rewritten from JS.
-- **See also:** `Gpu.compute`, `Draw.set`, `SharedUniforms`, `Target`, `StorageBuffer` from `vgpu/core`.
+- **See also:** `compute`, `Draw.set`, `SharedUniforms`, `Target`, `StorageBuffer` from `vgpu/core`.

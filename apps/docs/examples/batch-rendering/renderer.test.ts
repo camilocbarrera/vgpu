@@ -6,7 +6,7 @@ const vgpuFns = vi.hoisted(() => Object.fromEntries(
     // The gpu double each test builds is still method-shaped; these stand in for vgpu's free functions.
     .map((name) => [name, (gpu: any, ...args: any[]) => (name === 'frameLoop' ? gpu.frame.loop(...args) : gpu[name](...args))]),
 )) as Record<string, unknown>;
-vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns }));
+vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, clock: (gpu: any) => ({ get time() { return gpu.time ?? 0; }, get deltaTime() { return gpu.deltaTime ?? 0; }, get frameCount() { return gpu.frameCount ?? 0; }, advance() {} }) }));
 vi.mock('vgpu/scene', () => ({ perspectiveCamera: () => ({ viewProjection: new Float32Array(16) }) }));
 
 import { createRenderer, renderThumbnail } from './renderer';

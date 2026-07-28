@@ -400,7 +400,7 @@ export function queryDuplicateError(label: string): VGPUError {
   });
 }
 
-export function targetRequiredError(where = "Gpu.frame"): VGPUError {
+export function targetRequiredError(where = "Frame.pass"): VGPUError {
   return new VGPUError({
     code: "VGPU-TARGET-REQUIRED",
     message: "Target required. Fix: pass surface(gpu, canvas) or target(gpu, { size }) as { target }.",

@@ -6,7 +6,7 @@ const vgpuFns = vi.hoisted(() => Object.fromEntries(
     // The gpu double each test builds is still method-shaped; these stand in for vgpu's free functions.
     .map((name) => [name, (gpu: any, ...args: any[]) => (name === 'frameLoop' ? gpu.frame.loop(...args) : gpu[name](...args))]),
 )) as Record<string, unknown>;
-const mocks = vi.hoisted(() => ({ init: vi.fn() })); vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns }));
+const mocks = vi.hoisted(() => ({ init: vi.fn() })); vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, clock: (gpu: any) => ({ get time() { return gpu.time ?? 0; }, get deltaTime() { return gpu.deltaTime ?? 0; }, get frameCount() { return gpu.frameCount ?? 0; }, advance() {} }) }));
 import { Controls } from './controls'; import { createRenderer, renderThumbnail } from './renderer'; import { AA_MODE_FXAA, AA_MODE_OFF, DEFAULT_ANTI_ALIASING_CONTROLS } from './types';
 function setup() {
  vi.stubGlobal('window', { devicePixelRatio: 1, addEventListener: vi.fn(), removeEventListener: vi.fn() }); vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1)); vi.stubGlobal('cancelAnimationFrame', vi.fn()); const disconnect=vi.fn(); vi.stubGlobal('ResizeObserver', class { observe=vi.fn(); disconnect=disconnect; });

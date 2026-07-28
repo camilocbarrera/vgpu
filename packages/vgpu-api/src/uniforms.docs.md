@@ -60,4 +60,4 @@ globals.set({ exposure: 1.25 });
 - The first shader to bind the object chooses the WGSL layout. Keep struct member names/types/order aligned for every later shader that reuses it.
 - Use shared uniforms for values like time, mouse, camera, exposure, and viewport data consumed by many passes.
 - If one shader needs a different layout, create a second `uniforms(gpu)` object rather than mutating the first layout.
-- **See also:** `Gpu.uniforms`, `Effect.set`, `Draw.set`, `Uniform`, `StructuredUniform`.
+- **See also:** `uniforms`, `Effect.set`, `Draw.set`, `Uniform`, `StructuredUniform`.

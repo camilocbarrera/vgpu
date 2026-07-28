@@ -28,7 +28,7 @@ export function compute(gpu: Gpu, source: string | ShaderSource, opts: ComputeOp
 let nextComputeId = 1;
 
 /**
- * Internal Ring-1 compute implementation behind `Gpu.compute()`.
+ * Internal Ring-1 compute implementation behind `compute(gpu, source, opts)`.
  *
  * @internal
  */
