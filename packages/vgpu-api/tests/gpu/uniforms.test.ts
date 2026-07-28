@@ -62,7 +62,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("uniforms(gpu) Docker GPU"
   });
 });
 
-function renderPair(gpu: Awaited<ReturnType<typeof init>>, waveTarget: ReturnType<typeof gpu.target>, blurTarget: ReturnType<typeof gpu.target>, wave: ReturnType<typeof gpu.effect>, blur: ReturnType<typeof gpu.effect>): void {
+function renderPair(gpu: Awaited<ReturnType<typeof init>>, waveTarget: ReturnType<typeof target>, blurTarget: ReturnType<typeof target>, wave: ReturnType<typeof effect>, blur: ReturnType<typeof effect>): void {
   frame(gpu, (currentFrame) => {
     currentFrame.pass({ target: waveTarget, clear: [0, 0, 0, 1] }, (pass) => pass.draw(wave));
     currentFrame.pass({ target: blurTarget, clear: [0, 0, 0, 1] }, (pass) => pass.draw(blur));
