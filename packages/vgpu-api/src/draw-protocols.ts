@@ -29,7 +29,8 @@ export interface BindingResourceProvider {
 
 /** Narrows a user-supplied binding value to the protocol, or `undefined` for anything else. */
 export function bindingResourceOf(value: unknown): BindingResourceProvider | undefined {
-  return typeof value === "object" && value !== null && BINDING_RESOURCE in value ? (value as BindingResourceProvider) : undefined;
+  const method = typeof value === "object" && value !== null ? (value as Partial<BindingResourceProvider>)[BINDING_RESOURCE] : undefined;
+  return typeof method === "function" ? (value as BindingResourceProvider) : undefined;
 }
 
 /** @internal Resolves named geometry attributes against reflected shader inputs. */

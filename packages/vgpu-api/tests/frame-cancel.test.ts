@@ -277,3 +277,12 @@ function spyFrameEncoders(device: GPUDevice): { readonly encodeOps: EncodeOp[] }
   });
   return { encodeOps };
 }
+
+test("gpu.dispose cancels outstanding manual frames before resource teardown", async () => {
+  const gpu = await init();
+  const colorTarget = target(gpu, { size: [1, 1] });
+  const manual = frame(gpu);
+  gpu.dispose();
+  expect(() => manual.pass(colorTarget, () => undefined)).toThrowError(/frame was canceled/);
+  manual.submit();
+});

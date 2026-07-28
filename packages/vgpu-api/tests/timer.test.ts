@@ -358,7 +358,7 @@ test("a stale frame submitted after many later frames reports nothing and destro
   vi.restoreAllMocks();
 });
 
-test("gpu.dispose() with a frame still open does not throw and leaves the query set to the dropped frame", async () => {
+test("gpu.dispose() cancels an open frame and releases its retained query set", async () => {
   const gpu = await initWithTimestampQuery();
   const destroyed: number[] = [];
   spyQuerySetDestroys(gpu.device.gpu, destroyed);
@@ -369,15 +369,14 @@ test("gpu.dispose() with a frame still open does not throw and leaves the query 
   leaked.pass({ target: colorTarget, timer: gpuTimer1.span("leaked") }, () => undefined);
   await gpu.settled();
 
-  // gpu.dispose() disposes the timer it created; the ring is marked disposed but its destroy stays
-  // deferred behind the open frame's retain. Since that frame is never submitted the deferred destroy
-  // never runs — the caller leaked it, exactly like a native encoder that never calls finish().
+  // Manual frames belong to the scheduler phase, so gpu.dispose() cancels them before resource
+  // teardown. That releases the frame's retain and lets the query set be destroyed safely.
   expect(() => gpu.dispose()).not.toThrow();
-  expect(destroyed).toEqual([]);
+  expect(destroyed).toEqual([0]);
   // The disposed timer is unusable, and nothing crashes on the way out.
   expect(() => gpuTimer1.span("after")).toThrowError(/disposed/i);
   expect(() => gpuTimer1.dispose()).not.toThrow();
-  expect(destroyed).toEqual([]);
+  expect(destroyed).toEqual([0]);
   vi.restoreAllMocks();
 });
 

@@ -89,7 +89,7 @@
     "./core": "client"
   },
   "vgpuExportBundleBudgetsGzipBytes": {
-    ".": 37888,
+    ".": 38400,
     "./node": 38400,
     "./mock": 38400,
     "./scene": 12800,
@@ -101,7 +101,7 @@
   },
   "vgpuExperienceBundleBudgetsGzipBytes": {
     "init-only": 1024,
-    "effect-only": 25088,
+    "effect-only": 25600,
     "triangle-low-level": 28672,
     "draw-recipe-box": 29696,
     "full-root": 38400

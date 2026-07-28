@@ -1,6 +1,6 @@
 import { Texture, createResourceIdentity, DestroySignal, type Device, type ResourceDestroyCallback, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
 import type { RenderPassDescriptorOptions, Target, TargetOptions, TargetTextureOptions } from "./target.ts";
-import { BUILT_IN_CLEAR_COLOR, colorAttachment, colorSpecsFor, depthAttachment, depthFormatFor, sampleCountFor, sameSize, validateClearColor, validateTargetOptions, type ClearColor } from "./target-utils.ts";
+import { BUILT_IN_CLEAR_COLOR, colorAttachment, copyClearColor, colorSpecsFor, depthAttachment, depthFormatFor, sampleCountFor, sameSize, validateClearColor, validateTargetOptions, type ClearColor } from "./target-utils.ts";
 import { liveKernel } from "./live-kernel.ts";
 import type { Gpu } from "./kernel.ts";
 
@@ -45,7 +45,7 @@ export class OffscreenTarget implements Target {
   get depth(): Texture | undefined { return this.#currentDepth; }
   get format(): GPUTextureFormat { return colorSpecsFor(this.options)[0]?.format ?? "rgba8unorm"; }
   /** Default clear color of this target; passes that clear without naming a color use it. */
-  get clearColor(): ClearColor { return this.#clearColor; }
+  get clearColor(): ClearColor { return copyClearColor(this.#clearColor); }
   set clearColor(value: ClearColor) { this.#clearColor = validateClearColor(value, "target.clearColor"); }
   get sampleCount(): 1 | 4 { return sampleCountFor(this.options); }
 

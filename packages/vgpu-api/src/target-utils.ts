@@ -5,7 +5,7 @@ export const DEFAULT_FORMAT: GPUTextureFormat = "rgba8unorm";
 export type ClearColor = GPUColor | readonly [number, number, number, number];
 
 /** Clear color used by a pass when neither the pass nor the target chose one. */
-export const BUILT_IN_CLEAR_COLOR: ClearColor = [0, 0, 0, 1];
+export const BUILT_IN_CLEAR_COLOR: ClearColor = Object.freeze([0, 0, 0, 1]);
 
 /**
  * Validates a clear color on assignment (`target.clearColor`, `surface(gpu, canvas, { clearColor })`),
@@ -15,7 +15,13 @@ export function validateClearColor(value: ClearColor, where: string): ClearColor
   const object = value as { r?: unknown; g?: unknown; b?: unknown; a?: unknown };
   const components = Array.isArray(value) ? value : [object?.r, object?.g, object?.b, object?.a];
   if (components.length !== 4 || !components.every((component) => typeof component === "number" && Number.isFinite(component))) throw clearColorInvalidError(where);
-  return value;
+  return copyClearColor(value);
+}
+
+/** Defensive copy: clear colors are mutable WebGPU dictionaries/arrays at runtime. */
+export function copyClearColor(value: ClearColor): ClearColor {
+  const object = value as { r?: number; g?: number; b?: number; a?: number };
+  return Array.isArray(value) ? [value[0], value[1], value[2], value[3]] : { r: object.r!, g: object.g!, b: object.b!, a: object.a! };
 }
 
 export interface TargetDeviceCaps {

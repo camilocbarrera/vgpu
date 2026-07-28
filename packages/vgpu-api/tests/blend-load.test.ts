@@ -185,3 +185,21 @@ function canvasLike(): HTMLCanvasElement {
   const canvas = { width: 0, height: 0, clientWidth: 4, clientHeight: 4, getContext: (kind: string) => kind === "webgpu" ? context : null };
   return canvas as unknown as HTMLCanvasElement;
 }
+
+test("target clear colors defensively copy inputs and outputs", async () => {
+  const gpu = await init();
+  const input = [0.1, 0.2, 0.3, 1] as [number, number, number, number];
+  const first = target(gpu, { size: [2, 2], clearColor: input });
+  const second = target(gpu, { size: [2, 2] });
+  input[0] = 0.9;
+  (first.clearColor as number[])[1] = 0.9;
+  (second.clearColor as number[])[0] = 0.9;
+  const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
+  frame(gpu, (current) => {
+    current.pass(first, () => undefined);
+    current.pass(second, () => undefined);
+  });
+  expect(descriptors[0]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0.1, g: 0.2, b: 0.3, a: 1 });
+  expect(descriptors[1]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0, g: 0, b: 0, a: 1 });
+  gpu.dispose();
+});

@@ -146,4 +146,6 @@ test("clock(gpu) is stable, rejects invalid deltas and dies with the gpu", async
 
   gpu.dispose();
   expect(() => clock(gpu)).toThrowError(/clock\(\) ran after gpu\.dispose\(\)/);
+  expect(() => time.advance(1)).toThrowError(/clock\.advance\(\) ran after gpu\.dispose\(\)/);
+  expect(() => time.time).toThrowError(/clock\.time\(\) ran after gpu\.dispose\(\)/);
 });

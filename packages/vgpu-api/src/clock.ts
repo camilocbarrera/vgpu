@@ -6,7 +6,7 @@
  * calls `clock()` never allocates the service.
  */
 import { frameState } from "./frame-state.ts";
-import { liveKernel } from "./live-kernel.ts";
+import { gpuDisposedError, liveKernel } from "./live-kernel.ts";
 import { clockDeltaInvalidError } from "./errors.ts";
 import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
 
@@ -44,11 +44,13 @@ export function clock(gpu: Gpu): Clock {
 function createClock(kernel: Kernel): Clock {
   return kernel.service(clockToken, (self) => {
     const state = frameState(self);
+    const assertLive = (where: string) => { if (self.disposed) throw gpuDisposedError(where); };
     return {
-      get time(): number { return state.time; },
-      get deltaTime(): number { return state.deltaTime; },
-      get frameCount(): number { return state.frameCount; },
+      get time(): number { assertLive("clock.time"); return state.time; },
+      get deltaTime(): number { assertLive("clock.deltaTime"); return state.deltaTime; },
+      get frameCount(): number { assertLive("clock.frameCount"); return state.frameCount; },
       advance(dtSeconds: number): void {
+        assertLive("clock.advance");
         if (typeof dtSeconds !== "number" || !Number.isFinite(dtSeconds) || dtSeconds < 0) throw clockDeltaInvalidError(dtSeconds);
         state.advanceBy(dtSeconds);
       },

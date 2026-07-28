@@ -1,5 +1,5 @@
 import { Texture, createResourceIdentity, DestroySignal, type Device, type ResourceDestroyCallback, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
-import { BUILT_IN_CLEAR_COLOR, colorValue, sameSize, validateClearColor, type ClearColor } from "./target-utils.ts";
+import { BUILT_IN_CLEAR_COLOR, colorValue, copyClearColor, sameSize, validateClearColor, type ClearColor } from "./target-utils.ts";
 import type { RenderPassDescriptorOptions, Target } from "./target.ts";
 import {
   surfaceAutoResizeUnsupportedError,
@@ -147,7 +147,7 @@ export class CanvasSurface implements Surface {
   get sampleCount(): 1 { this.#assertLive(); return 1; }
   get dpr(): number { return this.#currentDpr; }
   /** Default clear color of this surface; passes that clear without naming a color use it. */
-  get clearColor(): ClearColor { return this.#clearColor; }
+  get clearColor(): ClearColor { return copyClearColor(this.#clearColor); }
   set clearColor(value: ClearColor) { this.#clearColor = validateClearColor(value, "surface.clearColor"); }
   get disposed(): boolean { return this.#isDisposed; }
 

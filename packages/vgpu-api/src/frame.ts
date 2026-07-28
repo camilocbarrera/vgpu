@@ -47,7 +47,12 @@ function frameRunner(kernel: Kernel): FrameRunner {
   return kernel.service(frameRunnerToken, (self) => {
     const state = frameState(self);
     return new FrameRunner(
-      () => new Frame(self.device, undefined, (error) => self.reportError(error), (promise) => { void self.trackDelivery(promise); }),
+      () => {
+        let release = () => {};
+        const frame = new Frame(self.device, undefined, (error) => self.reportError(error), (promise) => { void self.trackDelivery(promise); }, () => release());
+        release = self.own("scheduler", () => frame.cancel());
+        return frame;
+      },
       () => state.tick(),
       (handle) => self.own("scheduler", () => handle.stop()),
     );
@@ -117,6 +122,7 @@ export class Frame {
     private readonly defaultTarget?: Target,
     private readonly errorSink?: ValidationErrorSink,
     private readonly trackSettled?: (promise: Promise<unknown>) => void,
+    private readonly releaseLifecycle?: () => void,
   ) {
     this.#encoder = device.gpu.createCommandEncoder({ label: "vgpu.frame" });
   }
@@ -221,6 +227,7 @@ export class Frame {
     // (or an exception) from inside the callback.
     if (this.#submitted || this.#canceled) return;
     this.#submitted = true;
+    this.releaseLifecycle?.();
     // Timed and occlusion-queried frames append one resolveQuerySet of each instance's contiguous
     // used range (plus the staging copy) to the still-open frame encoder — zero extra submissions.
     for (const owner of this.#liveOwners()) owner.finalizeFrame(this, this.#encoder);
@@ -289,6 +296,7 @@ export class Frame {
     // could destroy them before encoder.end(), and the callback could keep encoding after cancel.
     if (this.#passActive) throw framePassActiveError("Frame.cancel");
     this.#canceled = true;
+    this.releaseLifecycle?.();
     // Nothing is finalized and nothing is read back: the encoded passes never reach the queue, so
     // decoding a resolve would report stale staging bytes as a phantom duration or "hidden".
     this.#abandonOwners(this.#frameOwners());
