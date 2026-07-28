@@ -66,6 +66,39 @@ test("a timer validation failure after an earlier pass drops the frame's partial
   gpu.dispose();
 });
 
+test("a failed attach drops every telemetry instance of that frame, not only its own", async () => {
+  const gpu = await initWithTimestampQuery();
+  const shadows = gpu.timer();
+  const main = gpu.timer();
+  const target = gpu.target({ size: [4, 4] });
+  const shadowResults: Array<Readonly<Record<string, number>>> = [];
+  const mainResults: Array<Readonly<Record<string, number>>> = [];
+  shadows.onResults((spans) => { shadowResults.push(spans); });
+  main.onResults((spans) => { mainResults.push(spans); });
+
+  expect(() => gpu.frame((frame) => {
+    frame.pass({ target, timer: shadows.span("shadows") }, () => undefined);
+    frame.pass({ target, timer: main.span("duplicate") }, () => undefined);
+    frame.pass({ target, timer: main.span("duplicate") }, () => undefined);
+  })).toThrowError(/duplicate span|VGPU-TIMER-INVALID/);
+  await gpu.settled();
+
+  // The failing attachment mutated its own bookkeeping before throwing and, through the nominal
+  // attach protocol, cannot report whose it was: the frame drops every owner rather than report a
+  // half-encoded frame. `shadows` ran fine and is still dropped — conservative on purpose.
+  expect(mainResults).toEqual([]);
+  expect(shadowResults).toEqual([]);
+
+  // The next frame is unaffected: only that frame's bookkeeping was discarded.
+  gpu.frame((frame) => frame.pass({ target, timer: shadows.span("shadows") }, () => undefined));
+  await gpu.settled();
+  expect(shadowResults).toEqual([{ shadows: 1 }]);
+
+  shadows.dispose();
+  main.dispose();
+  gpu.dispose();
+});
+
 test("a throwing pass callback leaves no phantom visibility result", async () => {
   const gpu = await init();
   const ops = spyFrameEncoders(gpu.device.gpu);
