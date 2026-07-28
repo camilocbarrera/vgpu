@@ -1,5 +1,8 @@
 import type { Device } from "@vgpu/core";
 import { timerCapacityError, timerInvalidError } from "./errors.ts";
+import { FRAME_PASS_ATTACHMENT, type FramePassAttachContext, type FramePassAttachment, type FramePassAttachResult } from "./frame-protocols.ts";
+import type { Gpu } from "./kernel.ts";
+import { liveKernel, ownQueryFeature } from "./live-kernel.ts";
 import { createQueryRing, type QueryHostOptions, type QueryRing } from "./query-ring.ts";
 
 /**
@@ -27,8 +30,17 @@ const INITIAL_SPAN_CAPACITY = 32;
 const MAX_QUERIES = 4096;
 const MAX_SPANS_PER_FRAME = MAX_QUERIES / 2;
 const MS_PER_NS = 1 / 1_000_000;
-class InternalTimerSpan implements TimerSpan {
+class InternalTimerSpan implements TimerSpan, FramePassAttachment {
   constructor(readonly name: string, readonly owner: InternalTimer) {}
+
+  /**
+   * Frame pass attachment: registering the span is what returns the descriptor's `timestampWrites`
+   * (undefined when the span is dropped this frame because the query set is full). The owner is the
+   * timer, not the span, so a frame that attaches two spans of the same timer bookkeeps one owner.
+   */
+  [FRAME_PASS_ATTACHMENT](ctx: FramePassAttachContext): FramePassAttachResult {
+    return { owner: this.owner, timestampWrites: this.owner.attachSpan(this, ctx.frame, ctx.device) };
+  }
 }
 
 /** @internal Frame.pass guard: FramePassOptions.timer must be a span produced by Timer.span(). */
@@ -39,6 +51,19 @@ export function isTimerSpan(value: unknown): value is InternalTimerSpan {
 /** @internal */
 export function createTimer(device: Device, host: QueryHostOptions = {}): Timer {
   return new InternalTimer(device, host);
+}
+
+/**
+ * GPU pass timing for this gpu. Needs the "timestamp-query" device feature — request it at init:
+ * `init({ requiredFeatures: ["timestamp-query"] })`.
+ *
+ * The timer owns a query ring: its readbacks join `gpu.settled()`, a dropped readback is reported
+ * on `gpu.onError`, and `gpu.dispose()` releases the query set (deferring destruction while a frame
+ * in flight still references it). `timer.dispose()` releases it earlier and drops the registration.
+ */
+export function timer(gpu: Gpu): Timer {
+  const kernel = liveKernel(gpu, "timer");
+  return ownQueryFeature(kernel, (host) => new InternalTimer(kernel.device, host));
 }
 
 interface FrameSpan {

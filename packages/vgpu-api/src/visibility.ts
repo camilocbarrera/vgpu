@@ -1,5 +1,9 @@
 import type { Device } from "@vgpu/core";
-import { queryDuplicateError, visibilityCapacityError, visibilityCapacityLimitError, visibilityDisposedError, visibilityInvalidError, visibilityLabelDuplicateError } from "./errors.ts";
+import { queryDuplicateError, visibilityCapacityError, visibilityCapacityLimitError, visibilityDisposedError, visibilityInvalidError, visibilityLabelDuplicateError, visibilityNoDepthError } from "./errors.ts";
+import { FRAME_PASS_ATTACHMENT, type FramePassAttachContext, type FramePassAttachment, type FramePassAttachResult } from "./frame-protocols.ts";
+import { frameState } from "./frame-state.ts";
+import type { Gpu } from "./kernel.ts";
+import { liveKernel, ownQueryFeature } from "./live-kernel.ts";
 import { createQueryRing, type QueryHostOptions, type QueryRing } from "./query-ring.ts";
 
 export interface VisibilityOptions {
@@ -41,6 +45,20 @@ const DEFAULT_CAPACITY = 64;
 /** @internal */
 export function createVisibility(device: Device, options: VisibilityOptions = {}, frameCounter: () => number = () => 0, host: QueryHostOptions = {}): Visibility {
   return new InternalVisibility(device, options, frameCounter, host);
+}
+
+/**
+ * Occlusion query results for visibility culling. Core WebGPU — no device feature required. Pass the
+ * instance as `FramePassOptions.visibility`, wrap proxy draws in `pass.occlusion(handle, body)` and
+ * condition the real draw on `handle.hidden`.
+ *
+ * `VisibilityQuery.age` counts frames through the kernel's frame state, which is created on demand:
+ * a program that never opens a frame keeps reading age `Infinity` instead of paying for the clock.
+ * The instance goes down with `gpu.dispose()` (resource phase) or earlier with `visibility.dispose()`.
+ */
+export function visibility(gpu: Gpu, options: VisibilityOptions = {}): Visibility {
+  const kernel = liveKernel(gpu, "visibility");
+  return ownQueryFeature(kernel, (host) => new InternalVisibility(kernel.device, options, () => frameState(kernel).frameCount, host));
 }
 
 /** @internal Frame.pass guard: FramePassOptions.visibility must come from gpu.visibility(). */
@@ -187,6 +205,23 @@ export class InternalVisibility {
 
   /** @internal Pass descriptor's occlusionQuerySet: one "occlusion"-type set owned by the shared ring. */
   get querySet(): GPUQuerySet { return this.#ring.querySet; }
+
+  /**
+   * Frame pass attachment: validates that the pass can host occlusion queries at all, joins the
+   * frame's bookkeeping and hands back the query source `FramePass.occlusion()` allocates from.
+   *
+   * The depth check lives here, not in the frame: without depth testing an occlusion query passes
+   * for anything rasterized, so it always reports "visible" — useless for culling, and only this
+   * attachment knows that rule.
+   */
+  [FRAME_PASS_ATTACHMENT](ctx: FramePassAttachContext): FramePassAttachResult {
+    if (!ctx.target.depth) throw visibilityNoDepthError();
+    this.attachFrame(ctx.frame, ctx.device);
+    return {
+      owner: this,
+      occlusion: { querySet: this.querySet, beginQuery: (query, frame) => this.beginQuery(query as VisibilityQuery, frame) },
+    };
+  }
 
   /** @internal Frame.pass hook: validates the gpu match and (re)starts per-frame slot allocation. */
   attachFrame(frame: unknown, frameDevice: Device): void {

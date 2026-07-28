@@ -1,6 +1,8 @@
 import type { Buffer, Device } from "@vgpu/core";
 import type { BindingInfo, HostShareableLayout } from "@vgpu/wgsl/reflect-source";
 import type { SharedUniforms } from "./api-types.ts";
+import type { Gpu } from "./kernel.ts";
+import { liveKernel, ownResource } from "./live-kernel.ts";
 import type { NormalizedBindingResource } from "./set-resources.ts";
 import { sharedUniformLayoutMismatchError, unsupportedError } from "./errors.ts";
 import { writeLayoutValue } from "./set-packing.ts";
@@ -99,10 +101,32 @@ export class SharedUniformsImpl<T extends Record<string, unknown>> implements Sh
     if (!this.#bufferRef) throw unsupportedError("gpu.uniforms", "shared uniforms have not adopted a layout yet.");
     return this.#bufferRef;
   }
+
+  /**
+   * Frees the backing buffer, if the layout was already adopted. Idempotent, and a no-op for an
+   * object that no shader ever bound — the buffer only exists after adoption.
+   *
+   * @internal Lifetime is the gpu's: `gpu.dispose()` runs this in the resource phase.
+   */
+  destroy(): void {
+    this.#bufferRef?.destroy();
+  }
 }
 
 export function createSharedUniforms<T extends Record<string, unknown>>(device: Device, values: T): SharedUniformsImpl<T> {
   return new SharedUniformsImpl(device, values);
+}
+
+/**
+ * Values-first shared uniform/storage block for this gpu. Bind the same object in several shaders:
+ * the WGSL layout is adopted from the first binding that uses it and validated against the rest, so
+ * one `set()` updates every consumer through a single buffer.
+ *
+ * The buffer (created on adoption) is freed by `gpu.dispose()`.
+ */
+export function uniforms<T extends Record<string, unknown>>(gpu: Gpu, values: T): SharedUniforms<T> {
+  const kernel = liveKernel(gpu, "uniforms");
+  return ownResource(kernel, new SharedUniformsImpl(kernel.device, values), (shared) => shared.destroy());
 }
 
 export function isSharedUniformsValue(value: unknown): value is SharedUniformsImpl<Record<string, unknown>> {

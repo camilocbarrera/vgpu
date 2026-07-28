@@ -1,4 +1,5 @@
 import type { Device } from "@vgpu/core";
+import type { ShaderSource } from "@vgpu/wgsl";
 import { reflectSource, type BindingInfo, type EntryPointInfo, type Reflection } from "@vgpu/wgsl/reflect-source";
 import { createBindGroupCache, identityKey, type BindGroupCache, type BindGroupIdentityPart } from "./bind-cache.ts";
 import { createSetCore, bindGroupLayoutsForReflection, pipelineLayoutFor, type SetBag, type SetCore } from "./set-core.ts";
@@ -6,7 +7,23 @@ import { visibilityForEntries } from "./set-layouts.ts";
 import type { Compute, ComputeOptions, DispatchOptions } from "./api-types.ts";
 import { normalizeConstantsOptions, selectEntryPoint } from "./pipeline-store.ts";
 import { indirectInvalidError, unsupportedError, writableStorageAliasingError } from "./errors.ts";
+import type { Gpu } from "./kernel.ts";
+import { liveKernel } from "./live-kernel.ts";
+import { renderService } from "./render-service.ts";
+import { toWgsl } from "./shader-source.ts";
 import { resolveIndirect } from "./storage.ts";
+
+/**
+ * Compute pipeline for this gpu, ready to `set()` bindings and `dispatch()`.
+ *
+ * Each compute owns its own pipeline (no shared pipeline store), but it resolves the gpu's single
+ * lazy bind group cache through the kernel, so a bind group built for a draw and one built here are
+ * the same object when the resources match — and the cache is torn down once, in the service phase.
+ */
+export function compute(gpu: Gpu, source: string | ShaderSource, opts: ComputeOptions = {}): Compute {
+  const kernel = liveKernel(gpu, "compute");
+  return new ComputePipeline(kernel.device, toWgsl(source), opts, renderService(kernel).binds);
+}
 
 let nextComputeId = 1;
 

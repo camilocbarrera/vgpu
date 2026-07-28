@@ -1,3 +1,12 @@
+/**
+ * Recipe bridge: turns a pure `SceneGeometry` recipe (`box()`, `sphere()`, ...) into GPU buffers.
+ *
+ * This is the only module that reaches the 15 mesh primitives, and nothing in the low-level path
+ * imports it: `geometry(gpu, descriptor)` lives in `geometry-descriptor.ts` and stays free of the
+ * primitive graph (~11 KB). The split is by ESM symbol, not by a runtime registry — importing
+ * `geometryFromRecipe` is what pays for the generators, and a program that never mentions a recipe
+ * never links them.
+ */
 import type { Device } from "@vgpu/core";
 import {
   box as renderBox,
@@ -19,7 +28,9 @@ import {
   type VertexAttributes,
 } from "./geometry-src/index.ts";
 import type { SceneGeometry } from "./geometry.ts";
-import { Geometry, type GeometryOptions } from "./geometry-descriptor.ts";
+import { geometry as geometryFromDescriptor, ownGeometry, Geometry, type GeometryOptions } from "./geometry-descriptor.ts";
+import type { Gpu } from "../kernel.ts";
+import { liveKernel } from "../live-kernel.ts";
 
 type PrimitiveFactory = (device: Device, geometry: SceneGeometry) => MeshPrimitive;
 
@@ -41,10 +52,33 @@ const primitiveFactories: { readonly [K in SceneGeometry["kind"]]: PrimitiveFact
   torus: (device, geometry) => renderTorus({ device, radius: 0.5, tube: 0.2, ...geometry.props }),
 };
 
-/** Converts a pure scene geometry descriptor into the vertex/index buffer contract consumed by gpu.draw(). */
+/** @internal Converts a pure scene geometry recipe into the vertex/index buffer contract consumed by draw(). */
 export function createGeometry(device: Device, geometry: SceneGeometry): Geometry {
   const primitive = primitiveFor(device, geometry);
   return new Geometry(device, primitiveGeometryOptions(primitive));
+}
+
+/**
+ * Uploads a mesh recipe (`box()`, `icosphere()`, ...) and returns the geometry that owns its buffers.
+ *
+ * Also accepts a plain descriptor, so a caller that already imports this module can build both kinds
+ * through one symbol; the descriptor case is forwarded to `geometry(gpu, descriptor)` unchanged. Use
+ * `geometry()` directly when the program has no recipes: that path never links the primitives.
+ *
+ * The buffers are destroyed by `gpu.dispose()` (or earlier by `geometry.destroy()`); a scene view
+ * that receives the recipe instead uploads and owns its own copy.
+ */
+export function geometryFromRecipe(gpu: Gpu, recipe: SceneGeometry): Geometry;
+export function geometryFromRecipe(gpu: Gpu, descriptor: GeometryOptions): Geometry;
+export function geometryFromRecipe(gpu: Gpu, input: SceneGeometry | GeometryOptions): Geometry {
+  if (isGeometryOptions(input)) return geometryFromDescriptor(gpu, input);
+  const kernel = liveKernel(gpu, "geometryFromRecipe");
+  return ownGeometry(kernel, createGeometry(kernel.device, input));
+}
+
+/** Recipes are `{ kind, props }`; descriptors always declare their vertex `buffers`. */
+function isGeometryOptions(value: SceneGeometry | GeometryOptions): value is GeometryOptions {
+  return "buffers" in value;
 }
 
 function primitiveFor(device: Device, geometry: SceneGeometry): MeshPrimitive {

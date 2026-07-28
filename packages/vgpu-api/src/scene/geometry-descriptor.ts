@@ -1,6 +1,16 @@
+/**
+ * Low-level geometry: an immutable vertex/index layout plus the buffers it owns.
+ *
+ * This module is the whole cost of `geometry(gpu, descriptor)`: it never reaches the recipe bridge
+ * (`geometry-factory.ts`) nor any of the 15 mesh primitives behind it, so a program that hands its
+ * own vertex data to `draw()` does not pay for a primitive generator it never calls. The recipe
+ * path is a separate symbol in a separate module — see `geometryFromRecipe`.
+ */
 import type { Buffer as CoreBuffer, Device } from "@vgpu/core";
 import type { EntryPointInputInfo, WGSLType } from "@vgpu/wgsl/reflect-source";
 import type { GeometryLike } from "../draw.ts";
+import type { Gpu, Kernel } from "../kernel.ts";
+import { liveKernel, ownResource } from "../live-kernel.ts";
 import { meshAttributeAmbiguousError, meshAttributeUnmatchedError, meshDataMisalignedError, meshFormatMismatchError, meshInputMissingError, meshLayoutInvalidError, meshLimitExceededError, meshLocationConflictError, meshRangeInvalidError, meshWriteRangeError } from "../errors.ts";
 
 /** @internal Resolves named geometry attributes against reflected shader inputs. */
@@ -102,6 +112,7 @@ export class Geometry implements GeometryLike {
   readonly #indexByteLength?: number;
   readonly #normalized: readonly NormalizedBuffer[];
   readonly #resolvedLayouts = new Map<string, readonly GPUVertexBufferLayout[]>();
+  readonly #destroyHooks = new Set<() => void>();
   #destroyed = false;
 
   constructor(device: Device, opts: GeometryOptions) {
@@ -203,6 +214,21 @@ export class Geometry implements GeometryLike {
     this.#destroyed = true;
     for (const buffer of this.buffers) (buffer as InternalGeometryBuffer).destroyOwned();
     this.#indexOwned?.destroy();
+    for (const hook of [...this.#destroyHooks]) hook();
+    this.#destroyHooks.clear();
+  }
+
+  /**
+   * @internal Ownership hook: runs once, right after `destroy()` freed the buffers, so the owner
+   * that registered this geometry with the kernel can drop its teardown registration.
+   */
+  onDestroy(hook: () => void): () => void {
+    if (this.#destroyed) {
+      hook();
+      return () => undefined;
+    }
+    this.#destroyHooks.add(hook);
+    return () => { this.#destroyHooks.delete(hook); };
   }
 }
 
@@ -278,9 +304,22 @@ class InternalGeometrySlice implements GeometrySlice {
   }
 }
 
-/** Constructs a validated v2 geometry for the supplied device. */
-export function geometry(device: Device, opts: GeometryOptions): Geometry {
-  return new Geometry(device, opts);
+/**
+ * Builds a geometry from an explicit vertex/index descriptor: validated layout, owned buffers for
+ * the streams that carry `data`, borrowed ones for the streams that carry a `buffer`.
+ *
+ * This is the low-level path. It knows nothing about mesh recipes (`box()`, `sphere()`, ...): those
+ * go through `geometryFromRecipe(gpu, recipe)`, which lives in another module precisely so this one
+ * can be imported alone. Owned buffers are destroyed by `gpu.dispose()` or by `geometry.destroy()`.
+ */
+export function geometry(gpu: Gpu, opts: GeometryOptions): Geometry {
+  const kernel = liveKernel(gpu, "geometry");
+  return ownGeometry(kernel, new Geometry(kernel.device, opts));
+}
+
+/** @internal Shared by the descriptor factory and the recipe bridge: gpu lifetime for owned buffers. */
+export function ownGeometry(kernel: Kernel, value: Geometry): Geometry {
+  return ownResource(kernel, value, (owned) => owned.destroy(), (cb) => { value.onDestroy(cb); });
 }
 
 /** Returns the byte width of one value in a WebGPU vertex format. */

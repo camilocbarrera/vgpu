@@ -1,6 +1,22 @@
 import { Buffer, type BufferUsageName, type BufferWriteData, type Device } from "@vgpu/core";
-import type { StorageAccess, StorageBuffer } from "./api-types.ts";
+import type { StorageAccess, StorageBuffer, StorageOptions } from "./api-types.ts";
 import { indirectInvalidError } from "./errors.ts";
+import type { Gpu } from "./kernel.ts";
+import { liveKernel, ownResource } from "./live-kernel.ts";
+
+/**
+ * Storage buffer owned by this gpu: `read()`/`write()` from the host, bindable from any shader.
+ *
+ * `access` accepts the shorthand string or the options bag; `{ indirect: true }` adds the "indirect"
+ * usage so the buffer can supply GPU-read draw/dispatch arguments. The buffer is destroyed by
+ * `gpu.dispose()` — or earlier, by hand, through the internal handle.
+ */
+export function storage(gpu: Gpu, bytes: number, access: StorageAccess | StorageOptions = "read-write"): StorageBuffer {
+  const kernel = liveKernel(gpu, "storage");
+  const opts = typeof access === "string" ? { access } : access;
+  const buffer = createStorageBuffer(kernel.device, bytes, opts.access ?? "read-write", undefined, opts.indirect ?? false);
+  return ownResource(kernel, buffer, (owned) => owned.destroy(), (cb) => { buffer.onDestroy(cb); });
+}
 
 /**
  * Ring-1 StorageBuffer facade backed by a core Buffer.
@@ -46,6 +62,11 @@ export class RingStorageBuffer implements StorageBuffer {
 
   onDestroy(cb: (buffer: Buffer) => void) {
     return this.buffer.onDestroy(cb);
+  }
+
+  /** Frees the GPU allocation. Idempotent; bind groups holding it are invalidated through the buffer's destroy signal. */
+  destroy(): void {
+    this.buffer.destroy();
   }
 }
 
