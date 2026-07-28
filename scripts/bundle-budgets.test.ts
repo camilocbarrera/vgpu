@@ -16,6 +16,7 @@ import {
   measuredTarballPayload,
   nextBudgetBytes,
   parseTarEntries,
+  prohibitedExperienceInputs,
   resolveExportAudience,
   resolvePackageAudience,
   resolveThreshold,
@@ -25,6 +26,27 @@ import {
 } from "./lib/bundle-budgets.mjs";
 
 const script = fileURLToPath(new URL("./check-bundle-size.mjs", import.meta.url));
+
+test("experience metafile exclusions name every retained forbidden input", () => {
+  expect(
+    prohibitedExperienceInputs("effect-only", [
+      "packages/vgpu-api/dist/effect.js",
+      "packages/vgpu-api/dist/scene/geometry-factory.js",
+      "packages/vgpu-api/dist/scene/geometry-src/mesh-box.js",
+      "packages/vgpu-api/dist/timer.js",
+      "packages/vgpu-api/dist/query-ring.js",
+    ]),
+  ).toEqual([
+    { category: "geometry recipe factory", input: "packages/vgpu-api/dist/scene/geometry-factory.js" },
+    { category: "scene primitive mesh", input: "packages/vgpu-api/dist/scene/geometry-src/mesh-box.js" },
+    { category: "timer", input: "packages/vgpu-api/dist/timer.js" },
+    { category: "query ring", input: "packages/vgpu-api/dist/query-ring.js" },
+  ]);
+  expect(prohibitedExperienceInputs("triangle-low-level", ["packages/vgpu-api/dist/draw.js"])).toEqual([]);
+  expect(prohibitedExperienceInputs("triangle-low-level", ["packages\\vgpu-api\\dist\\scene\\geometry-factory.js"])).toEqual([
+    { category: "geometry recipe factory", input: "packages/vgpu-api/dist/scene/geometry-factory.js" },
+  ]);
+});
 
 test("a budget is the next 512 B multiple at least 512 B above measured", () => {
   expect(nextBudgetBytes(0)).toBe(512);

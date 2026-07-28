@@ -300,3 +300,34 @@ function readField(header, start, length) {
   const end = raw.indexOf(0);
   return raw.subarray(0, end === -1 ? raw.length : end).toString("utf8");
 }
+
+/**
+ * Structural exclusions for consumer-experience bundles (T202-06). The checker receives esbuild's
+ * metafile input paths and reports the exact retained modules rather than relying on gzip size as
+ * a proxy for tree-shaking. Paths may point at either src or dist and are normalized to `/` first.
+ */
+const EXPERIENCE_EXCLUSIONS = {
+  "effect-only": [
+    ["geometry recipe factory", /(?:^|\/)geometry-factory(?:\.[^/]+)?$/],
+    ["scene primitive mesh", /(?:^|\/)mesh-[^/]+(?:\.[^/]+)?$/],
+    ["timer", /(?:^|\/)timer(?:\.[^/]+)?$/],
+    ["visibility", /(?:^|\/)visibility(?:\.[^/]+)?$/],
+    ["query ring", /(?:^|\/)query-ring(?:\.[^/]+)?$/],
+    ["compute", /(?:^|\/)compute(?:\.[^/]+)?$/],
+    ["bundle", /(?:^|\/)bundle(?:\.[^/]+)?$/],
+    ["uniforms", /(?:^|\/)uniforms(?:\.[^/]+)?$/],
+  ],
+  "triangle-low-level": [
+    ["geometry recipe factory", /(?:^|\/)geometry-factory(?:\.[^/]+)?$/],
+    ["scene primitive mesh", /(?:^|\/)mesh-[^/]+(?:\.[^/]+)?$/],
+  ],
+};
+
+/** Returns retained forbidden modules as `{ category, input }`, suitable for CI diagnostics. */
+export function prohibitedExperienceInputs(experience, inputs) {
+  const exclusions = EXPERIENCE_EXCLUSIONS[experience] ?? [];
+  return inputs.flatMap((input) => {
+    const normalized = input.replaceAll("\\", "/");
+    return exclusions.filter(([, pattern]) => pattern.test(normalized)).map(([category]) => ({ category, input: normalized }));
+  });
+}
