@@ -6,6 +6,7 @@ import fractalWgsl from './fractal.wgsl';
 import brightPassWgsl from './bright-pass.wgsl';
 import blurWgsl from './blur.wgsl';
 import compositeWgsl from './composite.wgsl';
+import { effect, frame, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 type Variant = 'static-repeat' | 'alternate-orbit' | 'bloom-off';
@@ -27,7 +28,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
   let disposed = false;
   let reportedError = false;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let effects: Effects | undefined;
   let targets: Targets | undefined;
   let scheduler: ReturnType<typeof createRenderScheduler> | undefined;
@@ -39,9 +40,9 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
   const orbit: Orbit = { ...POSTER };
 
   const renderOnce = () => {
-    if (disposed || !gpu || !surface || !effects || !targets) return;
+    if (disposed || !gpu || !canvasSurface || !effects || !targets) return;
     effects.scene.set({ params: orbit });
-    gpu.frame((frame) => renderChain(frame, effects!, targets!, surface!));
+    frame(gpu, (currentFrame) => renderChain(currentFrame, effects!, targets!, canvasSurface!));
   };
   const applyResize = () => {
     resizeFrame = 0;
@@ -86,8 +87,8 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     if (targets) destroyTargets(targets);
     targets = undefined;
     effects = undefined;
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
   }
@@ -98,12 +99,12 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 1.6] });
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 1.6] });
     effects = createEffects(gpu, 'raymarched-fractal-live');
-    targets = createTargets(gpu, surface.size, 'raymarched-fractal-live');
+    targets = createTargets(gpu, canvasSurface.size, 'raymarched-fractal-live');
     setConstants(effects);
     setBindings(effects, targets);
-    await prewarm(effects, targets, surface);
+    await prewarm(effects, targets, canvasSurface);
     if (disposed) return;
     scheduler = createRenderScheduler(renderOnce);
     disposeInput = installDragOrbit(options.canvas, orbit, scheduler.request);
@@ -124,23 +125,23 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
   return { ready, invalidate: () => scheduler?.request(), resize, dispose };
 }
 
-export async function renderThumbnail(gpu: Gpu, target: Target, opts: ThumbOptions = {}): Promise<void> {
+export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: ThumbOptions = {}): Promise<void> {
   const effects = createEffects(gpu, 'raymarched-fractal-thumb');
-  const targets = createTargets(gpu, target.size, 'raymarched-fractal-thumb');
+  const targets = createTargets(gpu, colorTarget.size, 'raymarched-fractal-thumb');
   setConstants(effects);
   setBindings(effects, targets);
   try {
-    await prewarm(effects, targets, target);
-    await renderAndWait(gpu, effects, targets, target, POSTER);
-    await renderAndWait(gpu, effects, targets, target, POSTER);
-    await reportVariant(opts, 'static-repeat', target);
-    await renderAndWait(gpu, effects, targets, target, ALTERNATE);
-    await reportVariant(opts, 'alternate-orbit', target);
+    await prewarm(effects, targets, colorTarget);
+    await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
+    await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
+    await reportVariant(opts, 'static-repeat', colorTarget);
+    await renderAndWait(gpu, effects, targets, colorTarget, ALTERNATE);
+    await reportVariant(opts, 'alternate-orbit', colorTarget);
     effects.composite.set({ composite: { bloomStrength: 0 } });
-    await renderAndWait(gpu, effects, targets, target, POSTER);
-    await reportVariant(opts, 'bloom-off', target);
+    await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
+    await reportVariant(opts, 'bloom-off', colorTarget);
     effects.composite.set({ composite: { bloomStrength: 0.65 } });
-    await renderAndWait(gpu, effects, targets, target, POSTER);
+    await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
     await gpu.settled();
   } finally {
     try {
@@ -151,25 +152,25 @@ export async function renderThumbnail(gpu: Gpu, target: Target, opts: ThumbOptio
   }
 }
 
-async function reportVariant(opts: ThumbOptions, variant: Variant, target: Target): Promise<void> {
+async function reportVariant(opts: ThumbOptions, variant: Variant, colorTarget: Target): Promise<void> {
   if (!opts.onVariantRendered) return;
-  const pixels = await target.read();
-  await opts.onVariantRendered(variant, new Uint8Array(pixels), target.size);
+  const pixels = await colorTarget.read();
+  await opts.onVariantRendered(variant, new Uint8Array(pixels), colorTarget.size);
 }
 async function renderAndWait(gpu: Gpu, effects: Effects, targets: Targets, output: Target, orbit: Readonly<Orbit>) {
   effects.scene.set({ params: orbit });
-  gpu.frame((frame) => renderChain(frame, effects, targets, output));
+  frame(gpu, (currentFrame) => renderChain(currentFrame, effects, targets, output));
   await gpu.gpu.queue.onSubmittedWorkDone();
 }
 
 function createEffects(gpu: Gpu, label: string): Effects {
   return {
-    scene: gpu.effect(fractalWgsl, { label: `${label}-scene` }),
-    brightPass: gpu.effect(brightPassWgsl, { label: `${label}-bright-pass` }),
-    blurH: gpu.effect(blurWgsl, { label: `${label}-blur-h` }),
-    blurV: gpu.effect(blurWgsl, { label: `${label}-blur-v` }),
-    composite: gpu.effect(compositeWgsl, { label: `${label}-composite` }),
-    sampler: gpu.sampler({ minFilter: 'linear', magFilter: 'linear' }),
+    scene: effect(gpu, fractalWgsl, { label: `${label}-scene` }),
+    brightPass: effect(gpu, brightPassWgsl, { label: `${label}-bright-pass` }),
+    blurH: effect(gpu, blurWgsl, { label: `${label}-blur-h` }),
+    blurV: effect(gpu, blurWgsl, { label: `${label}-blur-v` }),
+    composite: effect(gpu, compositeWgsl, { label: `${label}-composite` }),
+    sampler: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
   };
 }
 function createTargets(gpu: Gpu, size: readonly [number, number], label: string): Targets {
@@ -178,9 +179,9 @@ function createTargets(gpu: Gpu, size: readonly [number, number], label: string)
   let bloomA: Target | undefined;
   let bloomB: Target | undefined;
   try {
-    scene = gpu.target({ size: full, format: HDR_FORMAT, label: `${label}-scene` });
-    bloomA = gpu.target({ size: bloom, format: HDR_FORMAT, label: `${label}-bloom-a` });
-    bloomB = gpu.target({ size: bloom, format: HDR_FORMAT, label: `${label}-bloom-b` });
+    scene = target(gpu, { size: full, format: HDR_FORMAT, label: `${label}-scene` });
+    bloomA = target(gpu, { size: bloom, format: HDR_FORMAT, label: `${label}-bloom-a` });
+    bloomB = target(gpu, { size: bloom, format: HDR_FORMAT, label: `${label}-bloom-b` });
     return { scene, bloomA, bloomB };
   } catch (error) {
     scene?.color.destroy();
@@ -209,12 +210,12 @@ async function prewarm(e: Effects, t: Targets, output: Output): Promise<void> {
     e.blurV.compile(t.bloomA), e.composite.compile({ colors: [output.format] }),
   ]);
 }
-function renderChain(frame: Frame, e: Effects, t: Targets, output: Output): void {
-  frame.pass({ target: t.scene, clear: CLEAR }, (pass) => pass.draw(e.scene));
-  frame.pass({ target: t.bloomA, clear: CLEAR }, (pass) => pass.draw(e.brightPass));
-  frame.pass({ target: t.bloomB, clear: CLEAR }, (pass) => pass.draw(e.blurH));
-  frame.pass({ target: t.bloomA, clear: CLEAR }, (pass) => pass.draw(e.blurV));
-  frame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(e.composite));
+function renderChain(currentFrame: Frame, e: Effects, t: Targets, output: Output): void {
+  currentFrame.pass({ target: t.scene, clear: CLEAR }, (pass) => pass.draw(e.scene));
+  currentFrame.pass({ target: t.bloomA, clear: CLEAR }, (pass) => pass.draw(e.brightPass));
+  currentFrame.pass({ target: t.bloomB, clear: CLEAR }, (pass) => pass.draw(e.blurH));
+  currentFrame.pass({ target: t.bloomA, clear: CLEAR }, (pass) => pass.draw(e.blurV));
+  currentFrame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(e.composite));
 }
 function resizeTargets(t: Targets, size: readonly [number, number]): void {
   const full = normalizeSize(size), bloom = bloomSize(full);

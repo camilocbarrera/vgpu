@@ -9,6 +9,7 @@ import skyWgsl from './sky.wgsl';
 import blurWgsl from './blur.wgsl';
 import metalWgsl from './metal.wgsl';
 import presentWgsl from './present.wgsl';
+import { draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -61,7 +62,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
   let disposed = false;
   let reportedError = false;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let scene: Scene | undefined;
   let input: ReturnType<typeof installOrbitInput> | undefined;
   let loop: { stop(): void } | undefined;
@@ -76,9 +77,9 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     // The surface replays its current size on subscribe; the scene target was just
     // built at that size, so only later reports are real resizes.
     if (!sawInitialResize) { sawInitialResize = true; return; }
-    if (disposed || !scene || !surface) return;
+    if (disposed || !scene || !canvasSurface) return;
     try {
-      scene.hdr.resize(surface.size);
+      scene.hdr.resize(canvasSurface.size);
       // Resizing recreates the texture, so the composite binding has to be re-pointed.
       scene.present.set({ scene_tex: scene.hdr });
     } catch (error) {
@@ -90,9 +91,9 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     resizeFrame = 0;
     const size = pendingSize;
     pendingSize = undefined;
-    if (disposed || !size || !surface) return;
+    if (disposed || !size || !canvasSurface) return;
     try {
-      surface.resize([
+      canvasSurface.resize([
         Math.max(1, Math.round(size.width * size.dpr)),
         Math.max(1, Math.round(size.height * size.dpr)),
       ]);
@@ -136,8 +137,8 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     input = undefined;
     if (scene) destroyScene(scene);
     scene = undefined;
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
   }
@@ -157,19 +158,19 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 2] });
-    scene = await createScene(gpu, surface);
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
+    scene = await createScene(gpu, canvasSurface);
     if (disposed) return;
     input = installOrbitInput(options.canvas);
-    unsubscribeResize = surface.onResize(onSurfaceResize);
+    unsubscribeResize = canvasSurface.onResize(onSurfaceResize);
     observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
-    loop = gpu.frame.loop((frame) => {
-      if (disposed || !gpu || !surface || !scene || !input) return;
+    loop = frameLoop(gpu, (currentFrame) => {
+      if (disposed || !gpu || !canvasSurface || !scene || !input) return;
       input.advance(gpu.deltaTime);
-      render(frame, scene, surface, cameraView(input.yaw, input.pitch, aspectOf(surface)), gpu.time);
+      render(currentFrame, scene, canvasSurface, cameraView(input.yaw, input.pitch, aspectOf(canvasSurface)), gpu.time);
     });
   };
 
@@ -190,7 +191,7 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbnailO
   for (let i = 0; i < Math.max(1, opts.warmupFrames ?? 3); i++) {
     time += dt;
     const view = cameraView(0.62 + time * 0.09, 0.16, aspectOf(output));
-    gpu.frame((frame) => render(frame, scene, output, view, time));
+    frame(gpu, (currentFrame) => render(currentFrame, scene, output, view, time));
   }
 
   await gpu.gpu.queue.onSubmittedWorkDone();
@@ -199,8 +200,8 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbnailO
 }
 
 async function createScene(gpu: Gpu, output: Output): Promise<Scene> {
-  const hdr = gpu.target({ size: output.size, format: HDR_FORMAT, depth: true, label: 'environment-map-scene' });
-  const envSampler = gpu.sampler({
+  const hdr = target(gpu, { size: output.size, format: HDR_FORMAT, depth: true, label: 'environment-map-scene' });
+  const envSampler = sampler(gpu, {
     minFilter: 'linear',
     magFilter: 'linear',
     // Trilinear: roughness lands on a fractional LOD, so neighbouring levels must blend.
@@ -209,19 +210,19 @@ async function createScene(gpu: Gpu, output: Output): Promise<Scene> {
     addressModeU: 'repeat',
     addressModeV: 'clamp-to-edge',
   });
-  const sceneSampler = gpu.sampler({ minFilter: 'linear', magFilter: 'linear' });
+  const sceneSampler = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
 
   const env = await bakeEnvironment(gpu, envSampler);
 
-  const geometry = gpu.geometry(box({ size: CUBE_SIZE }));
-  const cube = gpu.draw({ shader: metalWgsl, geometry, label: 'environment-map-metal' });
+  const geo = geometry(gpu, box({ size: CUBE_SIZE }));
+  const cube = draw(gpu, { shader: metalWgsl, geometry: geo, label: 'environment-map-metal' });
   cube.set({ ...METAL, env_tex: env, env_samp: envSampler });
 
-  const present = gpu.effect(presentWgsl, { label: 'environment-map-present' });
+  const present = effect(gpu, presentWgsl, { label: 'environment-map-present' });
   present.set({ env_tex: env, env_samp: envSampler, scene_tex: hdr, scene_samp: sceneSampler });
 
   await Promise.all([cube.compile(hdr), present.compile({ colors: [output.format] })]);
-  return { env, hdr, geometry, cube, present };
+  return { env, hdr, geometry: geo, cube, present };
 }
 
 /**
@@ -241,7 +242,7 @@ async function createScene(gpu: Gpu, output: Output): Promise<Scene> {
  * gpu.gpu.queue.copyExternalImageToTexture({ source: bitmap }, { texture: env.gpu }, [bitmap.width, bitmap.height]);
  * ```
  */
-async function bakeEnvironment(gpu: Gpu, sampler: GPUSampler): Promise<Texture> {
+async function bakeEnvironment(gpu: Gpu, samplerState: GPUSampler): Promise<Texture> {
   const env = gpu.device.createTexture({
     size: [...ENV_SIZE],
     format: HDR_FORMAT,
@@ -250,13 +251,13 @@ async function bakeEnvironment(gpu: Gpu, sampler: GPUSampler): Promise<Texture> 
     label: 'environment-map-env',
   });
 
-  const sky = gpu.effect(skyWgsl, { label: 'environment-map-sky' });
+  const sky = effect(gpu, skyWgsl, { label: 'environment-map-sky' });
   sky.set({ sky: SKY });
-  const blur = gpu.effect(blurWgsl, { label: 'environment-map-blur' });
+  const blur = effect(gpu, blurWgsl, { label: 'environment-map-blur' });
 
-  let source = gpu.target({ size: [...ENV_SIZE], format: HDR_FORMAT, label: 'environment-map-level0' });
+  let source = target(gpu, { size: [...ENV_SIZE], format: HDR_FORMAT, label: 'environment-map-level0' });
   await Promise.all([sky.compile(source), blur.compile(source)]);
-  gpu.frame((frame) => frame.pass({ target: source }, (pass) => pass.draw(sky)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: source }, (pass) => pass.draw(sky)));
   copyIntoLevel(gpu, source, env, 0);
 
   for (let level = 1; level < ENV_LEVELS; level++) {
@@ -264,16 +265,16 @@ async function bakeEnvironment(gpu: Gpu, sampler: GPUSampler): Promise<Texture> 
       Math.max(1, ENV_SIZE[0] >> level),
       Math.max(1, ENV_SIZE[1] >> level),
     ];
-    const horizontal = gpu.target({ size, format: HDR_FORMAT, label: `environment-map-blur-h${level}` });
-    const vertical = gpu.target({ size, format: HDR_FORMAT, label: `environment-map-level${level}` });
+    const horizontal = target(gpu, { size, format: HDR_FORMAT, label: `environment-map-blur-h${level}` });
+    const vertical = target(gpu, { size, format: HDR_FORMAT, label: `environment-map-level${level}` });
     const texel: [number, number] = [1 / size[0], 1 / size[1]];
 
     // One frame per pass so each draw picks up its own bindings. This runs once, at
     // startup — the per-frame path below never touches it.
-    blur.set({ src: source, src_samp: sampler, blur: { texel, direction: [1, 0], radius: BLUR_RADIUS, equirect_compensation: 1 } });
-    gpu.frame((frame) => frame.pass({ target: horizontal }, (pass) => pass.draw(blur)));
-    blur.set({ src: horizontal, src_samp: sampler, blur: { texel, direction: [0, 1], radius: BLUR_RADIUS, equirect_compensation: 0 } });
-    gpu.frame((frame) => frame.pass({ target: vertical }, (pass) => pass.draw(blur)));
+    blur.set({ src: source, src_samp: samplerState, blur: { texel, direction: [1, 0], radius: BLUR_RADIUS, equirect_compensation: 1 } });
+    frame(gpu, (currentFrame) => currentFrame.pass({ target: horizontal }, (pass) => pass.draw(blur)));
+    blur.set({ src: horizontal, src_samp: samplerState, blur: { texel, direction: [0, 1], radius: BLUR_RADIUS, equirect_compensation: 0 } });
+    frame(gpu, (currentFrame) => currentFrame.pass({ target: vertical }, (pass) => pass.draw(blur)));
 
     copyIntoLevel(gpu, vertical, env, level);
     destroyTarget(horizontal);
@@ -296,7 +297,7 @@ function copyIntoLevel(gpu: Gpu, source: Target, env: Texture, level: number): v
   gpu.gpu.queue.submit([encoder.finish()]);
 }
 
-function render(frame: Frame, scene: Scene, output: Output, view: CameraView, time: number): void {
+function render(currentFrame: Frame, scene: Scene, output: Output, view: CameraView, time: number): void {
   scene.cube.set({
     view_projection: view.camera.viewProjection,
     model: spinMatrix(time),
@@ -318,8 +319,8 @@ function render(frame: Frame, scene: Scene, output: Output, view: CameraView, ti
   });
 
   // Alpha 0 clear turns the cube pass into a coverage mask the composite reads back.
-  frame.pass({ target: scene.hdr, clear: [0, 0, 0, 0] }, (pass) => pass.draw(scene.cube));
-  frame.pass({ target: output }, (pass) => pass.draw(scene.present));
+  currentFrame.pass({ target: scene.hdr, clear: [0, 0, 0, 0] }, (pass) => pass.draw(scene.cube));
+  currentFrame.pass({ target: output }, (pass) => pass.draw(scene.present));
 }
 
 function aspectOf(output: Output): number {
@@ -331,6 +332,6 @@ function destroyScene(scene: Scene): void {
   scene.env.destroy();
 }
 
-function destroyTarget(target: Target): void {
-  (target as Target & { destroy?: () => void }).destroy?.();
+function destroyTarget(colorTarget: Target): void {
+  (colorTarget as Target & { destroy?: () => void }).destroy?.();
 }

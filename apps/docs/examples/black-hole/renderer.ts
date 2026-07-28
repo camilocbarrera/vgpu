@@ -6,6 +6,7 @@ import brightPassWgsl from './bright-pass.wgsl';
 import compositeWgsl from './composite.wgsl';
 
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
+import { effect, frame, frameLoop, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 type Orbit = readonly [number, number];
@@ -42,7 +43,7 @@ const CLEAR: readonly [number, number, number, number] = [0, 0, 0, 1];
 export function createRenderer(options: BrowserRendererOptions): ExampleRenderer {
   let disposed = false;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let effects: Effects | undefined;
   let targets: Targets | undefined;
   let input: ReturnType<typeof installOrbitInput> | undefined;
@@ -57,7 +58,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     resizeFrame = 0;
     const size = pendingSize;
     pendingSize = undefined;
-    if (disposed || !size || !gpu || !effects || !targets || !surface) return;
+    if (disposed || !size || !gpu || !effects || !targets || !canvasSurface) return;
     try {
       const previousTargets = targets;
       const nextTargets = createTargets(gpu, [
@@ -65,7 +66,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
         Math.max(1, Math.round(size.height * size.dpr)),
       ], 'black-hole-live');
       try {
-        setBindings(effects, nextTargets, surface);
+        setBindings(effects, nextTargets, canvasSurface);
       } catch (error) {
         destroyTargets(nextTargets);
         throw error;
@@ -106,8 +107,8 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     input = undefined;
     if (targets) destroyTargets(targets);
     targets = undefined;
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
     effects = undefined;
@@ -119,22 +120,22 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 1.6] });
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 1.6] });
     effects = createEffects(gpu, 'black-hole-live');
-    targets = createTargets(gpu, surface.size, 'black-hole-live');
+    targets = createTargets(gpu, canvasSurface.size, 'black-hole-live');
     setConstants(effects);
-    setBindings(effects, targets, surface);
-    await prewarm(effects, targets, surface);
+    setBindings(effects, targets, canvasSurface);
+    await prewarm(effects, targets, canvasSurface);
     if (disposed) return;
     input = installOrbitInput(options.canvas);
     observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
-    loop = gpu.frame.loop((frame) => {
-      if (disposed || !effects || !targets || !surface || !input) return;
+    loop = frameLoop(gpu, (currentFrame) => {
+      if (disposed || !effects || !targets || !canvasSurface || !input) return;
       effects.scene.set({ params: { pointer: input.update(), time: gpu!.time } });
-      renderChain(frame, effects, targets, surface);
+      renderChain(currentFrame, effects, targets, canvasSurface);
     });
   };
 
@@ -156,28 +157,28 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
   return { ready, invalidate() {}, resize, dispose };
 }
 
-export async function renderThumbnail(gpu: Gpu, target: Target, opts: ThumbOptions = {}): Promise<void> {
+export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: ThumbOptions = {}): Promise<void> {
   const effects = createEffects(gpu, 'black-hole-thumb');
-  const targets = createTargets(gpu, target.size, 'black-hole-thumb');
+  const targets = createTargets(gpu, colorTarget.size, 'black-hole-thumb');
   try {
     const time = opts.time ?? 8.5;
     setConstants(effects);
-    setBindings(effects, targets, target);
-    await prewarm(effects, targets, target);
+    setBindings(effects, targets, colorTarget);
+    await prewarm(effects, targets, colorTarget);
 
-    renderAt(gpu, effects, targets, target, time, [0, 0.05]);
+    renderAt(gpu, effects, targets, colorTarget, time, [0, 0.05]);
     await gpu.gpu.queue.onSubmittedWorkDone();
 
-    renderAt(gpu, effects, targets, target, time + 7, [0, 0.05]);
+    renderAt(gpu, effects, targets, colorTarget, time + 7, [0, 0.05]);
     await gpu.gpu.queue.onSubmittedWorkDone();
-    await opts.onVariantRendered?.('time-delta', await target.read(), target.size);
+    await opts.onVariantRendered?.('time-delta', await colorTarget.read(), colorTarget.size);
 
-    renderAt(gpu, effects, targets, target, time, [0.72, 0.34]);
+    renderAt(gpu, effects, targets, colorTarget, time, [0.72, 0.34]);
     await gpu.gpu.queue.onSubmittedWorkDone();
-    await opts.onVariantRendered?.('pointer-orbit', await target.read(), target.size);
+    await opts.onVariantRendered?.('pointer-orbit', await colorTarget.read(), colorTarget.size);
 
     // Leave the deterministic poster framing in the output target.
-    renderAt(gpu, effects, targets, target, time, [0, 0.05]);
+    renderAt(gpu, effects, targets, colorTarget, time, [0, 0.05]);
   } finally {
     await Promise.allSettled([
       Promise.resolve().then(() => gpu.gpu.queue.onSubmittedWorkDone()),
@@ -189,16 +190,16 @@ export async function renderThumbnail(gpu: Gpu, target: Target, opts: ThumbOptio
 
 function createEffects(gpu: Gpu, label: string): Effects {
   return {
-    scene: gpu.effect(blackHoleWgsl, { label: `${label}-scene` }),
-    brightPass: gpu.effect(brightPassWgsl, { label: `${label}-bright-pass` }),
+    scene: effect(gpu, blackHoleWgsl, { label: `${label}-scene` }),
+    brightPass: effect(gpu, brightPassWgsl, { label: `${label}-bright-pass` }),
     // Each pass owns its uniform buffer; mutating one effect repeatedly in a frame
     // would make all encoded passes observe the final direction and radius.
-    blurH1: gpu.effect(blurWgsl, { label: `${label}-blur-h1` }),
-    blurV1: gpu.effect(blurWgsl, { label: `${label}-blur-v1` }),
-    blurH2: gpu.effect(blurWgsl, { label: `${label}-blur-h2` }),
-    blurV2: gpu.effect(blurWgsl, { label: `${label}-blur-v2` }),
-    composite: gpu.effect(compositeWgsl, { label: `${label}-composite` }),
-    sampler: gpu.sampler({ minFilter: 'linear', magFilter: 'linear' }),
+    blurH1: effect(gpu, blurWgsl, { label: `${label}-blur-h1` }),
+    blurV1: effect(gpu, blurWgsl, { label: `${label}-blur-v1` }),
+    blurH2: effect(gpu, blurWgsl, { label: `${label}-blur-h2` }),
+    blurV2: effect(gpu, blurWgsl, { label: `${label}-blur-v2` }),
+    composite: effect(gpu, compositeWgsl, { label: `${label}-composite` }),
+    sampler: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
   };
 }
 
@@ -208,9 +209,9 @@ function createTargets(gpu: Gpu, size: readonly [number, number], label: string)
   let scene: Target | undefined;
   let bloomA: Target | undefined;
   try {
-    scene = gpu.target({ size: full, format: HDR_FORMAT, label: `${label}-scene` });
-    bloomA = gpu.target({ size: bloom, format: HDR_FORMAT, label: `${label}-bloom-a` });
-    const bloomB = gpu.target({ size: bloom, format: HDR_FORMAT, label: `${label}-bloom-b` });
+    scene = target(gpu, { size: full, format: HDR_FORMAT, label: `${label}-scene` });
+    bloomA = target(gpu, { size: bloom, format: HDR_FORMAT, label: `${label}-bloom-a` });
+    const bloomB = target(gpu, { size: bloom, format: HDR_FORMAT, label: `${label}-bloom-b` });
     return { scene, bloomA, bloomB };
   } catch (error) {
     destroyTarget(bloomA);
@@ -225,8 +226,8 @@ function destroyTargets(targets: Targets): void {
   destroyTarget(targets.scene);
 }
 
-function destroyTarget(target: Target | undefined): void {
-  (target as { destroy?: () => void } | undefined)?.destroy?.();
+function destroyTarget(colorTarget: Target | undefined): void {
+  (colorTarget as { destroy?: () => void } | undefined)?.destroy?.();
 }
 
 function setConstants(effects: Effects): void {
@@ -259,19 +260,19 @@ async function prewarm(effects: Effects, targets: Targets, output: Output): Prom
   ]);
 }
 
-function renderChain(frame: Frame, effects: Effects, targets: Targets, output: Output): void {
-  frame.pass({ target: targets.scene, clear: CLEAR }, (pass) => pass.draw(effects.scene));
-  frame.pass({ target: targets.bloomA, clear: CLEAR }, (pass) => pass.draw(effects.brightPass));
-  frame.pass({ target: targets.bloomB, clear: CLEAR }, (pass) => pass.draw(effects.blurH1));
-  frame.pass({ target: targets.bloomA, clear: CLEAR }, (pass) => pass.draw(effects.blurV1));
-  frame.pass({ target: targets.bloomB, clear: CLEAR }, (pass) => pass.draw(effects.blurH2));
-  frame.pass({ target: targets.bloomA, clear: CLEAR }, (pass) => pass.draw(effects.blurV2));
-  frame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(effects.composite));
+function renderChain(currentFrame: Frame, effects: Effects, targets: Targets, output: Output): void {
+  currentFrame.pass({ target: targets.scene, clear: CLEAR }, (pass) => pass.draw(effects.scene));
+  currentFrame.pass({ target: targets.bloomA, clear: CLEAR }, (pass) => pass.draw(effects.brightPass));
+  currentFrame.pass({ target: targets.bloomB, clear: CLEAR }, (pass) => pass.draw(effects.blurH1));
+  currentFrame.pass({ target: targets.bloomA, clear: CLEAR }, (pass) => pass.draw(effects.blurV1));
+  currentFrame.pass({ target: targets.bloomB, clear: CLEAR }, (pass) => pass.draw(effects.blurH2));
+  currentFrame.pass({ target: targets.bloomA, clear: CLEAR }, (pass) => pass.draw(effects.blurV2));
+  currentFrame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(effects.composite));
 }
 
 function renderAt(gpu: Gpu, effects: Effects, targets: Targets, output: Target, time: number, pointer: Orbit): void {
   effects.scene.set({ params: { pointer, time } });
-  gpu.frame((frame) => renderChain(frame, effects, targets, output));
+  frame(gpu, (currentFrame) => renderChain(currentFrame, effects, targets, output));
 }
 
 function resizeTargets(targets: Targets, size: readonly [number, number]): void {

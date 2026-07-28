@@ -17,6 +17,7 @@ import jfaPassWgsl from './jfa-pass.wgsl';
 import sdfFinalizeWgsl from './sdf-finalize.wgsl';
 import radianceCascadeWgsl from './radiance-cascade.wgsl';
 import presentWgsl from './present.wgsl';
+import { effect, frame, sampler, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -93,22 +94,22 @@ export function createScene(gpu: Gpu, size: Vec2, label: string): RadianceScene 
   try {
     const scene: Vec2 = [width, height];
     const emitter: [Target, Target] = [
-      gpu.target({ size: [width, height], format: HDR_FORMAT, label: `${label}-emitter-a` }),
-      gpu.target({ size: [width, height], format: HDR_FORMAT, label: `${label}-emitter-b` }),
+      target(gpu, { size: [width, height], format: HDR_FORMAT, label: `${label}-emitter-a` }),
+      target(gpu, { size: [width, height], format: HDR_FORMAT, label: `${label}-emitter-b` }),
     ];
     created.push(...emitter);
     const jfa: [Target, Target] = [
-      gpu.target({ size: [width, height], format: SEED_FORMAT, label: `${label}-jfa-a` }),
-      gpu.target({ size: [width, height], format: SEED_FORMAT, label: `${label}-jfa-b` }),
+      target(gpu, { size: [width, height], format: SEED_FORMAT, label: `${label}-jfa-a` }),
+      target(gpu, { size: [width, height], format: SEED_FORMAT, label: `${label}-jfa-b` }),
     ];
     created.push(...jfa);
-    const sdf = gpu.target({ size: [width, height], format: HDR_FORMAT, label: `${label}-sdf` });
+    const sdf = target(gpu, { size: [width, height], format: HDR_FORMAT, label: `${label}-sdf` });
     created.push(sdf);
     // Two atlases, reused from the top of the hierarchy down; six resident levels would
     // cost six times the memory for exactly the same result.
     const cascades: [Target, Target] = [
-      gpu.target({ size: [atlas[0], atlas[1]], format: HDR_FORMAT, label: `${label}-cascade-a` }),
-      gpu.target({ size: [atlas[0], atlas[1]], format: HDR_FORMAT, label: `${label}-cascade-b` }),
+      target(gpu, { size: [atlas[0], atlas[1]], format: HDR_FORMAT, label: `${label}-cascade-a` }),
+      target(gpu, { size: [atlas[0], atlas[1]], format: HDR_FORMAT, label: `${label}-cascade-b` }),
     ];
     created.push(...cascades);
 
@@ -124,17 +125,17 @@ export function createScene(gpu: Gpu, size: Vec2, label: string): RadianceScene 
       sdf,
       cascades,
       effects: {
-        paint: gpu.effect(paintEmitterWgsl, { label: `${label}-paint` }),
-        jfaInit: gpu.effect(jfaInitWgsl, { label: `${label}-jfa-init` }),
+        paint: effect(gpu, paintEmitterWgsl, { label: `${label}-paint` }),
+        jfaInit: effect(gpu, jfaInitWgsl, { label: `${label}-jfa-init` }),
         // One effect instance per pass: `set()` writes immediately, so passes sharing an
         // instance inside a frame would all run with the last jump distance written.
-        jfaSteps: jumps.map((_, index) => gpu.effect(jfaPassWgsl, { label: `${label}-jfa-${index}` })),
-        sdfFinalize: gpu.effect(sdfFinalizeWgsl, { label: `${label}-sdf-finalize` }),
+        jfaSteps: jumps.map((_, index) => effect(gpu, jfaPassWgsl, { label: `${label}-jfa-${index}` })),
+        sdfFinalize: effect(gpu, sdfFinalizeWgsl, { label: `${label}-sdf-finalize` }),
         cascade: Array.from({ length: cascadeCount }, (_, index) =>
-          gpu.effect(radianceCascadeWgsl, { label: `${label}-cascade-${index}` })),
-        present: gpu.effect(presentWgsl, { label: `${label}-present` }),
+          effect(gpu, radianceCascadeWgsl, { label: `${label}-cascade-${index}` })),
+        present: effect(gpu, presentWgsl, { label: `${label}-present` }),
       },
-      sampler: gpu.sampler({
+      sampler: sampler(gpu, {
         minFilter: 'linear',
         magFilter: 'linear',
         // Screen space: a ray leaving the canvas must not wrap around to the other side.
@@ -145,7 +146,7 @@ export function createScene(gpu: Gpu, size: Vec2, label: string): RadianceScene 
       resolvedTo: 0,
     };
   } catch (error) {
-    for (const target of created) destroyTarget(target);
+    for (const colorTarget of created) destroyTarget(colorTarget);
     throw error;
   }
 }
@@ -155,19 +156,19 @@ export async function prepareScene(scene: RadianceScene, outputFormat: GPUTextur
   await Promise.all([
     scene.effects.paint.compile({ colors: [HDR_FORMAT] }),
     scene.effects.jfaInit.compile({ colors: [SEED_FORMAT] }),
-    ...scene.effects.jfaSteps.map((effect) => effect.compile({ colors: [SEED_FORMAT] })),
+    ...scene.effects.jfaSteps.map((shader) => shader.compile({ colors: [SEED_FORMAT] })),
     scene.effects.sdfFinalize.compile({ colors: [HDR_FORMAT] }),
-    ...scene.effects.cascade.map((effect) => effect.compile({ colors: [HDR_FORMAT] })),
+    ...scene.effects.cascade.map((shader) => shader.compile({ colors: [HDR_FORMAT] })),
     scene.effects.present.compile({ colors: [outputFormat] }),
   ]);
 }
 
 export function destroyScene(scene: RadianceScene): void {
-  for (const target of [...scene.emitter, ...scene.jfa, scene.sdf, ...scene.cascades]) destroyTarget(target);
+  for (const colorTarget of [...scene.emitter, ...scene.jfa, scene.sdf, ...scene.cascades]) destroyTarget(colorTarget);
 }
 
-function destroyTarget(target: Target): void {
-  (target as Target & { destroy?: () => void }).destroy?.();
+function destroyTarget(colorTarget: Target): void {
+  (colorTarget as Target & { destroy?: () => void }).destroy?.();
 }
 
 export interface ChainOptions {
@@ -228,9 +229,9 @@ function buildChain(scene: RadianceScene, options: ChainOptions): ChainPass[] {
   let seedRead = scene.jfa[0];
   let seedWrite = scene.jfa[1];
   scene.jumps.forEach((jump, index) => {
-    const effect = effects.jfaSteps[index]!;
-    effect.set({ jfa: { size: [size[0], size[1]], jump, _pad: 0 }, seeds: seedRead });
-    passes.push({ name: `jfa-step-${index}-jump-${jump}`, target: seedWrite, effect });
+    const shader = effects.jfaSteps[index]!;
+    shader.set({ jfa: { size: [size[0], size[1]], jump, _pad: 0 }, seeds: seedRead });
+    passes.push({ name: `jfa-step-${index}-jump-${jump}`, target: seedWrite, effect: shader });
     const previous = seedRead;
     seedRead = seedWrite;
     seedWrite = previous;
@@ -248,9 +249,9 @@ function buildChain(scene: RadianceScene, options: ChainOptions): ChainPass[] {
   let atlasWrite = scene.cascades[0];
   let atlasRead = scene.cascades[1];
   for (let cascade = scene.cascadeCount - 1; cascade >= stopAt; cascade--) {
-    const effect = effects.cascade[cascade]!;
+    const shader = effects.cascade[cascade]!;
     const hasUpper = cascade < scene.cascadeCount - 1;
-    effect.set({
+    shader.set({
       rc: {
         atlas_size: [atlas[0], atlas[1]],
         scene_size: [size[0], size[1]],
@@ -270,7 +271,7 @@ function buildChain(scene: RadianceScene, options: ChainOptions): ChainPass[] {
       // The top level has nothing above it; the binding still has to point somewhere.
       upper_tex: atlasRead,
     });
-    passes.push({ name: `cascade-${cascade}`, target: atlasWrite, effect });
+    passes.push({ name: `cascade-${cascade}`, target: atlasWrite, effect: shader });
     const previous = atlasRead;
     atlasRead = atlasWrite;
     atlasWrite = previous;
@@ -284,9 +285,9 @@ function buildChain(scene: RadianceScene, options: ChainOptions): ChainPass[] {
 /** The live path: paint, flood, trace and merge, all in one submit. */
 export function runChain(scene: RadianceScene, options: ChainOptions = {}): void {
   const passes = buildChain(scene, options);
-  scene.gpu.frame((frame) => {
+  frame(scene.gpu, (currentFrame) => {
     for (const pass of passes) {
-      frame.pass({ target: pass.target, clear: [0, 0, 0, 0] }, (encoder) => encoder.draw(pass.effect));
+      currentFrame.pass({ target: pass.target, clear: [0, 0, 0, 0] }, (encoder) => encoder.draw(pass.effect));
     }
   });
 }
@@ -300,11 +301,11 @@ export function runChain(scene: RadianceScene, options: ChainOptions = {}): void
 export async function runChainStaged(
   scene: RadianceScene,
   options: ChainOptions,
-  onStage: (name: string, target: Target) => Promise<void> | void,
+  onStage: (name: string, colorTarget: Target) => Promise<void> | void,
 ): Promise<void> {
   for (const pass of buildChain(scene, options)) {
-    scene.gpu.frame((frame) => {
-      frame.pass({ target: pass.target, clear: [0, 0, 0, 0] }, (encoder) => encoder.draw(pass.effect));
+    frame(scene.gpu, (currentFrame) => {
+      currentFrame.pass({ target: pass.target, clear: [0, 0, 0, 0] }, (encoder) => encoder.draw(pass.effect));
     });
     await scene.gpu.gpu.queue.onSubmittedWorkDone();
     await onStage(pass.name, pass.target);
@@ -331,8 +332,8 @@ export function presentScene(scene: RadianceScene, output: Output, view: Radianc
     emitter_tex: scene.emitter[0],
     sdf_tex: scene.sdf,
   });
-  scene.gpu.frame((frame) => {
-    frame.pass({ target: output, clear: [0, 0, 0, 1] }, (encoder) => encoder.draw(scene.effects.present));
+  frame(scene.gpu, (currentFrame) => {
+    currentFrame.pass({ target: output, clear: [0, 0, 0, 1] }, (encoder) => encoder.draw(scene.effects.present));
   });
 }
 

@@ -5,12 +5,13 @@ import { DEFAULT_BRUSH } from './settings';
 import { brushState, heroStateForActiveClick, simulationBrushState } from './sim-sizing';
 import { isPointInsideTriangle } from './triangle-hit';
 import { DEFAULT_TRIANGLE_LED_CONTROLS, isTriangleLedMode, type TriangleLedControls } from './types';
+import { frame, frameLoop, surface } from "vgpu";
 
 export function createRenderer(options: BrowserRendererOptions<TriangleLedControls>): ExampleRenderer<TriangleLedControls> {
   let disposed = false;
   let reportedError = false;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let scene: HeroRenderer | undefined;
   let loop: { stop(): void } | undefined;
   let observer: ResizeObserver | undefined;
@@ -34,11 +35,11 @@ export function createRenderer(options: BrowserRendererOptions<TriangleLedContro
     resizeFrame = 0;
     const size = pendingSize;
     pendingSize = undefined;
-    if (disposed || !size || !scene || !surface) return;
+    if (disposed || !size || !scene || !canvasSurface) return;
     const generation = ++resizeGeneration;
     try {
-      scene.rebuild({ width: size.width, height: size.height, dpr: surface.dpr });
-      scene.setOutputTarget(surface);
+      scene.rebuild({ width: size.width, height: size.height, dpr: canvasSurface.dpr });
+      scene.setOutputTarget(canvasSurface);
       void scene.prewarm().catch((error: unknown) => {
         if (disposed || generation !== resizeGeneration) return;
         fail(error);
@@ -83,8 +84,8 @@ export function createRenderer(options: BrowserRendererOptions<TriangleLedContro
     input = undefined;
     scene?.destroy();
     scene = undefined;
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
   };
@@ -94,10 +95,10 @@ export function createRenderer(options: BrowserRendererOptions<TriangleLedContro
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 2] });
-    const nextScene = createHeroRenderer(gpu, { theme: 'dark', css: cssSizeOf(options.canvas, surface.dpr) });
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
+    const nextScene = createHeroRenderer(gpu, { theme: 'dark', css: cssSizeOf(options.canvas, canvasSurface.dpr) });
     scene = nextScene;
-    nextScene.setOutputTarget(surface);
+    nextScene.setOutputTarget(canvasSurface);
     nextScene.setHero(heroStateForActiveClick(controls.mode));
     await nextScene.prewarm();
     if (disposed) { nextScene.destroy(); return; }
@@ -106,11 +107,11 @@ export function createRenderer(options: BrowserRendererOptions<TriangleLedContro
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
-    loop = gpu.frame.loop((frame) => {
+    loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !scene || !input || !gpu) return;
       scene.setBrush(input.brush());
       scene.setRgbDeployActive(input.rgbDeployActive());
-      scene.renderFrame(frame, { time: gpu.time, dt: gpu.deltaTime });
+      scene.renderFrame(currentFrame, { time: gpu.time, dt: gpu.deltaTime });
     });
   };
   const ready = initialize().catch((error: unknown) => {
@@ -134,7 +135,7 @@ export async function renderThumbnail(gpu: Gpu, target: Target, opts: ThumbnailO
     let time = opts.time ?? 0;
     for (let i = 0; i < warmupFrames; i++) {
       time += dt;
-      gpu.frame((frame) => scene.renderFrame(frame, { time, dt }));
+      frame(gpu, (currentFrame) => scene.renderFrame(currentFrame, { time, dt }));
     }
   } finally {
     await Promise.allSettled([

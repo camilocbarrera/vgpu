@@ -5,6 +5,7 @@ import { fixedStepCount } from './math';
 import { installStirInput } from './pointer-input';
 import { createFluid, destroyFluid, prepareFluid, renderFluid, stepFluid, type Fluid } from './simulation';
 import { renderThumb, type FluidValidationStats } from './validation';
+import { surface } from "vgpu";
 
 export interface FluidThumbnailOptions extends ThumbnailOptions {
   scriptedDrag?: boolean;
@@ -16,7 +17,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
   let disposed = false;
   let reportedError = false;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let fluid: Fluid | undefined;
   let input: ReturnType<typeof installStirInput> | undefined;
   let observer: ResizeObserver | undefined;
@@ -51,8 +52,8 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     try {
       do {
         prepareQueued = false;
-        if (disposed || !fluid || !surface) return;
-        await prepareFluid(fluid, surface);
+        if (disposed || !fluid || !canvasSurface) return;
+        await prepareFluid(fluid, canvasSurface);
       } while (prepareQueued && !disposed);
     } catch (error) {
       reportFailure(error);
@@ -94,11 +95,11 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
 
   const tick = (now: number) => {
     if (disposed) return;
-    if (!document.hidden && fluid && input && surface) {
+    if (!document.hidden && fluid && input && canvasSurface) {
       const fixed = fixedStepCount(accumulator, (now - previous) / 1000);
       accumulator = fixed.accumulator;
       for (let i = 0; i < fixed.steps; i++) stepFluid(fluid, input);
-      renderFluid(fluid, surface);
+      renderFluid(fluid, canvasSurface);
     }
     // Always reset the clock while hidden so visibility changes never catch up.
     previous = now;
@@ -121,8 +122,8 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     input?.dispose();
     input = undefined;
     if (fluid) destroyFluid(fluid);
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
     fluid = undefined;
@@ -134,12 +135,12 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 2] });
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
     fluid = createFluid(gpu);
     input = installStirInput(options.canvas);
-    await prepareFluid(fluid, surface);
+    await prepareFluid(fluid, canvasSurface);
     if (disposed) return;
-    unsubscribeResize = surface.onResize(requestResize);
+    unsubscribeResize = canvasSurface.onResize(requestResize);
     observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);

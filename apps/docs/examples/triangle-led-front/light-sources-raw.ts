@@ -15,6 +15,7 @@ import {
   type RenderSize,
 } from './settings';
 import type { BrushState, SceneTunables as LightTunables } from './light-sources-pass';
+import { bundle, draw, geometry, target } from "vgpu";
 
 const LIGHT_SOURCES_FORMAT: GPUTextureFormat = 'rgba16float';
 
@@ -49,7 +50,7 @@ export function createLightSourcesRaw(
   const ledShape =
     opts.ledShape ?? triangleLedShapeDimensions(simSize, LEDS_PER_EDGE);
 
-  const target = gpu.target({
+  const colorTarget = target(gpu, {
     size: [simSize.width, simSize.height],
     format: LIGHT_SOURCES_FORMAT,
     label: 'triangle-led-front-light-sources',
@@ -59,7 +60,7 @@ export function createLightSourcesRaw(
     simSize,
     LED_EMITTER_MESH_EXPANSION_PX,
   );
-  const ledGeometry = gpu.geometry({
+  const ledGeometry = geometry(gpu, {
     label: 'triangle-led-front-led-emitters',
     buffers: [{
       data: ledVertices.buffer as ArrayBuffer,
@@ -72,13 +73,13 @@ export function createLightSourcesRaw(
     }],
   });
 
-  const lightSourcesDraw = gpu.draw({
+  const lightSourcesDraw = draw(gpu, {
     shader: lightSourcesWgsl,
     label: 'triangle-led-front-light-sources-pass',
     vertices: 3,
     set: { cfg: initialLightSourcesUniform(), leds: opts.ledStorage },
   });
-  const ledEmittersDraw = gpu.draw({
+  const ledEmittersDraw = draw(gpu, {
     shader: ledEmittersWgsl,
     label: 'triangle-led-front-led-emitters-pass',
     geometry: ledGeometry,
@@ -91,26 +92,24 @@ export function createLightSourcesRaw(
   });
 
   const ready = Promise.all([
-    lightSourcesDraw.compile(target),
-    ledEmittersDraw.compile(target),
+    lightSourcesDraw.compile(colorTarget),
+    ledEmittersDraw.compile(colorTarget),
   ]).then(() => undefined);
 
-  const recordClearBundle = (): Bundle => gpu.bundle(
-    { target, label: 'triangle-led-front-light-sources-clear' },
-    (bundle) => {
-      bundle.draw(lightSourcesDraw);
-      bundle.draw(ledEmittersDraw);
+  const recordClearBundle = (): Bundle => bundle(gpu, { target: colorTarget, label: 'triangle-led-front-light-sources-clear' },
+    (recorded) => {
+      recorded.draw(lightSourcesDraw);
+      recorded.draw(ledEmittersDraw);
     },
   );
-  const emittersBundle = gpu.bundle(
-    { target, label: 'triangle-led-front-led-emitters' },
-    (bundle) => bundle.draw(ledEmittersDraw),
+  const emittersBundle = bundle(gpu, { target: colorTarget, label: 'triangle-led-front-led-emitters' },
+    (recorded) => recorded.draw(ledEmittersDraw),
   );
   let clearBundle = recordClearBundle();
   let lastBakeKey: string | undefined;
 
   return {
-    texture: target,
+    texture: colorTarget,
     ready,
     encode({ frame, brush, time, tunables, renderBlackOccluder = true }) {
       const sanitizedClipInset = sanitizeTunablePx(
@@ -137,18 +136,18 @@ export function createLightSourcesRaw(
         clearBundle = recordClearBundle();
         lastBakeKey = bakeKey;
         frame.pass(
-          { target, clear: [0, 0, 0, 1000] },
+          { target: colorTarget, clear: [0, 0, 0, 1000] },
           (pass: FramePass) => pass.bundles(clearBundle),
         );
       } else {
         frame.pass(
-          { target, clear: false },
+          { target: colorTarget, clear: false },
           (pass: FramePass) => pass.bundles(emittersBundle),
         );
       }
     },
     destroy() {
-      (target as { destroy?: () => void }).destroy?.();
+      (colorTarget as { destroy?: () => void }).destroy?.();
       ledGeometry.destroy();
     },
   };

@@ -5,6 +5,7 @@ import { installLightPaintInput } from './pointer-input';
 import { createScene, destroyScene, prepareScene, presentScene, runChain, type RadianceScene } from './simulation';
 import { DEFAULT_RADIANCE_CASCADES_CONTROLS, type RadianceCascadesControls } from './types';
 import { renderThumb, type RadianceCascadesStats } from './validation';
+import { surface } from "vgpu";
 
 export interface RadianceCascadesRenderer extends ExampleRenderer<RadianceCascadesControls> {
   /** Removes every painted stroke; the triangle stays. */
@@ -26,7 +27,7 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
   let reportedError = false;
   let controls: RadianceCascadesControls = options.initialControls ?? DEFAULT_RADIANCE_CASCADES_CONTROLS;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let scene: RadianceScene | undefined;
   let input: ReturnType<typeof installLightPaintInput> | undefined;
   let observer: ResizeObserver | undefined;
@@ -52,10 +53,10 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
   };
 
   const rebuildScene = () => {
-    if (disposed || !gpu || !surface) return;
+    if (disposed || !gpu || !canvasSurface) return;
     rebuilding = true;
     try {
-      const next = createScene(gpu, [surface.size[0], surface.size[1]], 'radiance-cascades-live');
+      const next = createScene(gpu, [canvasSurface.size[0], canvasSurface.size[1]], 'radiance-cascades-live');
       if (scene) destroyScene(scene);
       scene = next;
       options.onCascadeCount?.(next.cascadeCount);
@@ -63,7 +64,7 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
       // are gone, and the whole chain has to run again before anything can be presented.
       clearRequested = true;
       dirty = true;
-      void prepareScene(next, surface.format).catch(handleFailure);
+      void prepareScene(next, canvasSurface.format).catch(handleFailure);
     } catch (error) {
       handleFailure(error);
     } finally {
@@ -82,9 +83,9 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
     resizeFrame = 0;
     const size = pendingSize;
     pendingSize = undefined;
-    if (disposed || !size || !surface) return;
+    if (disposed || !size || !canvasSurface) return;
     try {
-      surface.resize([
+      canvasSurface.resize([
         Math.max(1, Math.round(size.width * size.dpr)),
         Math.max(1, Math.round(size.height * size.dpr)),
       ]);
@@ -137,7 +138,7 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
   const tick = () => {
     animationFrame = 0;
     if (disposed) return;
-    if (!document.hidden && gpu && surface && scene && input) {
+    if (!document.hidden && gpu && canvasSurface && scene && input) {
       try {
         const segment = input.take();
         if (segment) dirty = true;
@@ -152,7 +153,7 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
         }
         // Presenting every frame keeps the swap chain fed; it costs one fullscreen pass
         // and never re-traces, so an untouched canvas is essentially free.
-        presentScene(scene, surface, controls.view);
+        presentScene(scene, canvasSurface, controls.view);
       } catch (error) {
         handleFailure(error);
         return;
@@ -178,8 +179,8 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
     input = undefined;
     if (scene) destroyScene(scene);
     scene = undefined;
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
   }
@@ -190,13 +191,13 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 2] });
-    scene = createScene(gpu, [surface.size[0], surface.size[1]], 'radiance-cascades-live');
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
+    scene = createScene(gpu, [canvasSurface.size[0], canvasSurface.size[1]], 'radiance-cascades-live');
     options.onCascadeCount?.(scene.cascadeCount);
-    await prepareScene(scene, surface.format);
+    await prepareScene(scene, canvasSurface.format);
     if (disposed) return;
     input = installLightPaintInput(options.canvas);
-    unsubscribeResize = surface.onResize(onSurfaceResize);
+    unsubscribeResize = canvasSurface.onResize(onSurfaceResize);
     observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);

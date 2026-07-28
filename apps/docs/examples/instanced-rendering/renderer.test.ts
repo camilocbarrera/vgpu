@@ -1,7 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
-const mocks=vi.hoisted(()=>({init:vi.fn()}));vi.mock('vgpu',()=>({init:mocks.init}));vi.mock('vgpu/scene',()=>({perspectiveCamera:()=>({viewProjection:new Float32Array(16)})}));
+const vgpuFns = vi.hoisted(() => Object.fromEntries(
+  ['surface', 'target', 'effect', 'draw', 'geometry', 'sampler', 'bundle', 'compute', 'storage', 'uniforms', 'timer', 'visibility', 'pingPong', 'pingPongStorage', 'frame', 'frameLoop']
+    // The gpu double each test builds is still method-shaped; these stand in for vgpu's free functions.
+    .map((name) => [name, (gpu: any, ...args: any[]) => (name === 'frameLoop' ? gpu.frame.loop(...args) : gpu[name](...args))]),
+)) as Record<string, unknown>;
+const mocks=vi.hoisted(()=>({init:vi.fn()}));vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns }));vi.mock('vgpu/scene',()=>({perspectiveCamera:()=>({viewProjection:new Float32Array(16)})}));
 import { Controls } from './controls'; import { createRenderer, renderThumbnail } from './renderer'; import { DEFAULT_INSTANCED_RENDERING_CONTROLS } from './types';
 function deferred(){let resolve!:()=>void,reject!:(error:unknown)=>void;const promise=new Promise<void>((r,j)=>{resolve=r;reject=j;});return{promise,resolve,reject};}
 afterEach(()=>{vi.unstubAllGlobals();vi.clearAllMocks();});

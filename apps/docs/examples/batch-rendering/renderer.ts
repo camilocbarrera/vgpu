@@ -4,6 +4,7 @@ import sceneWgsl from './scene.wgsl';
 import blitWgsl from './blit.wgsl';
 
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
+import { bundle, draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 interface ThumbOptions extends ThumbnailOptions {}
@@ -13,8 +14,8 @@ const CLEAR = [0.008, 0.014, 0.035, 1] as const;
 export function createRenderer(options: BrowserRendererOptions): ExampleRenderer {
   let disposed = false;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
-  let target: Target | undefined;
+  let canvasSurface: Surface | undefined;
+  let colorTarget: Target | undefined;
   let blit: Effect | undefined;
   let scene: Scene | undefined;
   let loop: { stop(): void } | undefined;
@@ -28,12 +29,12 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     resizeFrame = 0;
     const size = pendingSize;
     pendingSize = undefined;
-    if (disposed || !size || !target || !blit || !surface) return;
-    target.resize([
+    if (disposed || !size || !colorTarget || !blit || !canvasSurface) return;
+    colorTarget.resize([
       Math.max(1, Math.round(size.width * size.dpr)),
       Math.max(1, Math.round(size.height * size.dpr)),
     ]);
-    setBlitSource(blit, target, surface);
+    setBlitSource(blit, colorTarget, canvasSurface);
   };
   const resize = (size: RenderSize) => {
     if (disposed || size.width <= 0 || size.height <= 0) return;
@@ -63,10 +64,10 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     if (typeof window !== 'undefined') window.removeEventListener('resize', onWindowResize);
     scene?.geometry.destroy();
     scene = undefined;
-    (target as { destroy?: () => void } | undefined)?.destroy?.();
-    target = undefined;
-    surface?.dispose();
-    surface = undefined;
+    (colorTarget as { destroy?: () => void } | undefined)?.destroy?.();
+    colorTarget = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
   };
@@ -77,10 +78,10 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 2] });
-    target = gpu.target({ size: surface.size, format: 'rgba8unorm', depth: true });
-    blit = createBlit(gpu, target, surface);
-    const nextScene = await createScene(gpu, target);
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
+    colorTarget = target(gpu, { size: canvasSurface.size, format: 'rgba8unorm', depth: true });
+    blit = createBlit(gpu, colorTarget, canvasSurface);
+    const nextScene = await createScene(gpu, colorTarget);
     if (disposed) {
       nextScene.geometry.destroy();
       return;
@@ -90,7 +91,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
-    loop = gpu.frame.loop((frame) => render(frame, scene!, blit!, target!, surface!, gpu!.time));
+    loop = frameLoop(gpu, (currentFrame) => render(currentFrame, scene!, blit!, colorTarget!, canvasSurface!, gpu!.time));
   };
 
   function handleFailure(error: unknown): void {
@@ -112,16 +113,16 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
 }
 
 export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptions = {}): Promise<void> {
-  const target = gpu.target({ size: output.size, format: 'rgba8unorm', depth: true });
+  const colorTarget = target(gpu, { size: output.size, format: 'rgba8unorm', depth: true });
   let scene: Scene | undefined;
   try {
-    const blit = createBlit(gpu, target, output);
-    scene = await createScene(gpu, target);
+    const blit = createBlit(gpu, colorTarget, output);
+    scene = await createScene(gpu, colorTarget);
     await blit.compile(output);
     let time = opts.time ?? 2.4;
     for (let i = 0; i < (opts.warmupFrames ?? 3); i++) {
       time += opts.dt ?? 1 / 60;
-      gpu.frame((frame) => render(frame, scene!, blit, target, output, time));
+      frame(gpu, (currentFrame) => render(currentFrame, scene!, blit, colorTarget, output, time));
     }
   } finally {
     await Promise.allSettled([
@@ -129,11 +130,11 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptio
       Promise.resolve().then(() => gpu.settled()),
     ]);
     scene?.geometry.destroy();
-    (target as { destroy?: () => void }).destroy?.();
+    (colorTarget as { destroy?: () => void }).destroy?.();
   }
 }
 
-async function createScene(gpu: Gpu, target: Target): Promise<Scene> {
+async function createScene(gpu: Gpu, colorTarget: Target): Promise<Scene> {
   const groups = packedGeometry();
   const counts = groups.map((group) => group.length / 9);
   const data = new Float32Array(groups.reduce((sum, group) => sum + group.length, 0));
@@ -141,38 +142,38 @@ async function createScene(gpu: Gpu, target: Target): Promise<Scene> {
   for (const group of groups) { data.set(group, offset); offset += group.length; }
   if (counts.some((count) => count % 3) || counts.reduce((a, b) => a + b, 0) !== data.length / 9) throw new Error('Invalid packed triangle ranges.');
 
-  const geometry = gpu.geometry({
+  const geo = geometry(gpu, {
     label: 'batch-rendering-packed-primitives',
     buffers: [{ data, stride: 36, attributes: { position: 'float32x3', normal: 'float32x3', color: 'float32x3' } }],
   });
   try {
-    const slices = counts.map((vertexCount, i) => geometry.slice({
+    const slices = counts.map((vertexCount, i) => geo.slice({
       firstVertex: counts.slice(0, i).reduce((a, b) => a + b, 0), vertexCount, label: ['cubes', 'pyramids', 'octahedra', 'icosahedra'][i],
     }));
-    const draws = slices.map((slice, i) => gpu.draw({ shader: sceneWgsl, geometry: slice, label: `batch-${i}` }));
-    const initial = camera(2.4, target);
-    for (const draw of draws) draw.set({ light: [-0.45, -0.75, -0.35], time: 2.4, viewProjection: initial });
-    await Promise.all(draws.map((draw) => draw.compile(target)));
+    const draws = slices.map((slice, i) => draw(gpu, { shader: sceneWgsl, geometry: slice, label: `batch-${i}` }));
+    const initial = camera(2.4, colorTarget);
+    for (const drawable of draws) drawable.set({ light: [-0.45, -0.75, -0.35], time: 2.4, viewProjection: initial });
+    await Promise.all(draws.map((drawable) => drawable.compile(colorTarget)));
     // Slices freeze their ranges; this bundle also captures the pyramid's equivalent call-level override.
     // A changing range would require a direct pass.draw override or re-recording the bundle.
-    const bundle = gpu.bundle({ target, label: 'batch-rendering-primitives' }, (b) => {
+    const recorded = bundle(gpu, { target: colorTarget, label: 'batch-rendering-primitives' }, (b) => {
       b.draw(draws[0]!);
       b.draw(draws[1]!, { firstVertex: slices[1]!.firstVertex, vertices: slices[1]!.vertexCount });
       b.draw(draws[2]!);
       b.draw(draws[3]!);
     });
-    return { geometry, draws, bundle };
+    return { geometry: geo, draws, bundle: recorded };
   } catch (error) {
-    geometry.destroy();
+    geo.destroy();
     throw error;
   }
 }
 
-function render(frame: Frame, scene: Scene, blit: Effect, target: Target, output: Output, time: number): void {
+function render(currentFrame: Frame, scene: Scene, blit: Effect, colorTarget: Target, output: Output, time: number): void {
   const viewProjection = camera(time, output);
-  for (const draw of scene.draws) draw.set({ time, viewProjection });
-  frame.pass({ target, clear: CLEAR }, (p) => p.bundles(scene.bundle));
-  frame.pass({ target: output }, (p) => p.draw(blit));
+  for (const drawable of scene.draws) drawable.set({ time, viewProjection });
+  currentFrame.pass({ target: colorTarget, clear: CLEAR }, (p) => p.bundles(scene.bundle));
+  currentFrame.pass({ target: output }, (p) => p.draw(blit));
 }
 function camera(time: number, output: Output): Float32Array {
   const angle = time * .06 + .55;
@@ -182,8 +183,8 @@ function camera(time: number, output: Output): Float32Array {
   }).viewProjection;
 }
 function createBlit(gpu: Gpu, source: Target, output: Output): Effect {
-  const blit = gpu.effect(blitWgsl, { label: 'batch-rendering-blit' });
-  blit.set({ linear_samp: gpu.sampler({ minFilter: 'linear', magFilter: 'linear' }) });
+  const blit = effect(gpu, blitWgsl, { label: 'batch-rendering-blit' });
+  blit.set({ linear_samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }) });
   setBlitSource(blit, source, output);
   return blit;
 }

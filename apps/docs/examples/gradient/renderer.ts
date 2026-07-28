@@ -1,11 +1,12 @@
 import type { Gpu, Surface, Target } from 'vgpu';
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
 import fragment from './shader.wgsl';
+import { effect, frame, frameLoop, surface } from "vgpu";
 
 export function createRenderer(options: BrowserRendererOptions): ExampleRenderer {
   let disposed = false;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let loop: { stop(): void } | undefined;
   let observer: ResizeObserver | undefined;
   let resizeFrame = 0;
@@ -17,9 +18,9 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     resizeFrame = 0;
     const size = pendingSize;
     pendingSize = undefined;
-    if (disposed || !size || !surface) return;
+    if (disposed || !size || !canvasSurface) return;
     try {
-      surface.resize([
+      canvasSurface.resize([
         Math.max(1, Math.round(size.width * size.dpr)),
         Math.max(1, Math.round(size.height * size.dpr)),
       ]);
@@ -57,8 +58,8 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     observer?.disconnect();
     observer = undefined;
     if (typeof window !== 'undefined') window.removeEventListener('resize', onWindowResize);
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
   };
@@ -72,16 +73,16 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
       return;
     }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 2] });
-    const effect = gpu.effect(fragment);
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
+    const shader = effect(gpu, fragment);
     observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
-    loop = gpu.frame.loop((frame) => {
-      if (disposed || !surface) return;
-      effect.set({ uniforms: { time: gpu!.time, resolution: surface.size } });
-      frame.pass({ target: surface }, (pass) => pass.draw(effect));
+    loop = frameLoop(gpu, (currentFrame) => {
+      if (disposed || !canvasSurface) return;
+      shader.set({ uniforms: { time: gpu!.time, resolution: canvasSurface.size } });
+      currentFrame.pass({ target: canvasSurface }, (pass) => pass.draw(shader));
     });
   };
 
@@ -109,14 +110,14 @@ export async function renderThumbnail(
   options: ThumbnailOptions = {},
 ): Promise<void> {
   try {
-    const effect = gpu.effect(fragment);
-    effect.set({
+    const shader = effect(gpu, fragment);
+    shader.set({
       uniforms: {
         time: options.time ?? Math.PI / 4,
         resolution: target.size,
       },
     });
-    gpu.frame((frame) => frame.pass({ target }, (pass) => pass.draw(effect)));
+    frame(gpu, (currentFrame) => currentFrame.pass({ target }, (pass) => pass.draw(shader)));
   } finally {
     // Always drain and settle, including when encoding throws. allSettled keeps
     // cleanup failures from replacing the original rendering failure.

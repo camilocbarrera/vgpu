@@ -9,6 +9,7 @@ import pressureWgsl from './pressure.wgsl';
 import projectWgsl from './project.wgsl';
 import advectDyeWgsl from './advect-dye.wgsl';
 import displayWgsl from './display.wgsl';
+import { bundle, compute, effect, frame, pingPongStorage, storage } from "vgpu";
 
 const CELLS = GRID_WIDTH * GRID_HEIGHT;
 const DYE_WIDTH = GRID_WIDTH * 4;
@@ -35,15 +36,15 @@ export interface Fluid {
 export function createFluid(gpu: Gpu): Fluid {
   const allocated: object[] = [];
   try {
-    const velocity = gpu.pingPongStorage(CELLS * 8);
+    const velocity = pingPongStorage(gpu, CELLS * 8);
     allocated.push(velocity.read, velocity.write);
-    const dye = gpu.pingPongStorage(DYE_CELLS * 16);
+    const dye = pingPongStorage(gpu, DYE_CELLS * 16);
     allocated.push(dye.read, dye.write);
-    const pressure = gpu.pingPongStorage(CELLS * 4);
+    const pressure = pingPongStorage(gpu, CELLS * 4);
     allocated.push(pressure.read, pressure.write);
-    const divergence = gpu.storage(CELLS * 4, 'read-write');
+    const divergence = storage(gpu, CELLS * 4, 'read-write');
     allocated.push(divergence);
-    const curl = gpu.storage(CELLS * 4, 'read-write');
+    const curl = storage(gpu, CELLS * 4, 'read-write');
     allocated.push(curl);
     const passes = createPasses(gpu);
     return { gpu, velocity, dye, pressure, divergence, curl, passes, step: 0, lastInputStep: -1000 };
@@ -67,14 +68,14 @@ export function destroyFluid(fluid: Fluid): void {
 
 function createPasses(gpu: Gpu) {
   return {
-    advectVelocity: gpu.compute(advectVelocityWgsl),
-    curl: gpu.compute(curlWgsl),
-    vorticity: gpu.compute(vorticityWgsl),
-    divergence: gpu.compute(divergenceWgsl),
-    pressure: gpu.compute(pressureWgsl),
-    project: gpu.compute(projectWgsl),
-    advectDye: gpu.compute(advectDyeWgsl),
-    display: [gpu.effect(displayWgsl), gpu.effect(displayWgsl)] as const,
+    advectVelocity: compute(gpu, advectVelocityWgsl),
+    curl: compute(gpu, curlWgsl),
+    vorticity: compute(gpu, vorticityWgsl),
+    divergence: compute(gpu, divergenceWgsl),
+    pressure: compute(gpu, pressureWgsl),
+    project: compute(gpu, projectWgsl),
+    advectDye: compute(gpu, advectDyeWgsl),
+    display: [effect(gpu, displayWgsl), effect(gpu, displayWgsl)] as const,
   };
 }
 
@@ -98,8 +99,8 @@ export async function prepareFluid(fluid: Fluid, output: Output): Promise<void> 
   fluid.passes.display[0].set({ config, dye: fluid.dye.read });
   fluid.passes.display[1].set({ config, dye: fluid.dye.write });
   await Promise.all(fluid.passes.display.map((display) => display.compile({ colors: [output.format] })));
-  fluid.bundles = [0, 1].map((parity) => fluid.gpu.bundle({ target: { colors: [output.format] } }, (bundle) => {
-    bundle.draw(fluid.passes.display[parity]!);
+  fluid.bundles = [0, 1].map((parity) => bundle(fluid.gpu, { target: { colors: [output.format] } }, (recorded) => {
+    recorded.draw(fluid.passes.display[parity]!);
   })) as [Bundle, Bundle];
   fluid.output = output;
 }
@@ -139,7 +140,7 @@ export function stepFluid(fluid: Fluid, input?: StirInput): void {
 
 export function renderFluid(fluid: Fluid, output: Output): void {
   if (!fluid.bundles || fluid.output !== output) return;
-  fluid.gpu.frame((frame) => frame.pass({ target: output, clear: CLEAR }, (pass) => {
+  frame(fluid.gpu, (currentFrame) => currentFrame.pass({ target: output, clear: CLEAR }, (pass) => {
     pass.bundles(fluid.bundles![fluid.step & 1]);
   }));
 }

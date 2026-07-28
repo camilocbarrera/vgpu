@@ -14,6 +14,7 @@ import compositeWgsl from './composite.wgsl';
 import earthWgsl from './earth.wgsl';
 import overlayWgsl from './overlay.wgsl';
 import skyWgsl from './sky.wgsl';
+import { draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -59,7 +60,7 @@ export function createRenderer(options: BrowserRendererOptions<EarthControls>): 
   let controls = { ...(options.initialControls ?? DEFAULT_EARTH_CONTROLS) };
   let sunDegrees = controls.sunDegrees;
   let gpu: Gpu | undefined;
-  let surface: Surface | undefined;
+  let canvasSurface: Surface | undefined;
   let maps: Maps | undefined;
   let scene: Scene | undefined;
   let targets: Targets | undefined;
@@ -126,8 +127,8 @@ export function createRenderer(options: BrowserRendererOptions<EarthControls>): 
     targets = undefined;
     if (maps) destroyMaps(maps);
     maps = undefined;
-    surface?.dispose();
-    surface = undefined;
+    canvasSurface?.dispose();
+    canvasSurface = undefined;
     gpu?.dispose();
     gpu = undefined;
   };
@@ -145,12 +146,12 @@ export function createRenderer(options: BrowserRendererOptions<EarthControls>): 
     const nextGpu = await init();
     if (disposed) { nextGpu.dispose(); return; }
     gpu = nextGpu;
-    surface = gpu.surface(options.canvas, { dpr: [1, 2] });
+    canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
     maps = createMaps(gpu, 'earth-live');
     scene = createScene(gpu, maps, 'earth-live');
-    targets = createTargets(gpu, surface.size, 'earth-live');
+    targets = createTargets(gpu, canvasSurface.size, 'earth-live');
     setStaticBindings(scene, maps, targets);
-    await Promise.all([bakeMaps(gpu, maps), prewarm(scene, targets, surface)]);
+    await Promise.all([bakeMaps(gpu, maps), prewarm(scene, targets, canvasSurface)]);
     if (disposed) return;
     orbit = installOrbitInput(options.canvas, {
       yaw: 0,
@@ -161,12 +162,12 @@ export function createRenderer(options: BrowserRendererOptions<EarthControls>): 
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
-    loop = gpu.frame.loop((frame) => {
-      if (disposed || !gpu || !surface || !scene || !targets || !orbit) return;
+    loop = frameLoop(gpu, (currentFrame) => {
+      if (disposed || !gpu || !canvasSurface || !scene || !targets || !orbit) return;
       const deltaTime = Math.min(0.05, gpu.deltaTime);
       if (controls.autoRotate) sunDegrees = (sunDegrees + deltaTime * EARTH_TUNING.sun.degreesPerSecond) % 360;
-      setFrameUniforms(scene, surface, orbit.step(deltaTime), sunDegrees, gpu.time);
-      render(frame, scene, targets, surface);
+      setFrameUniforms(scene, canvasSurface, orbit.step(deltaTime), sunDegrees, gpu.time);
+      render(currentFrame, scene, targets, canvasSurface);
     });
   };
   const ready = initialize().catch((error: unknown) => {
@@ -192,7 +193,7 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptio
   let time = opts.time ?? 0;
   for (let i = 0; i < Math.max(1, opts.warmupFrames ?? 1); i++) {
     setFrameUniforms(scene, output, { yaw, pitch, radius }, sunDegrees + sunDegreesAt(time), time);
-    gpu.frame((frame) => render(frame, scene, targets, output));
+    frame(gpu, (currentFrame) => render(currentFrame, scene, targets, output));
     time += dt;
   }
 
@@ -208,41 +209,41 @@ function createMaps(gpu: Gpu, label: string): Maps {
   return {
     // `-srgb` stores the albedo with a transfer curve (precision where the oceans
     // are dark) and hands linear values back to `textureSample`; alpha stays linear.
-    surface: gpu.target({ size, format: PLANET_FORMAT, label: `${label}-surface-map` }),
-    clouds: gpu.target({ size, format: 'r8unorm', label: `${label}-cloud-map` }),
+    surface: target(gpu, { size, format: PLANET_FORMAT, label: `${label}-surface-map` }),
+    clouds: target(gpu, { size, format: 'r8unorm', label: `${label}-cloud-map` }),
   };
 }
 
 function createScene(gpu: Gpu, maps: Maps, label: string): Scene {
-  const earthGeometry = gpu.geometry(sphere(EARTH_TUNING.planet));
-  const atmosphereGeometry = gpu.geometry(sphere(EARTH_TUNING.atmosphere));
+  const earthGeometry = geometry(gpu, sphere(EARTH_TUNING.planet));
+  const atmosphereGeometry = geometry(gpu, sphere(EARTH_TUNING.atmosphere));
   return {
     earthGeometry,
     atmosphereGeometry,
-    earth: gpu.draw({ shader: earthWgsl, geometry: earthGeometry, label: `${label}-earth` }),
+    earth: draw(gpu, { shader: earthWgsl, geometry: earthGeometry, label: `${label}-earth` }),
     // `alpha` blending over the transparent clear is what turns the shell's
     // fresnel alpha into the rim glow, and leaves coverage in the target's alpha.
-    atmosphere: gpu.draw({ shader: atmosphereWgsl, geometry: atmosphereGeometry, blend: 'alpha', label: `${label}-atmosphere` }),
-    sky: gpu.effect(skyWgsl, { label: `${label}-sky` }),
-    overlay: gpu.effect(overlayWgsl, { blend: 'premultiplied', label: `${label}-overlay` }),
-    bright: gpu.effect(brightPassWgsl, { label: `${label}-bright` }),
+    atmosphere: draw(gpu, { shader: atmosphereWgsl, geometry: atmosphereGeometry, blend: 'alpha', label: `${label}-atmosphere` }),
+    sky: effect(gpu, skyWgsl, { label: `${label}-sky` }),
+    overlay: effect(gpu, overlayWgsl, { blend: 'premultiplied', label: `${label}-overlay` }),
+    bright: effect(gpu, brightPassWgsl, { label: `${label}-bright` }),
     // One effect per blur pass: sharing a single effect would make every encoded
     // pass observe the last direction and radius written to its uniform buffer.
     blur: [
-      gpu.effect(blurWgsl, { label: `${label}-blur-h1` }),
-      gpu.effect(blurWgsl, { label: `${label}-blur-v1` }),
-      gpu.effect(blurWgsl, { label: `${label}-blur-h2` }),
-      gpu.effect(blurWgsl, { label: `${label}-blur-v2` }),
+      effect(gpu, blurWgsl, { label: `${label}-blur-h1` }),
+      effect(gpu, blurWgsl, { label: `${label}-blur-v1` }),
+      effect(gpu, blurWgsl, { label: `${label}-blur-h2` }),
+      effect(gpu, blurWgsl, { label: `${label}-blur-v2` }),
     ],
-    composite: gpu.effect(compositeWgsl, { label: `${label}-composite` }),
-    mapSampler: gpu.sampler({
+    composite: effect(gpu, compositeWgsl, { label: `${label}-composite` }),
+    mapSampler: sampler(gpu, {
       minFilter: 'linear',
       magFilter: 'linear',
       // Longitude wraps, latitude does not.
       addressModeU: 'repeat',
       addressModeV: 'clamp-to-edge',
     }),
-    linearSampler: gpu.sampler({ minFilter: 'linear', magFilter: 'linear' }),
+    linearSampler: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
   };
 }
 
@@ -250,10 +251,10 @@ function createTargets(gpu: Gpu, size: readonly [number, number], label: string)
   const full = normalizeSize(size);
   const bloom = bloomSize(full);
   return {
-    beauty: gpu.target({ size: full, format: HDR_FORMAT, label: `${label}-beauty` }),
-    planet: gpu.target({ size: full, format: PLANET_FORMAT, msaa: true, depth: true, label: `${label}-planet` }),
-    bloomA: gpu.target({ size: bloom, format: HDR_FORMAT, label: `${label}-bloom-a` }),
-    bloomB: gpu.target({ size: bloom, format: HDR_FORMAT, label: `${label}-bloom-b` }),
+    beauty: target(gpu, { size: full, format: HDR_FORMAT, label: `${label}-beauty` }),
+    planet: target(gpu, { size: full, format: PLANET_FORMAT, msaa: true, depth: true, label: `${label}-planet` }),
+    bloomA: target(gpu, { size: bloom, format: HDR_FORMAT, label: `${label}-bloom-a` }),
+    bloomB: target(gpu, { size: bloom, format: HDR_FORMAT, label: `${label}-bloom-b` }),
   };
 }
 
@@ -302,12 +303,12 @@ function setSizeBindings(scene: Scene, targets: Targets): void {
  * never repeated. Both bakes go in a single submit.
  */
 async function bakeMaps(gpu: Gpu, maps: Maps): Promise<void> {
-  const surface = gpu.effect(bakeSurfaceWgsl, { label: 'earth-bake-surface' });
-  const clouds = gpu.effect(bakeCloudsWgsl, { label: 'earth-bake-clouds' });
-  await Promise.all([surface.compile(maps.surface), clouds.compile(maps.clouds)]);
-  gpu.frame((frame) => {
-    frame.pass({ target: maps.surface, clear: TRANSPARENT }, (pass) => pass.draw(surface));
-    frame.pass({ target: maps.clouds, clear: TRANSPARENT }, (pass) => pass.draw(clouds));
+  const canvasSurface = effect(gpu, bakeSurfaceWgsl, { label: 'earth-bake-surface' });
+  const clouds = effect(gpu, bakeCloudsWgsl, { label: 'earth-bake-clouds' });
+  await Promise.all([canvasSurface.compile(maps.surface), clouds.compile(maps.clouds)]);
+  frame(gpu, (currentFrame) => {
+    currentFrame.pass({ target: maps.surface, clear: TRANSPARENT }, (pass) => pass.draw(canvasSurface));
+    currentFrame.pass({ target: maps.clouds, clear: TRANSPARENT }, (pass) => pass.draw(clouds));
   });
 }
 
@@ -380,22 +381,22 @@ function setFrameUniforms(
   });
 }
 
-function render(frame: Frame, scene: Scene, targets: Targets, output: Output): void {
+function render(currentFrame: Frame, scene: Scene, targets: Targets, output: Output): void {
   // Sky first, then the planet into its own MSAA target, then lay it over the sky.
-  frame.pass({ target: targets.beauty, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.sky));
-  frame.pass({ target: targets.planet, clear: TRANSPARENT }, (pass) => {
+  currentFrame.pass({ target: targets.beauty, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.sky));
+  currentFrame.pass({ target: targets.planet, clear: TRANSPARENT }, (pass) => {
     pass.draw(scene.earth);
     pass.draw(scene.atmosphere);
   });
-  frame.pass({ target: targets.beauty, clear: false }, (pass) => pass.draw(scene.overlay));
+  currentFrame.pass({ target: targets.beauty, clear: false }, (pass) => pass.draw(scene.overlay));
 
-  frame.pass({ target: targets.bloomA, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.bright));
-  frame.pass({ target: targets.bloomB, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[0]));
-  frame.pass({ target: targets.bloomA, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[1]));
-  frame.pass({ target: targets.bloomB, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[2]));
-  frame.pass({ target: targets.bloomA, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[3]));
+  currentFrame.pass({ target: targets.bloomA, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.bright));
+  currentFrame.pass({ target: targets.bloomB, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[0]));
+  currentFrame.pass({ target: targets.bloomA, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[1]));
+  currentFrame.pass({ target: targets.bloomB, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[2]));
+  currentFrame.pass({ target: targets.bloomA, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.blur[3]));
 
-  frame.pass({ target: output, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.composite));
+  currentFrame.pass({ target: output, clear: OPAQUE_BLACK }, (pass) => pass.draw(scene.composite));
 }
 
 function resizeTargets(targets: Targets, size: readonly [number, number]): void {
@@ -413,14 +414,14 @@ function destroyScene(scene: Scene): void {
 }
 
 function destroyTargets(targets: Targets): void {
-  for (const target of [targets.beauty, targets.planet, targets.bloomA, targets.bloomB]) {
-    (target as { destroy?: () => void }).destroy?.();
+  for (const colorTarget of [targets.beauty, targets.planet, targets.bloomA, targets.bloomB]) {
+    (colorTarget as { destroy?: () => void }).destroy?.();
   }
 }
 
 function destroyMaps(maps: Maps): void {
-  for (const target of [maps.surface, maps.clouds]) {
-    (target as { destroy?: () => void }).destroy?.();
+  for (const colorTarget of [maps.surface, maps.clouds]) {
+    (colorTarget as { destroy?: () => void }).destroy?.();
   }
 }
 

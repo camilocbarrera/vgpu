@@ -1,7 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
-const mocks=vi.hoisted(()=>({init:vi.fn()}));vi.mock('vgpu',()=>({init:mocks.init}));
+const vgpuFns = vi.hoisted(() => Object.fromEntries(
+  ['surface', 'target', 'effect', 'draw', 'geometry', 'sampler', 'bundle', 'compute', 'storage', 'uniforms', 'timer', 'visibility', 'pingPong', 'pingPongStorage', 'frame', 'frameLoop']
+    // The gpu double each test builds is still method-shaped; these stand in for vgpu's free functions.
+    .map((name) => [name, (gpu: any, ...args: any[]) => (name === 'frameLoop' ? gpu.frame.loop(...args) : gpu[name](...args))]),
+)) as Record<string, unknown>;
+const mocks=vi.hoisted(()=>({init:vi.fn()}));vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns }));
 import { Controls } from './controls'; import { DEFAULT_POST_PROCESSING_CONTROLS } from './types'; import { createRenderer, renderThumbnail } from './renderer';
 afterEach(()=>{vi.unstubAllGlobals();vi.clearAllMocks();});
 test('uses shared all-on defaults in accessible controlled toggles',()=>{const html=renderToStaticMarkup(createElement(Controls, { value: DEFAULT_POST_PROCESSING_CONTROLS, onChange: () => {} }));expect(DEFAULT_POST_PROCESSING_CONTROLS).toEqual({bloom:true,ca:true});expect(html).toContain('Post-processing effects');expect(html.match(/checked=""/g)).toHaveLength(2);expect(html).toContain('Chromatic Aberration');});

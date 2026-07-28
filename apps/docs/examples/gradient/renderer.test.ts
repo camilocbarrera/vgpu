@@ -3,7 +3,12 @@ import { afterEach, expect, test, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   init: vi.fn(),
 }));
-vi.mock('vgpu', () => ({ init: mocks.init }));
+const vgpuFns = vi.hoisted(() => Object.fromEntries(
+  ['surface', 'target', 'effect', 'draw', 'geometry', 'sampler', 'bundle', 'compute', 'storage', 'uniforms', 'timer', 'visibility', 'pingPong', 'pingPongStorage', 'frame', 'frameLoop']
+    // The gpu double each test builds is still method-shaped; these stand in for vgpu's free functions.
+    .map((name) => [name, (gpu: any, ...args: any[]) => (name === 'frameLoop' ? gpu.frame.loop(...args) : gpu[name](...args))]),
+)) as Record<string, unknown>;
+vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns }));
 
 import { createRenderer, renderThumbnail } from './renderer';
 

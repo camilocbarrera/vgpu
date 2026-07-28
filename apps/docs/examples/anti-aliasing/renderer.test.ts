@@ -1,7 +1,12 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, expect, test, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ init: vi.fn() })); vi.mock('vgpu', () => ({ init: mocks.init }));
+const vgpuFns = vi.hoisted(() => Object.fromEntries(
+  ['surface', 'target', 'effect', 'draw', 'geometry', 'sampler', 'bundle', 'compute', 'storage', 'uniforms', 'timer', 'visibility', 'pingPong', 'pingPongStorage', 'frame', 'frameLoop']
+    // The gpu double each test builds is still method-shaped; these stand in for vgpu's free functions.
+    .map((name) => [name, (gpu: any, ...args: any[]) => (name === 'frameLoop' ? gpu.frame.loop(...args) : gpu[name](...args))]),
+)) as Record<string, unknown>;
+const mocks = vi.hoisted(() => ({ init: vi.fn() })); vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns }));
 import { Controls } from './controls'; import { createRenderer, renderThumbnail } from './renderer'; import { AA_MODE_FXAA, AA_MODE_OFF, DEFAULT_ANTI_ALIASING_CONTROLS } from './types';
 function setup() {
  vi.stubGlobal('window', { devicePixelRatio: 1, addEventListener: vi.fn(), removeEventListener: vi.fn() }); vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1)); vi.stubGlobal('cancelAnimationFrame', vi.fn()); const disconnect=vi.fn(); vi.stubGlobal('ResizeObserver', class { observe=vi.fn(); disconnect=disconnect; });
