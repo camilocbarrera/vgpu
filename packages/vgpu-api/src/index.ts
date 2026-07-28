@@ -16,6 +16,8 @@ export type { ResolvedShader, ShaderSource, SourceMap, WGSLAst, WGSLSource } fro
 // --- gpu-first free functions (T202-02 / T202-03). The `gpu.*` methods of `gpu.ts` are a temporary
 // bridge and disappear in T202-05; these named exports are the public creation API.
 export { bundle } from "./bundle.ts";
+export { clock } from "./clock.ts";
+export type { Clock } from "./clock.ts";
 export { compute } from "./compute.ts";
 export { draw } from "./draw.ts";
 export { effect } from "./effect.ts";

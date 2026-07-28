@@ -32,7 +32,6 @@ import { sampler } from "./sampler.ts";
 import { unsupportedError } from "./errors.ts";
 import { timer as timerFactory, type Timer } from "./timer.ts";
 import { visibility as visibilityFactory, type Visibility, type VisibilityOptions } from "./visibility.ts";
-import type { ClearColor } from "./target-utils.ts";
 import type { Compute, ComputeOptions, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions } from "./api-types.ts";
 import { frameState } from "./frame-state.ts";
 import { renderService } from "./render-service.ts";
@@ -59,7 +58,6 @@ export interface LegacyGpuMethods {
   time: number;
   deltaTime: number;
   frameCount: number;
-  clearColor: ClearColor;
   surface(canvas: SurfaceCanvas, opts?: SurfaceOptions): Surface;
   effect(source: string | ShaderSource, opts?: EffectOptions): Effect;
   draw(opts: DrawOptions): Draw;
@@ -117,7 +115,6 @@ function installLegacyBridge(core: CoreGpu): Gpu {
     time: { get: () => frameState(kernel).time, set: (value: number) => { frameState(kernel).time = value; }, enumerable: true, configurable: true },
     deltaTime: { get: () => frameState(kernel).deltaTime, set: (value: number) => { frameState(kernel).deltaTime = value; }, enumerable: true, configurable: true },
     frameCount: { get: () => frameState(kernel).frameCount, set: (value: number) => { frameState(kernel).frameCount = value; }, enumerable: true, configurable: true },
-    clearColor: { get: () => frameState(kernel).clearColor, set: (value: ClearColor) => { frameState(kernel).clearColor = value; }, enumerable: true, configurable: true },
     frame: { get: () => (runner ??= legacyFrameRunner(core)), enumerable: true, configurable: true },
   });
   return Object.assign(core, methods) as Gpu;

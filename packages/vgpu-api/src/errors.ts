@@ -546,6 +546,24 @@ export function surfaceResizeReentrantError(label?: string): VGPUError {
   });
 }
 
+export function clearColorInvalidError(where: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-CLEAR-COLOR-INVALID",
+    message: `Invalid ${where}: expected four finite numbers.`,
+    fix: "Assign [r, g, b, a] or a GPUColor object ({ r, g, b, a }).",
+    where,
+  });
+}
+
+export function clockDeltaInvalidError(received: unknown): VGPUError {
+  return new VGPUError({
+    code: "VGPU-CLOCK-DELTA-INVALID",
+    message: `clock.advance() received ${String(received)}; expected a finite, non-negative number of seconds.`,
+    fix: "Pass the elapsed seconds, e.g. clock(gpu).advance(1 / 60); use frame(gpu) alone to advance with wall-clock time.",
+    where: "clock.advance",
+  });
+}
+
 export function frameReentrantError(): VGPUError {
   return new VGPUError({
     code: "VGPU-FRAME-REENTRANT",

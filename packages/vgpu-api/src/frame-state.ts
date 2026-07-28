@@ -1,24 +1,30 @@
 /**
- * Per-frame clock and default clear color, as a lazy kernel service.
+ * Per-frame clock, as a lazy kernel service.
  *
  * This is the small "frame state" the core deliberately does not carry as public fields:
  * a program that never opens a frame never creates it. Registered through a token so the
- * kernel keeps no static reference to it.
+ * kernel keeps no static reference to it. The public face of this service is `clock(gpu)`.
  */
 import { serviceToken, type Kernel } from "./kernel.ts";
-import { frameReentrantError, VGPUError } from "./errors.ts";
-import type { ClearColor } from "./target-utils.ts";
+import { frameReentrantError } from "./errors.ts";
 
 export interface FrameState {
   /** Seconds since the first frame. */
   time: number;
-  /** Seconds between the last two frames. */
+  /** Seconds between the last two ticks. */
   deltaTime: number;
   frameCount: number;
-  /** Default clear color used by passes that clear. Validated on assignment. */
-  clearColor: ClearColor;
-  /** Advances the clock and runs the registered per-frame hooks. Throws `VGPU-FRAME-REENTRANT` if re-entered. */
-  advance(): void;
+  /**
+   * Advances the clock by `dtSeconds` right now and claims this frame's tick: the next `tick()`
+   * counts the frame and runs the hooks, but does not move the clock again.
+   */
+  advanceBy(dtSeconds: number): void;
+  /**
+   * Counts one frame and runs the registered per-frame hooks, advancing the clock with wall-clock
+   * time unless `advanceBy()` already advanced it since the last tick. Throws `VGPU-FRAME-REENTRANT`
+   * if re-entered.
+   */
+  tick(): void;
   /** Runs right after the clock advances, before the frame callback (surface auto-resize lives here). */
   onAdvance(hook: () => void): () => void;
 }
@@ -33,30 +39,36 @@ export function frameState(kernel: Kernel): FrameState {
 function createFrameState(): FrameState {
   const hooks = new Set<() => void>();
   let lastTimeMs = nowMs();
-  let advancing = false;
-  let clearColor: ClearColor = [0, 0, 0, 1];
+  let ticking = false;
+  // True while a manual advance() owns this frame's tick: one advance per frame, manual wins.
+  let manualPending = false;
   const state: FrameState = {
     time: 0,
     deltaTime: 0,
     frameCount: 0,
-    get clearColor(): ClearColor { return clearColor; },
-    set clearColor(value: ClearColor) {
-      const o = value as any, n = Array.isArray(value) ? value : [o?.r, o?.g, o?.b, o?.a];
-      if (n.length !== 4 || !n.every(Number.isFinite)) throw new VGPUError({ code: "VGPU-CLEAR-COLOR-INVALID", message: "invalid gpu.clearColor.", where: "gpu.clearColor" });
-      clearColor = value;
+    advanceBy(dtSeconds: number): void {
+      state.deltaTime = dtSeconds;
+      state.time += dtSeconds;
+      manualPending = true;
     },
-    advance(): void {
-      if (advancing) throw frameReentrantError();
-      advancing = true;
+    tick(): void {
+      if (ticking) throw frameReentrantError();
+      ticking = true;
       try {
         const next = nowMs();
-        state.deltaTime = Math.max(0, (next - lastTimeMs) / 1000);
-        state.time += state.deltaTime;
+        if (manualPending) {
+          // The clock already moved this frame; only re-base the wall clock so the next
+          // auto-advanced frame measures from this tick, not from the last automatic one.
+          manualPending = false;
+        } else {
+          state.deltaTime = Math.max(0, (next - lastTimeMs) / 1000);
+          state.time += state.deltaTime;
+        }
         lastTimeMs = next;
         state.frameCount += 1;
         for (const hook of [...hooks]) hook();
       } finally {
-        advancing = false;
+        ticking = false;
       }
     },
     onAdvance(hook: () => void): () => void {

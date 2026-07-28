@@ -92,28 +92,49 @@ test("frame.pass rejects clear false with MSAA targets", async () => {
   gpu.dispose();
 });
 
-test("gpu.clearColor defaults, assigns, and drives omitted or true pass clear", async () => {
+test("clear color precedence: pass color > target.clearColor > built-in", async () => {
   const gpu = await init();
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
-  const a = target(gpu, { size: [2, 2] });
-  const b = target(gpu, { size: [2, 2] });
+  const builtIn = target(gpu, { size: [2, 2] });
+  const tinted = target(gpu, { size: [2, 2], clearColor: { r: 0.25, g: 0.5, b: 0.75, a: 1 } });
 
-  expect(gpu.clearColor).toEqual([0, 0, 0, 1]);
-  frame(gpu, (currentFrame) => currentFrame.pass(a, () => undefined));
-  gpu.clearColor = { r: 0.25, g: 0.5, b: 0.75, a: 1 };
-  frame(gpu, (currentFrame) => currentFrame.pass({ target: b, clear: true }, () => undefined));
+  expect(builtIn.clearColor).toEqual([0, 0, 0, 1]);
+  expect(tinted.clearColor).toEqual({ r: 0.25, g: 0.5, b: 0.75, a: 1 });
+  frame(gpu, (currentFrame) => currentFrame.pass(builtIn, () => undefined));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: tinted, clear: true }, () => undefined));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: tinted, clear: [1, 0, 0, 1] }, () => undefined));
 
   expect(descriptors[0]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0, g: 0, b: 0, a: 1 });
   expect(descriptors[1]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0.25, g: 0.5, b: 0.75, a: 1 });
+  expect(descriptors[2]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 1, g: 0, b: 0, a: 1 });
   gpu.dispose();
   vi.restoreAllMocks();
 });
 
-test("gpu.clearColor validates assignments", async () => {
-  const gpu = await init();
-  expect(() => { gpu.clearColor = [0, 0, Number.NaN, 1] as never; }).toThrowError(/VGPU-CLEAR-COLOR-INVALID|gpu\.clearColor/);
-  expect(() => { gpu.clearColor = { r: 0, g: 0, b: 0 } as never; }).toThrowError(/VGPU-CLEAR-COLOR-INVALID|gpu\.clearColor/);
+test("target.clearColor and surface.clearColor are mutable at runtime and validated", async () => {
+  const gpu = await initBrowser({ adapter: createMockAdapter() });
+  const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
+  const offscreen = target(gpu, { size: [2, 2] });
+  const canvasSurface = surface(gpu, canvasLike(), { clearColor: [0, 0, 1, 1] });
+
+  frame(gpu, (currentFrame) => currentFrame.pass(canvasSurface, () => undefined));
+  offscreen.clearColor = [0.5, 0.5, 0.5, 1];
+  canvasSurface.clearColor = { r: 0, g: 1, b: 0, a: 1 };
+  frame(gpu, (currentFrame) => {
+    currentFrame.pass(offscreen, () => undefined);
+    currentFrame.pass(canvasSurface, () => undefined);
+  });
+
+  expect(descriptors[0]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0, g: 0, b: 1, a: 1 });
+  expect(descriptors[1]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0.5, g: 0.5, b: 0.5, a: 1 });
+  expect(descriptors[2]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0, g: 1, b: 0, a: 1 });
+
+  expect(() => { offscreen.clearColor = [0, 0, Number.NaN, 1] as never; }).toThrowError(/VGPU-CLEAR-COLOR-INVALID|Invalid target\.clearColor/);
+  expect(() => { canvasSurface.clearColor = { r: 0, g: 0, b: 0 } as never; }).toThrowError(/VGPU-CLEAR-COLOR-INVALID|Invalid surface\.clearColor/);
+  expect(() => target(gpu, { size: [2, 2], clearColor: "black" as never })).toThrowError(/Invalid target\.clearColor/);
+  expect(() => surface(gpu, canvasLike(), { clearColor: [0, 0, 0] as never })).toThrowError(/Invalid surface\.clearColor/);
   gpu.dispose();
+  vi.restoreAllMocks();
 });
 
 test("surface render pass descriptors honor clear false within a frame", async () => {

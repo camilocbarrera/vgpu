@@ -1,5 +1,5 @@
 import { Texture, createResourceIdentity, DestroySignal, type Device, type ResourceDestroyCallback, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
-import { colorValue, sameSize } from "./target-utils.ts";
+import { BUILT_IN_CLEAR_COLOR, colorValue, sameSize, validateClearColor, type ClearColor } from "./target-utils.ts";
 import type { RenderPassDescriptorOptions, Target } from "./target.ts";
 import {
   surfaceAutoResizeUnsupportedError,
@@ -14,6 +14,11 @@ import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
 
 export interface SurfaceOptions {
   readonly autoResize?: boolean;
+  /**
+   * Default clear color of this surface, used by passes that clear without naming a color.
+   * Defaults to `[0, 0, 0, 1]`; mutable at runtime through `surface.clearColor`.
+   */
+  readonly clearColor?: ClearColor;
   readonly dpr?: number | readonly [number, number];
   readonly size?: readonly [number, number];
   readonly format?: GPUTextureFormat;
@@ -94,6 +99,7 @@ export class CanvasSurface implements Surface {
   readonly #callbacks = new Set<(event: SurfaceResizeEvent) => void>();
   readonly #texturesRecreatedCallbacks = new Set<() => void>();
   #currentDpr: number;
+  #clearColor: ClearColor;
   #isDisposed = false;
   #notifying = false;
 
@@ -104,6 +110,7 @@ export class CanvasSurface implements Surface {
     private readonly unregister: (surface: CanvasSurface) => void,
   ) {
     this.label = options.label;
+    this.#clearColor = options.clearColor === undefined ? BUILT_IN_CLEAR_COLOR : validateClearColor(options.clearColor, "surface.clearColor");
     const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (!context) throw surfaceContextError();
     this.context = context;
@@ -139,6 +146,9 @@ export class CanvasSurface implements Surface {
   get depth(): undefined { this.#assertLive(); return undefined; }
   get sampleCount(): 1 { this.#assertLive(); return 1; }
   get dpr(): number { return this.#currentDpr; }
+  /** Default clear color of this surface; passes that clear without naming a color use it. */
+  get clearColor(): ClearColor { return this.#clearColor; }
+  set clearColor(value: ClearColor) { this.#clearColor = validateClearColor(value, "surface.clearColor"); }
   get disposed(): boolean { return this.#isDisposed; }
 
   resize(size: readonly [number, number]): void {

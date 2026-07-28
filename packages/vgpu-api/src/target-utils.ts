@@ -1,8 +1,22 @@
-import { targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
+import { clearColorInvalidError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 
 export const DEFAULT_FORMAT: GPUTextureFormat = "rgba8unorm";
 export type ClearColor = GPUColor | readonly [number, number, number, number];
+
+/** Clear color used by a pass when neither the pass nor the target chose one. */
+export const BUILT_IN_CLEAR_COLOR: ClearColor = [0, 0, 0, 1];
+
+/**
+ * Validates a clear color on assignment (`target.clearColor`, `surface(gpu, canvas, { clearColor })`),
+ * so a typo lands on the line that wrote it instead of inside a render pass descriptor.
+ */
+export function validateClearColor(value: ClearColor, where: string): ClearColor {
+  const object = value as { r?: unknown; g?: unknown; b?: unknown; a?: unknown };
+  const components = Array.isArray(value) ? value : [object?.r, object?.g, object?.b, object?.a];
+  if (components.length !== 4 || !components.every((component) => typeof component === "number" && Number.isFinite(component))) throw clearColorInvalidError(where);
+  return value;
+}
 
 export interface TargetDeviceCaps {
   readonly isCompatibilityMode?: boolean;

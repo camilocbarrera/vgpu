@@ -7,7 +7,7 @@ import type { Effect } from "./effect.ts";
 import type { Target } from "./target.ts";
 import { claimedGroupNativeValidationError, frameAlreadySubmittedError, frameCanceledError, framePassActiveError, frameReentrantError, passClearDepthInvalidError, passClearStencilInvalidError, passDepthReadOnlyError, passDepthReadOnlyMsaaError, passPreserveClearDepthError, passPreserveClearStencilError, passPreserveMsaaError, passScissorInvalidError, passViewportInvalidError, queryNestedError, queryNoVisibilityError, surfaceNotInFrameError, targetRequiredError, timerInvalidError, VGPUError, visibilityInvalidError } from "./errors.ts";
 import { enterFrame, isSurface, isSurfaceResizeCallbackActive, leaveFrame } from "./surface.ts";
-import { hasStencilAspect, isTarget, type ClearColor } from "./target-utils.ts";
+import { BUILT_IN_CLEAR_COLOR, hasStencilAspect, isTarget, type ClearColor } from "./target-utils.ts";
 import type { TimerSpan } from "./timer.ts";
 import type { Visibility, VisibilityQuery } from "./visibility.ts";
 import { FRAME_PASS_ATTACHMENT, frameBundleOf, frameDrawableOf, framePassAttachmentOf, type FrameDrawableProtocol, type FrameOcclusionSource, type FrameOwner, type FramePassAttachResult } from "./frame-protocols.ts";
@@ -47,8 +47,8 @@ function frameRunner(kernel: Kernel): FrameRunner {
   return kernel.service(frameRunnerToken, (self) => {
     const state = frameState(self);
     return new FrameRunner(
-      () => new Frame(self.device, undefined, (error) => self.reportError(error), (promise) => { void self.trackDelivery(promise); }, () => state.clearColor),
-      () => state.advance(),
+      () => new Frame(self.device, undefined, (error) => self.reportError(error), (promise) => { void self.trackDelivery(promise); }),
+      () => state.tick(),
       (handle) => self.own("scheduler", () => handle.stop()),
     );
   });
@@ -56,7 +56,7 @@ function frameRunner(kernel: Kernel): FrameRunner {
 
 export interface FramePassOptions {
   readonly target: Target;
-  /** Omit or pass true to clear with gpu.clearColor; pass false to preserve color/depth; pass a color to clear with it. */
+  /** Omit or pass true to clear with `target.clearColor`; pass false to preserve color/depth; pass a color to clear this pass with it. */
   readonly clear?: boolean | ClearColor;
   /** Depth clear value used when the pass clears. Defaults to 1. Use 0 with depth: { compare: "greater" } for reversed-Z. */
   readonly clearDepth?: number;
@@ -117,7 +117,6 @@ export class Frame {
     private readonly defaultTarget?: Target,
     private readonly errorSink?: ValidationErrorSink,
     private readonly trackSettled?: (promise: Promise<unknown>) => void,
-    private readonly defaultClearColor: () => ClearColor = () => [0, 0, 0, 1],
   ) {
     this.#encoder = device.gpu.createCommandEncoder({ label: "vgpu.frame" });
   }
@@ -187,7 +186,8 @@ export class Frame {
       const visibility = targetOnly || target.visibility === undefined ? undefined : this.#attach(target.visibility, resolvedTarget, attached, visibilityAttachmentInvalidError);
       const occlusion = visibility?.occlusion;
       // timestampWrites and occlusionQuerySet are target-independent pass state: decorate the descriptor after obtaining it from the target.
-      let descriptor = resolvedTarget.renderPassDescriptor({ clear: clear === undefined || clear === true || clear === false ? this.defaultClearColor() : clear, preserve, clearDepth, clearStencil, depthReadOnly });
+      // Clear color precedence: the pass color, then the target's own default, then the built-in.
+      let descriptor = resolvedTarget.renderPassDescriptor({ clear: clear === undefined || clear === true || clear === false ? resolvedTarget.clearColor ?? BUILT_IN_CLEAR_COLOR : clear, preserve, clearDepth, clearStencil, depthReadOnly });
       if (timer?.timestampWrites) descriptor = { ...descriptor, timestampWrites: timer.timestampWrites };
       // Mirrors the WebGPU pass descriptor rule: occlusionQuerySet must be a valid query set of type "occlusion".
       if (occlusion) descriptor = { ...descriptor, occlusionQuerySet: occlusion.querySet };
