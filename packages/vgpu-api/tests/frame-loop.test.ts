@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { FrameRunner } from "../src/frame.ts";
 import { init } from "../src/mock.ts";
 
@@ -111,3 +111,25 @@ function fire(callbacks: Map<number, RafCallback>, id: number, timestamp: number
   callbacks.delete(id);
   cb?.(timestamp);
 }
+
+test("dispose stops the loops before the device goes down, then tears down once", async () => {
+  const callbacks = mockAnimationFrames();
+  const gpu = await init();
+  const order: string[] = [];
+
+  const handle = gpu.frame.loop(() => undefined);
+  const stop = handle.stop.bind(handle);
+  handle.stop = () => { order.push("loop.stop"); stop(); };
+  const target = gpu.target({ size: [4, 4] });
+  const effect = gpu.effect(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+  gpu.frame((frame) => frame.pass(target, effect)); // materializes the pipeline cache
+  vi.spyOn(gpu.device, "dispose").mockImplementation(() => { order.push("device.dispose"); });
+
+  gpu.dispose();
+  gpu.dispose();
+
+  // Schedulers first, device last, and exactly once each: a rAF tick landing mid-teardown must not
+  // encode against a device that is already gone.
+  expect(order).toEqual(["loop.stop", "device.dispose"]);
+  expect(callbacks.size).toBe(0);
+});

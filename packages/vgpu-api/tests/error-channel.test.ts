@@ -224,3 +224,28 @@ function rawClaimedDrawWithDeferredScopes(gpu: Awaited<ReturnType<typeof init>>,
   draw.group(1, rawBindGroup);
   return { draw, popResolvers };
 }
+
+test("a disposed gpu stops delivering errors and keeps settled() resolving", async () => {
+  const gpu = await init();
+  const target = gpu.target({ size: [4, 4] });
+  const { draw, popResolvers } = rawClaimedDrawWithDeferredScopes(gpu, "afterDispose");
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const errors: unknown[] = [];
+  gpu.onError((error) => errors.push(error));
+
+  draw.draw({ target, offsets: { 1: [0] } });
+  gpu.dispose();
+  resolveRawClaimFailure(popResolvers, "after dispose");
+  await expect(gpu.settled()).resolves.toBeUndefined();
+
+  expect(errors).toEqual([]);
+  expect(consoleError).not.toHaveBeenCalled();
+});
+
+test("onError unsubscribe is idempotent and survives dispose", async () => {
+  const gpu = await init();
+  const unsub = gpu.onError(() => undefined);
+  gpu.dispose();
+  expect(() => { unsub(); unsub(); }).not.toThrow();
+  expect(gpu.disposed).toBe(true);
+});
