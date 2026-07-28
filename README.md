@@ -26,13 +26,14 @@ pnpm add -D @webgpu/types
 ## Browser quick start
 
 ```ts
-import { init, effect, frameLoop, surface } from "vgpu";
+import { clock, init, effect, frameLoop, surface } from "vgpu";
 
 const gpu = await init();
 const canvasSurface = surface(gpu, canvas, { dpr: [1, 2] });
 const wave = effect(gpu, WAVE_WGSL, { set: { speed: 2 } });
+const time = clock(gpu);
 frameLoop(gpu, () => {
-  wave.set({ time: gpu.time });
+  wave.set({ time: time.time });
   wave.draw();
 });
 ```

@@ -90,7 +90,7 @@ vertical blur, say), create two effects; they are cheap, and each owns its
 uniforms.
 
 ```ts
-import { init, effect, surface } from "vgpu";
+import { clock, init, effect, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -121,7 +121,7 @@ const pulse = effect(gpu, pulseSource, {
 // update uniforms before drawing
 pulse.set({
   params: {
-    time: gpu.time,
+    time: clock(gpu).time,
   },
 });
 
@@ -131,7 +131,7 @@ pulse.draw(canvasSurface);
 You should also only update uniforms when they need to change, for example, react to canvas size changes:
 
 ```ts
-import { init, effect, surface } from "vgpu";
+import { clock, init, effect, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;

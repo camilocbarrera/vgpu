@@ -63,7 +63,7 @@ export function visibility(gpu: Gpu, options: VisibilityOptions = {}): Visibilit
 
 class InternalVisibilityQuery implements VisibilityQuery {
   #state: VisibilityState = "unknown";
-  /** gpu.frameCount stamped when the last result applied; age = frameCount - stamp. */
+  /** clock(gpu).frameCount stamped when the last result applied; age = frameCount - stamp. */
   #resultFrame?: number;
   /** Reset generation: results captured before a reset() carry a stale generation and are discarded at apply. */
   #generation = 0;

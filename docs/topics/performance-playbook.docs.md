@@ -72,7 +72,7 @@ const slot = pool.alloc(objectLayout);
 cube.group(1, slot.bindGroup);
 
 frameLoop(gpu, (f) => {
-  pool.beginFrame(gpu.frameCount);
+  pool.beginFrame(clock(gpu).frameCount);
   f.pass({ target: scene }, (p) => {
     for (const obj of objects) {
       const offset = slot.push({ model: obj.model });
@@ -92,7 +92,7 @@ Before:
 ```text
 const wave = effect(gpu, WAVE_WGSL, { set: { time: 0, speed: 2 } });
 frameLoop(gpu, (frame) => {
-  wave.set({ time: gpu.time, speed: 2 });
+  wave.set({ time: clock(gpu).time, speed: 2 });
   frame.pass(target, wave);
 });
 ```
@@ -100,7 +100,7 @@ After:
 ```text
 const wave = effect(gpu, WAVE_WGSL, { set: { time: 0, speed: 2 } });
 frameLoop(gpu, (frame) => {
-  wave.set({ time: gpu.time });
+  wave.set({ time: clock(gpu).time });
   frame.pass(target, wave);
 });
 ```
@@ -153,9 +153,10 @@ Use when many shaders consume the same time, camera, mouse, or exposure values.
 
 Before:
 ```text
-wave.set({ time: gpu.time, mouse });
-blur.set({ time: gpu.time, mouse });
-post.set({ time: gpu.time, mouse });
+const time = clock(gpu);
+wave.set({ time: time.time, mouse });
+blur.set({ time: time.time, mouse });
+post.set({ time: time.time, mouse });
 ```
 After:
 ```text
@@ -163,7 +164,7 @@ const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
 const wave = effect(gpu, WAVE_WGSL, { set: { globals } });
 const blur = effect(gpu, BLUR_WGSL, { set: { globals } });
 frameLoop(gpu, (frame) => {
-  globals.set({ time: gpu.time, mouse });
+  globals.set({ time: clock(gpu).time, mouse });
   frame.pass(target, (pass) => {
     pass.draw(wave);
     pass.draw(blur);

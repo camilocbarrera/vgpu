@@ -170,7 +170,7 @@ Dump each level of a blur pyramid (`pyramid-0.png` … `pyramid-7.png`), each G-
 
 Evidence is only evidence if it reproduces byte for byte. In debug renders:
 
-- Do not read a clock. Pass time in as a fixed constant, never `Date.now()` or `gpu.time`.
+- Do not read a clock. Pass time in as a fixed constant, never `Date.now()` or `clock(gpu).time`.
 - Use a fixed number of warmup frames before the frame you read, and always the same number.
 - Jitter by pixel hash, never by frame index — a stable per-pixel rotation breaks up banding without changing between runs:
 

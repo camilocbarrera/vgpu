@@ -43,7 +43,7 @@ Every reflected binding must be set by name or covered by a claimed group. Do no
 
 ```text
 const effect = effect(gpu, WGSL);
-effect.set({ params: { time: gpu.time }, tex: target.color, samp: sampler(gpu) });
+effect.set({ params: { time: clock(gpu).time }, tex: target.color, samp: sampler(gpu) });
 ```
 
 ## Ownership flip: `VGPU-R1-OWNERSHIP-FLIP`

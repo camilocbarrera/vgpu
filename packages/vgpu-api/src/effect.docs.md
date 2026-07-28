@@ -64,7 +64,7 @@ everything else flip-free.
 ## Examples
 
 ```ts
-import { init, effect, frame, target } from "vgpu/mock";
+import { init, clock, effect, frame, target } from "vgpu/mock";
 
 const gpu = await init();
 const colorTarget = target(gpu, { size: [64, 64] });
@@ -77,7 +77,7 @@ const shader = effect(gpu, `
   }
 `, { label: "wave", set: { params: { time: 0, speed: 2 } } });
 
-shader.set({ params: { time: gpu.time, speed: 2 } });
+shader.set({ params: { time: clock(gpu).time, speed: 2 } });
 frame(gpu, (currentFrame) => currentFrame.pass(colorTarget, shader));
 ```
 
@@ -104,5 +104,5 @@ Effects compile lazily for the target signature they draw into. Use `await effec
 - `blend` and `writeMask` are immutable pipeline state, fixed at `effect(gpu)` construction, and apply uniformly to every color target. Use them for overlays, glow, UI, and other loaded-pass compositing. For explicit blends, `op` defaults to `"add"` and omitted `alpha` copies `color`.
 - One-shot `effect.draw()` does not join a surrounding frame. Inside `frame(gpu)`, draw through `frame.pass()`.
 - There is no implicit screen target. Browser code should create a `Surface` and pass it as `target`.
-- Do not rely on implicit uniforms like time or resolution; pass `gpu.time`, `target.size`, or `target.texelSize` explicitly through `set()`.
+- Do not rely on implicit uniforms like time or resolution; pass `clock(gpu).time`, `target.size`, or `target.texelSize` explicitly through `set()`.
 - **See also:** `Gpu.effect`, `Draw`, `FramePass.draw`, `Surface`, `Target`, `SharedUniforms`.

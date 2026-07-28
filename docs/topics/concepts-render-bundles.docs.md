@@ -21,7 +21,7 @@ A render loop re-encodes every pipeline, bind group, and draw on every tick — 
 [`bundle(gpu)`](/reference/vgpu/bundle#bundle) records draws against a target and returns a [`Bundle`](/reference/vgpu/bundle#bundle). Replay it inside a pass with `pass.bundles()`:
 
 ```ts
-import { init, bundle, effect, frameLoop, surface } from "vgpu";
+import { init, bundle, clock, effect, frameLoop, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -46,8 +46,9 @@ const scene = bundle(gpu, { target: canvasTarget }, (b) => {
   b.draw(boat);
 }); // encoded once, right here
 
+const time = clock(gpu);
 frameLoop(gpu, (frame) => {
-  ocean.set({ params: { time: gpu.time } }); // uniforms still animate
+  ocean.set({ params: { time: time.time } }); // uniforms still animate
   frame.pass(canvasTarget, (pass) => pass.bundles(scene)); // replay — no re-encoding
 });
 ```
@@ -63,7 +64,7 @@ Record what doesn't change, `set()` what does: the bundle references your buffer
 The `target` option also takes a plain signature, so you can pre-warm and record during load, before the real target exists:
 
 ```ts
-import { init, bundle, effect, frameLoop, surface } from "vgpu";
+import { init, bundle, clock, effect, frameLoop, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -102,7 +103,7 @@ Two caveats. Bindings must be `set()` before recording — the signature relaxes
 A pass can replay bundles and encode fresh draws side by side:
 
 ```ts
-import { init, bundle, effect, frameLoop, surface } from "vgpu";
+import { init, bundle, clock, effect, frameLoop, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -138,7 +139,7 @@ Some draws must stay on the dynamic side. Draws that set a `blendConstant` or a 
 A bundle matches replay targets by render signature, not size, so drawing onto a resized surface keeps working:
 
 ```ts
-import { init, bundle, effect, frameLoop, surface } from "vgpu";
+import { init, bundle, clock, effect, frameLoop, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;

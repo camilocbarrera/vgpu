@@ -5,6 +5,7 @@ import { draw, registerDrawBundle } from "../src/draw.ts";
 import { effect, effectDraw, fullscreenSource } from "../src/effect.ts";
 import { createMockAdapter, init } from "../src/mock.ts";
 import { bundle } from "../src/bundle.ts";
+import { clock } from "../src/clock.ts";
 import { frame, frameLoop } from "../src/frame.ts";
 import { kernelOf } from "../src/kernel.ts";
 import { renderServiceToken } from "../src/render-service.ts";
@@ -346,7 +347,7 @@ test("frame(gpu) and gpu.frame drive the same runner: the clock advances once an
 
   frame(gpu, (f) => f.pass(scene, fx));
   frame(gpu, (f) => f.pass(scene, fx));
-  expect(gpu.frameCount).toBe(2);
+  expect(clock(gpu).frameCount).toBe(2);
 
   expect(codeOf(() => frame(gpu, () => { frame(gpu, () => undefined); }))).toBe("VGPU-FRAME-REENTRANT");
   expect(codeOf(() => frame(gpu, () => { frame(gpu, () => undefined); }))).toBe("VGPU-FRAME-REENTRANT");

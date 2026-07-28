@@ -64,10 +64,10 @@ declare class FrameRunner {
 | Param | Type | Required | Default | Notes |
 |---|---|---:|---|---|
 | frame.cb | `(frame: Frame) => void` | ✖ | `undefined` | If supplied, called and then `frame.submit()` runs in `finally`. If omitted, submit manually. |
-| gpu.clearColor | `ClearColor` | ✖ | `[0, 0, 0, 1]` | Writable default clear color used when pass `clear` is omitted or `true`. Assign a `GPUColor` object or `[r, g, b, a]`. |
+| target.clearColor | `ClearColor` | ✖ | `[0, 0, 0, 1]` | Writable default clear color of the pass target, used when pass `clear` is omitted or `true`. Set it at creation (`surface(gpu, canvas, { clearColor })`, `target(gpu, { size, clearColor })`) or assign it later. Assign a `GPUColor` object or `[r, g, b, a]`. |
 | frame.pass.target | `Target \| FramePassOptions` | ✔ | — | Pass a bare target for the allocation-free common case, or an options bag when customizing clear/preserve behavior. |
 | opts.target | `Target` | ✔ | — | Required inside `FramePassOptions`. Use a `Surface` from `surface(gpu, canvas)` or an offscreen `Target` from `target(gpu, { size })`. |
-| opts.clear | `boolean \| ClearColor` | ✖ | `true` | Omitted or `true` clears with `gpu.clearColor`; `false` preserves existing color and depth with load ops; a color clears with that color. |
+| opts.clear | `boolean \| ClearColor` | ✖ | `true` | Omitted or `true` clears with `target.clearColor`; `false` preserves existing color and depth with load ops; a color clears this pass with that color. |
 | opts.clearDepth | `number` | ✖ | `1` | Depth clear value used when the pass clears, in `[0, 1]`. Clear to `0` and give draws `depth: { compare: "greater" }` for reversed-Z, which evens out float depth precision and cuts distant z-fighting. Invalid alongside `clear: false`, which preserves depth, and on a target without depth (the value would have nowhere to land). |
 | opts.clearStencil | `number` | ✖ | `0` | Stencil clear value used when the pass clears; integer in `[0, 0xFFFFFFFF]`, masked to the stencil aspect's bit width by taking the LSBs (values above `0xFF` are legal on 8-bit aspects). Clear to `0` before stencil-masking draws mark pixels via `DrawOptions.stencil` — portals, mirrors, UI cutouts. Requires a target depth format with a stencil aspect (e.g. `depth: "depth24plus-stencil8"`). Invalid alongside `clear: false`, which preserves stencil. |
 | opts.depthReadOnly | `boolean` | ✖ | `false` | Opens the pass with a read-only depth attachment: draws depth-test against it and may sample `target.depth` in the same pass — the soft-particles/SSAO setup. Every draw in the pass needs `depth: { write: false }` (or `depth: false`); the default depth state writes and throws `VGPU-PASS-DEPTH-READONLY` at encode. Effects always keep the writing default, so an `Effect` cannot run in a depthReadOnly pass on a depth target. Combined depth-stencil formats mark the stencil aspect read-only too. Requires a target with depth; invalid alongside `clearDepth`/`clearStencil` (color `clear` still applies), and invalid on MSAA targets, whose depth aspect is stored with `storeOp: "discard"` — there is no retained depth to read. |
@@ -89,7 +89,7 @@ declare class FrameRunner {
 **Throws:**
 
 - `VGPU-TARGET-REQUIRED` — a runtime JS call omitted the frame pass target. Name a `Surface` or offscreen `Target` in every `frame.pass`.
-- `VGPU-CLEAR-COLOR-INVALID` — `gpu.clearColor` or a pass clear color is not four finite numbers. Assign `[r, g, b, a]` or a `GPUColor` object.
+- `VGPU-CLEAR-COLOR-INVALID` — `target.clearColor` / `surface.clearColor` (at creation or on assignment) or a pass clear color is not four finite numbers. Assign `[r, g, b, a]` or a `GPUColor` object.
 - `VGPU-PASS-PRESERVE-MSAA` — `clear: false` on an MSAA target; multisample attachments use `storeOp: "discard"`, so there is nothing to preserve. Render accumulation/preserve passes into a non-MSAA target.
 - `VGPU-PASS-CLEARDEPTH-INVALID` — `clearDepth` is not a number in `[0, 1]`, or the target has no depth attachment (the option would have no effect). Create the target with `depth: true`, or drop `clearDepth`.
 - `VGPU-PASS-PRESERVE-CLEARDEPTH` — `clearDepth` combined with `clear: false`; preserved depth is never cleared. Drop one of the two.
@@ -121,9 +121,8 @@ declare class FrameRunner {
 import { init, draw, frame, target } from "vgpu/mock";
 
 const gpu = await init();
-gpu.clearColor = [0.02, 0.02, 0.04, 1];
-
-const scene = target(gpu, { size: [64, 64], format: "rgba8unorm" });
+const scene = target(gpu, { size: [64, 64], format: "rgba8unorm", clearColor: [0.02, 0.02, 0.04, 1] });
+scene.clearColor = [0.02, 0.02, 0.04, 1]; // and it stays writable at runtime
 const drawable = draw(gpu, { shader: `
   @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
     var p = array<vec2f, 3>(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
@@ -133,7 +132,7 @@ const drawable = draw(gpu, { shader: `
 ` });
 
 frame(gpu, (currentFrame) => {
-  currentFrame.pass(scene, (pass) => pass.draw(drawable)); // clears with gpu.clearColor
+  currentFrame.pass(scene, (pass) => pass.draw(drawable)); // clears with scene.clearColor
 });
 ```
 
@@ -224,7 +223,7 @@ Cancelling a manual frame: `cancel()` drops the encoder and releases the telemet
 
 - `Frame`, `FramePass`, and `FrameRunner` are type-only public exports. Create frames through `frame()`, not `new Frame(...)`.
 - There is no default target and no implicit canvas target; every `frame.pass` names its target.
-- Omitted `clear` and `clear: true` clear with `gpu.clearColor`. Pass a color to clear one pass with that color without changing the default.
+- Omitted `clear` and `clear: true` clear with `target.clearColor`. Pass a color to clear one pass with that color without changing the target default: pass color > `target.clearColor` > the built-in `[0, 0, 0, 1]`.
 - Draws replayed via `pass.bundles(...)` inside an occlusion scope count toward the active query — render bundles have no query methods, but their draws execute inside the scope.
 - `viewport` and `scissor` are set once right after the pass opens and apply to every draw in the pass, including replayed bundles. Both are in physical pixels: surfaces size their textures by `devicePixelRatio`, so a CSS-pixel rectangle must be scaled by dpr.
 - `clear: false` preserves color and depth contents within the same target. On `Surface`, repeated passes in one frame layer onto the same current texture; the first preserved surface pass of a new browser frame reads the swapchain's fresh contents, not the previous frame's image.

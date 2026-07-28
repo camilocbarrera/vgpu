@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
-import { init, effect, frame, sampler, surface, target } from "vgpu/mock";
+import { init, clock, effect, frame, sampler, surface, target } from "vgpu/mock";
 
 const root = resolve(import.meta.dirname, "../../..");
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -18,7 +18,7 @@ test("getting-started TypeScript fences execute against vgpu/mock", async () => 
       // The mock has no animation frames: run the loop body once, as a plain frame.
       .replace(/frameLoop\(gpu, /gu, "frame(gpu, ");
 
-    await new AsyncFunction("init", "createMockCanvas", "surface", "effect", "frame", `${executable}\ngpu.dispose();`)(init, createMockCanvas, surface, effect, frame);
+    await new AsyncFunction("init", "createMockCanvas", "surface", "effect", "frame", "clock", `${executable}\ngpu.dispose();`)(init, createMockCanvas, surface, effect, frame, clock);
   }
 });
 
@@ -44,7 +44,7 @@ test("corrected playbook and post-processing patterns run against vgpu/mock", as
     samp: sampler(gpu, { minFilter: "linear", magFilter: "linear" }),
   } });
 
-  wave.set({ params: { time: gpu.time } });
+  wave.set({ params: { time: clock(gpu).time } });
   frame(gpu, (currentFrame) => {
     currentFrame.pass(colorTarget, wave);
     currentFrame.pass(output, post);

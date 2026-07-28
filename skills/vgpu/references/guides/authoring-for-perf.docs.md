@@ -38,7 +38,7 @@ const globals = uniforms(gpu, { time: 0, mouse: [0, 0], enabled: 1 });
 const draw = draw(gpu, { shader: WGSL, set: { globals } });
 await draw.compile(target);
 frameLoop(gpu, (f) => {
-  globals.set({ time: gpu.time, mouse });
+  globals.set({ time: clock(gpu).time, mouse });
   f.pass({ target }, (p) => p.draw(draw));
 });
 ```

@@ -5,7 +5,7 @@ import { DEFAULT_BRUSH } from './settings';
 import { brushState, heroStateForActiveClick, simulationBrushState } from './sim-sizing';
 import { isPointInsideTriangle } from './triangle-hit';
 import { DEFAULT_TRIANGLE_LED_CONTROLS, isTriangleLedMode, type TriangleLedControls } from './types';
-import { frame, frameLoop, surface } from "vgpu";
+import { clock, frame, frameLoop, surface } from "vgpu";
 
 export function createRenderer(options: BrowserRendererOptions<TriangleLedControls>): ExampleRenderer<TriangleLedControls> {
   let disposed = false;
@@ -107,11 +107,12 @@ export function createRenderer(options: BrowserRendererOptions<TriangleLedContro
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
+    const time = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !scene || !input || !gpu) return;
       scene.setBrush(input.brush());
       scene.setRgbDeployActive(input.rgbDeployActive());
-      scene.renderFrame(currentFrame, { time: gpu.time, dt: gpu.deltaTime });
+      scene.renderFrame(currentFrame, { time: time.time, dt: time.deltaTime });
     });
   };
   const ready = initialize().catch((error: unknown) => {

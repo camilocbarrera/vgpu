@@ -2,10 +2,10 @@
 
 # Getting started
 
-Start with the public `vgpu` package. A program has one `Gpu` context, explicit WGSL bindings, and explicit frames. There are no global uniforms: time comes from JavaScript (`gpu.time`, `gpu.deltaTime`, `gpu.frameCount`) and resolution comes from targets (`target.size`, `target.texelSize`).
+Start with the public `vgpu` package. A program has one `Gpu` context, explicit WGSL bindings, and explicit frames. There are no global uniforms: time comes from the frame clock (`clock(gpu).time`, `.deltaTime`, `.frameCount`) and resolution comes from targets (`target.size`, `target.texelSize`).
 
 ```ts
-import { init, effect, frameLoop, surface } from "vgpu";
+import { clock, init, effect, frameLoop, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -22,8 +22,9 @@ canvasSurface.onResize(() => {
   gradient.set({ params: { texel: canvasSurface.texelSize } });
 });
 
+const time = clock(gpu);
 frameLoop(gpu, (frame) => {
-  gradient.set({ params: { time: gpu.time } });
+  gradient.set({ params: { time: time.time } });
   frame.pass(canvasSurface, gradient);
 });
 ```

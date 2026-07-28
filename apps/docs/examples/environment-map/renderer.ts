@@ -9,7 +9,7 @@ import skyWgsl from './sky.wgsl';
 import blurWgsl from './blur.wgsl';
 import metalWgsl from './metal.wgsl';
 import presentWgsl from './present.wgsl';
-import { draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -167,10 +167,11 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
+    const time = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !gpu || !canvasSurface || !scene || !input) return;
-      input.advance(gpu.deltaTime);
-      render(currentFrame, scene, canvasSurface, cameraView(input.yaw, input.pitch, aspectOf(canvasSurface)), gpu.time);
+      input.advance(time.deltaTime);
+      render(currentFrame, scene, canvasSurface, cameraView(input.yaw, input.pitch, aspectOf(canvasSurface)), time.time);
     });
   };
 

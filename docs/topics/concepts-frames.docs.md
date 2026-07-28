@@ -71,7 +71,7 @@ One-shot draws like `pulseEffect.draw(canvasTarget)` are the simple default for 
 For animation, use [`frameLoop(gpu)`](/reference/vgpu/frame#framerunner) — it runs your frame every tick:
 
 ```ts
-import { init, effect, frameLoop, surface } from "vgpu";
+import { clock, init, effect, frameLoop, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -86,15 +86,16 @@ const pulseEffect = effect(gpu, `
 `, { set: { params: { time: 0 } } });
 
 // ---cut---
+const time = clock(gpu);
 const handle = frameLoop(gpu, (frame) => {
-  pulseEffect.set({ params: { time: gpu.time } }); // update uniforms every tick
+  pulseEffect.set({ params: { time: time.time } }); // update uniforms every tick
   frame.pass(canvasTarget, pulseEffect);
 }, { fps: 30 });
 
 handle.stop(); // call it when your component unmounts
 ```
 
-The loop advances `gpu.time`, `gpu.deltaTime`, and `gpu.frameCount`, and runs surface auto-resize before each tick. The optional `fps` throttles it.
+The loop advances the frame clock — `clock(gpu).time`, `deltaTime` and `frameCount` — and runs surface auto-resize before each tick. The optional `fps` throttles it.
 
 This is what the same loop looks like by hand with `requestAnimationFrame`:
 

@@ -36,7 +36,7 @@ declare function orbitControls(
 ## Examples
 
 ```ts
-import { init, frameLoop } from "vgpu";
+import { clock, init, frameLoop } from "vgpu";
 import { orbitControls, perspectiveCamera } from "vgpu/scene";
 
 declare const canvas: HTMLCanvasElement;
@@ -46,7 +46,7 @@ const camera = perspectiveCamera({ fov: 45, position: [2, 2, 3], target: [0, 0, 
 const controls = orbitControls(camera, { element: canvas, damping: 0.1 });
 
 frameLoop(gpu, () => {
-  controls.update(gpu.deltaTime); // explicit update, no hidden rAF
+  controls.update(clock(gpu).deltaTime); // explicit update, no hidden rAF
 });
 ```
 

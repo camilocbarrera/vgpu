@@ -81,7 +81,7 @@ declare class UniformPool {
 ## Examples
 
 ```ts
-import { init, draw, frame, target } from "vgpu/mock";
+import { init, clock, draw, frame, target } from "vgpu/mock";
 import { UniformPool, type UniformLayout } from "vgpu/core";
 
 const gpu = await init();
@@ -108,7 +108,7 @@ const pool = new UniformPool(gpu.device, { capacityBytes: 1 << 20 });
 const slot = pool.alloc(objectLayout);
 drawable.group(0, slot.bindGroup);
 
-pool.beginFrame(gpu.frameCount);
+pool.beginFrame(clock(gpu).frameCount);
 const offset = slot.push({ model: new Float32Array(16) });
 pool.endFrame();
 frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(drawable, { offsets: { 0: [offset] } })));

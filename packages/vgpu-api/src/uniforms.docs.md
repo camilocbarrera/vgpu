@@ -30,7 +30,7 @@ interface SharedUniforms<T extends Record<string, unknown> = Record<string, unkn
 ## Examples
 
 ```ts
-import { init, effect, frame, target, uniforms } from "vgpu/mock";
+import { init, clock, effect, frame, target, uniforms } from "vgpu/mock";
 
 const gpu = await init();
 const colorTarget = target(gpu, { size: [64, 64] });
@@ -43,7 +43,7 @@ const wave = effect(gpu, `
   }
 `, { set: { globals } });
 
-globals.set({ time: gpu.time });
+globals.set({ time: clock(gpu).time });
 frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(wave)));
 ```
 

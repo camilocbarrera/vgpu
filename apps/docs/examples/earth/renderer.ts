@@ -14,7 +14,7 @@ import compositeWgsl from './composite.wgsl';
 import earthWgsl from './earth.wgsl';
 import overlayWgsl from './overlay.wgsl';
 import skyWgsl from './sky.wgsl';
-import { draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -162,11 +162,12 @@ export function createRenderer(options: BrowserRendererOptions<EarthControls>): 
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
+    const time = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !gpu || !canvasSurface || !scene || !targets || !orbit) return;
-      const deltaTime = Math.min(0.05, gpu.deltaTime);
+      const deltaTime = Math.min(0.05, time.deltaTime);
       if (controls.autoRotate) sunDegrees = (sunDegrees + deltaTime * EARTH_TUNING.sun.degreesPerSecond) % 360;
-      setFrameUniforms(scene, canvasSurface, orbit.step(deltaTime), sunDegrees, gpu.time);
+      setFrameUniforms(scene, canvasSurface, orbit.step(deltaTime), sunDegrees, time.time);
       render(currentFrame, scene, targets, canvasSurface);
     });
   };

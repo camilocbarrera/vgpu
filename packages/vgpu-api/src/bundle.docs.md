@@ -96,7 +96,7 @@ function mockCanvas(): HTMLCanvasElement {
 ```
 
 ```ts
-import { init, bundle, effect, frame, pingPong } from "vgpu/mock";
+import { init, bundle, clock, effect, frame, pingPong } from "vgpu/mock";
 
 const gpu = await init();
 const ping = pingPong(gpu, 32, 32);
@@ -107,7 +107,7 @@ const odd = bundle(gpu, { target: ping.write }, (b) => b.draw(shader));
 ping.swap();
 
 frame(gpu, (currentFrame) => {
-  currentFrame.pass({ target: ping.write }, (p) => p.bundles(gpu.frameCount % 2 ? odd : even));
+  currentFrame.pass({ target: ping.write }, (p) => p.bundles(clock(gpu).frameCount % 2 ? odd : even));
 });
 ```
 

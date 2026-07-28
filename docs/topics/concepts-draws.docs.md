@@ -110,7 +110,7 @@ const smokeShader = `
 
 const smoke = draw(gpu, { shader: smokeShader, instances: 10_000 });
 
-smoke.set({ params: { time: 2.5 } }); // drive with gpu.time in a frame loop
+smoke.set({ params: { time: 2.5 } }); // drive with clock(gpu).time in a frame loop
 smoke.draw(canvasSurface);
 ```
 

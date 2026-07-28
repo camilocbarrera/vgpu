@@ -14,7 +14,7 @@ import bloomBlurWgsl from './bloom-blur.wgsl';
 import bloomCompositeWgsl from './bloom-composite.wgsl';
 import presentWgsl from './present.wgsl';
 import stagePreviewWgsl from './stage-preview.wgsl';
-import { draw, effect, frame, frameLoop, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 interface ThumbOptions extends ThumbnailOptions {
@@ -103,9 +103,10 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
+    const time = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !graph || !gpu || !canvasSurface) return;
-      setDynamics(graph, gpu.time * OCEAN_TUNING.simulation.timeScale);
+      setDynamics(graph, time.time * OCEAN_TUNING.simulation.timeScale);
       renderGraph(currentFrame, graph, canvasSurface);
     });
   };
