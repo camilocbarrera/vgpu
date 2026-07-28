@@ -2,7 +2,7 @@
 
 # Gpu
 
-The main API (`vgpu`) facade returned by `init()`. It owns device lifetime, frame clocks, canvas surfaces, offscreen targets, and public factories for render, compute, storage, uniforms, samplers, and bundles.
+The main API (`vgpu`) context returned by `init()`. It owns device lifetime and the frame clock; every resource — canvas surfaces, offscreen targets, render, compute, storage, uniforms, samplers, and bundles — is created by a free function that takes the `Gpu` as its first argument.
 
 ## Import
 
@@ -14,7 +14,7 @@ import { init } from "vgpu/mock";
 ## Signature
 
 ```ts
-import type { Bundle, BundleOptions, BundleRecorder, Compute, ComputeOptions, Draw, DrawOptions, Frame, FrameRunner, Effect, EffectOptions, GpuErrorListener, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions, Surface, SurfaceOptions, Target, TargetOptions, TargetTextureOptions, Timer, Visibility, VisibilityOptions } from "vgpu";
+import type { Bundle, BundleOptions, BundleRecorder, Compute, ComputeOptions, Draw, DrawOptions, Effect, EffectOptions, Frame, FrameLoopHandle, FrameLoopOptions, Geometry, GeometryOptions, GeometryRecipe, GpuErrorListener, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions, Surface, SurfaceOptions, Target, TargetOptions, TargetTextureOptions, Timer, Visibility, VisibilityOptions } from "vgpu";
 import type { Device } from "vgpu/core";
 import type { ShaderSource } from "vgpu";
 
@@ -24,30 +24,33 @@ interface Gpu {
   time: number;
   deltaTime: number;
   frameCount: number;
-  surface(canvas: HTMLCanvasElement | OffscreenCanvas, opts?: SurfaceOptions): Surface;
-  effect(source: string | ShaderSource, opts?: EffectOptions): Effect;
-  draw(opts: DrawOptions): Draw;
-  target(opts: TargetOptions): Target;
-  readonly frame: FrameRunner & ((cb?: (frame: Frame) => void) => Frame);
-  sampler(desc?: GPUSamplerDescriptor): GPUSampler;
-  geometry(descriptor: unknown): import("vgpu").GeometryLike;
   dispose(): void;
-  compute(source: string | ShaderSource, opts?: ComputeOptions): Compute;
-  storage(bytes: number, access?: StorageAccess | StorageOptions): StorageBuffer;
-  timer(): Timer;
-  visibility(options?: VisibilityOptions): Visibility;
-  pingPong(width: number, height: number, opts?: TargetTextureOptions): PingPongTargets;
-  pingPongStorage(bytes: number): PingPongStorage;
-  uniforms<T extends Record<string, unknown>>(values: T): SharedUniforms<T>;
-  bundle(opts: BundleOptions, cb: (recorder: BundleRecorder) => void): Bundle;
   onError(cb: GpuErrorListener): () => void;
   settled(): Promise<void>;
 }
+
+// The creation API: named exports of `vgpu`, `vgpu/node` and `vgpu/mock`, all gpu-first.
+declare function surface(gpu: Gpu, canvas: HTMLCanvasElement | OffscreenCanvas, opts?: SurfaceOptions): Surface;
+declare function effect(gpu: Gpu, source: string | ShaderSource, opts?: EffectOptions): Effect;
+declare function draw(gpu: Gpu, opts: DrawOptions): Draw;
+declare function target(gpu: Gpu, opts: TargetOptions): Target;
+declare function frame(gpu: Gpu, cb?: (frame: Frame) => void): Frame;
+declare function frameLoop(gpu: Gpu, cb: (frame: Frame) => void, opts?: FrameLoopOptions): FrameLoopHandle;
+declare function sampler(gpu: Gpu, desc?: GPUSamplerDescriptor): GPUSampler;
+declare function geometry(gpu: Gpu, input: GeometryOptions | GeometryRecipe): Geometry;
+declare function compute(gpu: Gpu, source: string | ShaderSource, opts?: ComputeOptions): Compute;
+declare function storage(gpu: Gpu, bytes: number, access?: StorageAccess | StorageOptions): StorageBuffer;
+declare function timer(gpu: Gpu): Timer;
+declare function visibility(gpu: Gpu, options?: VisibilityOptions): Visibility;
+declare function pingPong(gpu: Gpu, width: number, height: number, opts?: TargetTextureOptions): PingPongTargets;
+declare function pingPongStorage(gpu: Gpu, bytes: number): PingPongStorage;
+declare function uniforms<T extends Record<string, unknown>>(gpu: Gpu, values: T): SharedUniforms<T>;
+declare function bundle(gpu: Gpu, opts: BundleOptions, record: (recorder: BundleRecorder) => void): Bundle;
 ```
 
 ## Parameters
 
-`Gpu` is an object, not a callable constructor. Method parameters:
+`Gpu` is an object, not a callable constructor: it carries no creation methods. Every factory below takes it as `gpu`, its first argument.
 
 | Param | Type | Required | Default | Notes |
 |---|---|---:|---|---|
@@ -59,7 +62,7 @@ interface Gpu {
 | target.opts | `TargetOptions` | ✔ | — | Offscreen target options. `size` is required. |
 | frame.cb | `(frame: Frame) => void` | ✖ | `undefined` | If provided, submits automatically in `finally`; if omitted, caller must call `frame.submit()`. |
 | sampler.desc | `GPUSamplerDescriptor` | ✖ | `undefined` | Cached by descriptor. `sampler(gpu)` is the canonical default sampler. |
-| mesh.geometry | `unknown` | ✔ | — | Usually a `vgpu/scene` geometry descriptor such as `box()` or `plane()`. |
+| geometry.input | `GeometryOptions \\| GeometryRecipe` | ✔ | — | A raw buffer descriptor, or a `vgpu/scene` recipe such as `box()` or `plane()`. |
 | compute.source | `string \| ShaderSource` | ✔ | — | WGSL string or `ShaderSource`. Must contain a `@compute` entry point. |
 | compute.opts | `ComputeOptions` | ✖ | `{}` | `label` defaults to `"compute"`; `set` defaults to no initial bindings. |
 | storage.bytes | `number` | ✔ | — | Byte size for a main API (`vgpu`) storage buffer. |
@@ -75,7 +78,7 @@ interface Gpu {
 | bundle.cb | `(recorder: BundleRecorder) => void` | ✔ | — | Records bundle commands immediately. |
 | onError.cb | `GpuErrorListener` | ✔ | — | Receives asynchronous vgpu errors; returns an unsubscribe function. |
 
-**Returns:** `Gpu` methods return the resources named in their signatures. `dispose()` and frame/pass callbacks return `void`.
+**Returns:** each factory returns the resource named in its signature. `dispose()` and frame/pass callbacks return `void`.
 
 **Throws:** `VGPU-LIMIT-STORAGE-VERTEX` / `VGPU-LIMIT-STORAGE-FRAGMENT` when a selected render entry exceeds its granted storage-buffer limit. The structured detail reports `stage`, `entryPoint`, `count`, `limit`, and each counted binding's `name`, `group`, and `binding`; request a supported limit or reduce/move the data; `VGPU-SHADER-SOURCE-INVALID` for malformed `ShaderSource`; `VGPU-SET-TEXTURE-FILTERABILITY` when a known facade texture format cannot satisfy an ordinarily sampled float binding (detail reports format, texture binding/name/label, and paired sampler identity); `VGPU-RING1-UNSUPPORTED` for unsupported effect/compute/target cases; `VGPU-TARGET-REQUIRED` when one-shot drawing needs an explicit target; `VGPU-TARGET-SIZE-REQUIRED` for runtime JS calls to `target(gpu)` without `size`; `VGPU-SURFACE-*` errors from `surface()`, surface resize, surface readback, or using disposed surfaces; plus method-specific `VGPU-R1-*`, `VGPU-R3-*`, and `VGPU-R4-*` errors documented on `Effect`, `Draw`, `Compute`, `Frame`, `Bundle`, `Target`, and `SharedUniforms`.
 

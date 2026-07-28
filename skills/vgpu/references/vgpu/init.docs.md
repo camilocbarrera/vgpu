@@ -40,9 +40,10 @@ interface InitOptions {
 | options.requiredLimits | `RequiredDeviceLimits` | ✖ | `undefined` | Forwarded unchanged to `adapter.requestDevice`. Unsupported names/values reject device creation. |
 | options.label | `string` | ✖ | `undefined` | Reserved public option; current main API (`vgpu`) device creation does not use it as a debug label. |
 
-**Returns:** `Promise<Gpu>` — resolves to the main API facade with `surface`, `target`,
-`draw`, `effect`, `compute`, `mesh`, `frame` (with `frame.pass`), `storage`,
-`uniforms`, `sampler`, and `bundle`.
+**Returns:** `Promise<Gpu>` — the context every factory takes first: `surface(gpu, ...)`,
+`target(gpu, ...)`, `draw(gpu, ...)`, `effect(gpu, ...)`, `compute(gpu, ...)`, `geometry(gpu, ...)`,
+`frame(gpu, cb)` / `frameLoop(gpu, cb)`, `storage(gpu, ...)`, `uniforms(gpu, ...)`,
+`sampler(gpu, ...)`, and `bundle(gpu, ...)`.
 
 **Throws:** `VGPU-RING1-UNSUPPORTED` when WebGPU is unavailable, adapter request returns `null`, or an entrypoint lacks an adapter factory — use `vgpu/mock` in tests, `vgpu/node` in Node, or pass a valid adapter; `VGPU-FEATURE-UNSUPPORTED` when `requiredFeatures` names a feature the adapter does not support — remove the unsupported name(s) or run on an adapter that supports them.
 
