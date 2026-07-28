@@ -16,6 +16,7 @@ import { meta as raymarchedFractalMeta } from '../examples/raymarched-fractal/me
 import { meta as environmentMapMeta } from '../examples/environment-map/meta';
 import { meta as transmissionMeta } from '../examples/transmission/meta';
 import { meta as radianceCascadesMeta } from '../examples/radiance-cascades/meta';
+import { meta as nextjsFlareMeta } from '../examples/nextjs-flare/meta';
 
 const rawMetadata = {
   gradient: gradientMeta,
@@ -32,6 +33,7 @@ const rawMetadata = {
   'environment-map': environmentMapMeta,
   transmission: transmissionMeta,
   'radiance-cascades': radianceCascadesMeta,
+  'nextjs-flare': nextjsFlareMeta,
 } satisfies Record<ExampleSlug, ExampleMetaDefinition>;
 
 function withThumbnails(meta: ExampleMetaDefinition): ExampleMeta {
@@ -57,6 +59,7 @@ export const exampleMetadataBySlug = {
   'environment-map': withThumbnails(rawMetadata['environment-map']),
   transmission: withThumbnails(rawMetadata.transmission),
   'radiance-cascades': withThumbnails(rawMetadata['radiance-cascades']),
+  'nextjs-flare': withThumbnails(rawMetadata['nextjs-flare']),
 } satisfies Record<ExampleSlug, ExampleMeta>;
 
 export const examplesMetadata = exampleSlugs.map((slug) => exampleMetadataBySlug[slug]);

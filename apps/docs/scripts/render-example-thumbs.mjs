@@ -32,6 +32,7 @@ const rendererEntries = [
   { slug: 'environment-map', module: '../examples/environment-map/renderer.ts', exportName: 'renderThumbnail' },
   { slug: 'transmission', module: '../examples/transmission/renderer.ts', exportName: 'renderThumbnail' },
   { slug: 'radiance-cascades', module: '../examples/radiance-cascades/renderer.ts', exportName: 'renderThumbnail' },
+  { slug: 'nextjs-flare', module: '../examples/nextjs-flare/renderer.ts', exportName: 'renderThumbnail' },
 ];
 
 const sizes = args.proofDir ? { proof: [160, 90] } : {

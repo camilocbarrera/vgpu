@@ -13,6 +13,7 @@ export const exampleSlugs = [
   'environment-map',
   'transmission',
   'radiance-cascades',
+  'nextjs-flare',
 ] as const;
 
 export type ExampleSlug = (typeof exampleSlugs)[number];
