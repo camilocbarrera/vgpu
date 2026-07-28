@@ -3,7 +3,7 @@ import type { BindingInfo } from "@vgpu/wgsl/reflect-source";
 import type { BindGroupIdentityPart } from "./bind-cache.ts";
 import { incompatibleResourceError, textureFilterabilityError } from "./errors.ts";
 import type { Target } from "./target.ts";
-import { isSharedUniformsValue } from "./uniforms.ts";
+import { BINDING_RESOURCE, bindingResourceOf } from "./draw-protocols.ts";
 
 export interface NormalizedBindingResource {
   readonly resource: GPUBindingResource;
@@ -51,7 +51,9 @@ export function normalizeResource(binding: BindingInfo, value: unknown, context:
 }
 
 function normalizeBufferResource(binding: BindingInfo, value: unknown, context: ResourceNormalizationContext): NormalizedBindingResource {
-  if (isSharedUniformsValue(value)) return value.asBindingResource(binding, context.sourceHint);
+  // Nominal protocol, not an instanceof: recognizing a shared uniforms block must not link it.
+  const provider = bindingResourceOf(value);
+  if (provider) return provider[BINDING_RESOURCE](binding, context.sourceHint);
   if (value instanceof Buffer) {
     validateBufferUsage(binding, value.options.usage);
     return { resource: { buffer: value.gpu }, identity: value.resourceIdentity, unsubscribe: (cb) => value.onDestroy(cb) };

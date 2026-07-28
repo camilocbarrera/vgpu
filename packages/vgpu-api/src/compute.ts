@@ -11,7 +11,7 @@ import type { Gpu } from "./kernel.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { renderService } from "./render-service.ts";
 import { toWgsl } from "./shader-source.ts";
-import { resolveIndirect } from "./storage.ts";
+import { resolveIndirect } from "./indirect.ts";
 
 /**
  * Compute pipeline for this gpu, ready to `set()` bindings and `dispatch()`.

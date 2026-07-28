@@ -11,16 +11,9 @@ import type { EntryPointInputInfo, WGSLType } from "@vgpu/wgsl/reflect-source";
 import type { GeometryLike } from "../draw.ts";
 import type { Gpu, Kernel } from "../kernel.ts";
 import type { GeometryRecipe } from "./geometry-recipe.ts";
+import { geometryLayoutResolver } from "../draw-protocols.ts";
 import { liveKernel, ownResource } from "../live-kernel.ts";
 import { meshAttributeAmbiguousError, meshAttributeUnmatchedError, meshDataMisalignedError, meshFormatMismatchError, meshInputMissingError, meshLayoutInvalidError, meshLimitExceededError, meshLocationConflictError, meshRangeInvalidError, meshWriteRangeError } from "../errors.ts";
-
-/** @internal Resolves named geometry attributes against reflected shader inputs. */
-export const geometryLayoutResolver = Symbol("vgpu.geometry.layoutResolver");
-/** @internal Implemented by v2 geometries and slices for draw-time layout resolution. */
-export interface GeometryLayoutResolvable {
-  /** Resolves and validates concrete shader locations for a vertex entry point. */
-  [geometryLayoutResolver](inputs: readonly EntryPointInputInfo[], where: string): readonly GPUVertexBufferLayout[];
-}
 
 /** CPU-side bytes accepted when creating or updating an owned geometry buffer. */
 export type GeometryData = ArrayBuffer | ArrayBufferView<ArrayBuffer>;

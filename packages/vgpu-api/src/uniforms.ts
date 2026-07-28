@@ -3,6 +3,7 @@ import type { BindingInfo, HostShareableLayout } from "@vgpu/wgsl/reflect-source
 import type { SharedUniforms } from "./api-types.ts";
 import type { Gpu } from "./kernel.ts";
 import { liveKernel, ownResource } from "./live-kernel.ts";
+import { BINDING_RESOURCE, type BindingResourceProvider } from "./draw-protocols.ts";
 import type { NormalizedBindingResource } from "./set-resources.ts";
 import { sharedUniformLayoutMismatchError, unsupportedError } from "./errors.ts";
 import { writeLayoutValue } from "./set-packing.ts";
@@ -21,7 +22,7 @@ interface SharedUniformLayoutState {
  * Values-first shared uniform/storage buffer. The WGSL layout is adopted lazily from
  * the first shader that binds this object, keeping the backing buffer identity stable.
  */
-export class SharedUniformsImpl<T extends Record<string, unknown>> implements SharedUniforms<T> {
+export class SharedUniformsImpl<T extends Record<string, unknown>> implements SharedUniforms<T>, BindingResourceProvider {
   readonly #values: Record<string, unknown>;
   #state?: SharedUniformLayoutState;
   #bufferRef?: Buffer;
@@ -39,8 +40,13 @@ export class SharedUniformsImpl<T extends Record<string, unknown>> implements Sh
     this.#writeCurrentValues();
   }
 
-  /** Adopts or validates the reflected binding layout, then returns a user-owned resource. */
-  asBindingResource(binding: BindingInfo, sourceHint: string): NormalizedBindingResource {
+  /**
+   * Adopts or validates the reflected binding layout, then returns a user-owned resource.
+   *
+   * Keyed by the nominal protocol symbol so `set-resources.ts` recognizes a shared uniforms block
+   * without importing this module: binding a plain buffer must not link the layout machinery.
+   */
+  [BINDING_RESOURCE](binding: BindingInfo, sourceHint: string): NormalizedBindingResource {
     ensureBufferBinding(binding);
     const adopted = this.#ensureLayout(binding, sourceHint);
     const buffer = this.#requiredBuffer();
@@ -127,10 +133,6 @@ export function createSharedUniforms<T extends Record<string, unknown>>(device: 
 export function uniforms<T extends Record<string, unknown>>(gpu: Gpu, values: T): SharedUniforms<T> {
   const kernel = liveKernel(gpu, "uniforms");
   return ownResource(kernel, new SharedUniformsImpl(kernel.device, values), (shared) => shared.destroy());
-}
-
-export function isSharedUniformsValue(value: unknown): value is SharedUniformsImpl<Record<string, unknown>> {
-  return value instanceof SharedUniformsImpl;
 }
 
 function ensureBufferBinding(binding: BindingInfo): void {

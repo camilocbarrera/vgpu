@@ -11,8 +11,8 @@ import { normalizeConstantsOptions, normalizeSignature, pipelineKeyOf, selectEnt
 import { hasStencilAspect, isTarget } from "./target-utils.ts";
 import { blendConstantInvalidError, blendInvalidError, claimedGroupNativeValidationError, colorsInvalidError, cullInvalidError, depthInvalidError, entryInvalidError, frontFaceInvalidError, indirectInvalidError, meshRangeInvalidError, multisampleInvalidError, stencilInvalidError, storageStageLimitError, surfaceNotInFrameError, targetRequiredError, unclippedDepthInvalidError, VGPUError, writeMaskInvalidError } from "./errors.ts";
 import { isFrameActive, isSurface } from "./surface.ts";
-import { geometryLayoutResolver, type GeometryLayoutResolvable } from "./scene/geometry-descriptor.ts";
-import { resolveIndirect } from "./storage.ts";
+import { geometryLayoutResolver, type GeometryLayoutResolvable } from "./draw-protocols.ts";
+import { resolveIndirect } from "./indirect.ts";
 import type { StorageBuffer } from "./api-types.ts";
 import { FRAME_DRAWABLE, type FrameDrawableProtocol } from "./frame-protocols.ts";
 import { liveKernel } from "./live-kernel.ts";
