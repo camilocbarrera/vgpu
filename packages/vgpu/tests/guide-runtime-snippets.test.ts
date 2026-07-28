@@ -13,11 +13,12 @@ test("getting-started TypeScript fences execute against vgpu/mock", async () => 
   expect(blocks.length).toBeGreaterThan(0);
   for (const block of blocks) {
     const executable = block
-      .replace(/^import \{ init \} from ["']vgpu(?:\/node)?["'];?\n/mu, "")
+      .replace(/^import \{[^}]*\} from ["']vgpu(?:\/node)?["'];?\n/mu, "")
       .replace(/const canvas = document\.querySelector\(["']canvas["']\)!;/u, "const canvas = createMockCanvas();")
-      .replace(/gpu\.frame\.loop\(/gu, "gpu.frame(");
+      // The mock has no animation frames: run the loop body once, as a plain frame.
+      .replace(/frameLoop\(gpu, /gu, "frame(gpu, ");
 
-    await new AsyncFunction("init", "createMockCanvas", `${executable}\ngpu.dispose();`)(init, createMockCanvas);
+    await new AsyncFunction("init", "createMockCanvas", "surface", "effect", "frame", `${executable}\ngpu.dispose();`)(init, createMockCanvas, surface, effect, frame);
   }
 });
 

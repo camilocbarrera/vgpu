@@ -56,7 +56,7 @@ interface Gpu {
 | draw.opts | `DrawOptions` | ✔ | — | Includes required `shader`; see `DrawOptions`. |
 | target.opts | `TargetOptions` | ✔ | — | Offscreen target options. `size` is required. |
 | frame.cb | `(frame: Frame) => void` | ✖ | `undefined` | If provided, submits automatically in `finally`; if omitted, caller must call `frame.submit()`. |
-| sampler.desc | `GPUSamplerDescriptor` | ✖ | `undefined` | Cached by descriptor. `gpu.sampler()` is the canonical default sampler. |
+| sampler.desc | `GPUSamplerDescriptor` | ✖ | `undefined` | Cached by descriptor. `sampler(gpu)` is the canonical default sampler. |
 | mesh.geometry | `unknown` | ✔ | — | Usually a `vgpu/scene` geometry descriptor such as `box()` or `plane()`. |
 | compute.source | `string \| ShaderSource` | ✔ | — | WGSL string or `ShaderSource`. Must contain a `@compute` entry point. |
 | compute.opts | `ComputeOptions` | ✖ | `{}` | `label` defaults to `"compute"`; `set` defaults to no initial bindings. |
@@ -75,16 +75,16 @@ interface Gpu {
 
 **Returns:** `Gpu` methods return the resources named in their signatures. `dispose()` and frame/pass callbacks return `void`.
 
-**Throws:** `VGPU-LIMIT-STORAGE-VERTEX` / `VGPU-LIMIT-STORAGE-FRAGMENT` when a selected render entry exceeds its granted storage-buffer limit. The structured detail reports `stage`, `entryPoint`, `count`, `limit`, and each counted binding's `name`, `group`, and `binding`; request a supported limit or reduce/move the data; `VGPU-SHADER-SOURCE-INVALID` for malformed `ShaderSource`; `VGPU-SET-TEXTURE-FILTERABILITY` when a known facade texture format cannot satisfy an ordinarily sampled float binding (detail reports format, texture binding/name/label, and paired sampler identity); `VGPU-RING1-UNSUPPORTED` for unsupported effect/compute/target cases; `VGPU-TARGET-REQUIRED` when one-shot drawing needs an explicit target; `VGPU-TARGET-SIZE-REQUIRED` for runtime JS calls to `gpu.target()` without `size`; `VGPU-SURFACE-*` errors from `surface()`, surface resize, surface readback, or using disposed surfaces; plus method-specific `VGPU-R1-*`, `VGPU-R3-*`, and `VGPU-R4-*` errors documented on `Effect`, `Draw`, `Compute`, `Frame`, `Bundle`, `Target`, and `SharedUniforms`.
+**Throws:** `VGPU-LIMIT-STORAGE-VERTEX` / `VGPU-LIMIT-STORAGE-FRAGMENT` when a selected render entry exceeds its granted storage-buffer limit. The structured detail reports `stage`, `entryPoint`, `count`, `limit`, and each counted binding's `name`, `group`, and `binding`; request a supported limit or reduce/move the data; `VGPU-SHADER-SOURCE-INVALID` for malformed `ShaderSource`; `VGPU-SET-TEXTURE-FILTERABILITY` when a known facade texture format cannot satisfy an ordinarily sampled float binding (detail reports format, texture binding/name/label, and paired sampler identity); `VGPU-RING1-UNSUPPORTED` for unsupported effect/compute/target cases; `VGPU-TARGET-REQUIRED` when one-shot drawing needs an explicit target; `VGPU-TARGET-SIZE-REQUIRED` for runtime JS calls to `target(gpu)` without `size`; `VGPU-SURFACE-*` errors from `surface()`, surface resize, surface readback, or using disposed surfaces; plus method-specific `VGPU-R1-*`, `VGPU-R3-*`, and `VGPU-R4-*` errors documented on `Effect`, `Draw`, `Compute`, `Frame`, `Bundle`, `Target`, and `SharedUniforms`.
 
 ## Examples
 
 ```ts
-import { init } from "vgpu/mock";
+import { init, draw, frame, target } from "vgpu/mock";
 
 const gpu = await init();
-const target = gpu.target({ size: [128, 128], depth: true });
-const draw = gpu.draw({
+const colorTarget = target(gpu, { size: [128, 128], depth: true });
+const drawable = draw(gpu, {
   shader: `
     @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
       var p = array<vec2f, 3>(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
@@ -93,25 +93,25 @@ const draw = gpu.draw({
     @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1, 0, 1, 1); }
   `,
   // optional sync pre-warm; `await draw.compile(target)` is preferred during browser load
-  targets: [target],
+  targets: [colorTarget],
 });
 
-gpu.frame((frame) => {
-  frame.pass({ target, clear: [0, 0, 0, 1] }, (pass) => pass.draw(draw));
+frame(gpu, (currentFrame) => {
+  currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (pass) => pass.draw(drawable));
 });
 ```
 
 ```ts
-import { init } from "vgpu";
+import { init, effect, frameLoop, surface } from "vgpu";
 
 declare const canvas: HTMLCanvasElement;
 
 const gpu = await init();
-const surface = gpu.surface(canvas, { dpr: [1, 2] });
-const wave = gpu.effect(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(0.2, 0.4, 1.0, 1.0); }`);
+const canvasSurface = surface(gpu, canvas, { dpr: [1, 2] });
+const wave = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(0.2, 0.4, 1.0, 1.0); }`);
 
-gpu.frame.loop((frame) => {
-  frame.pass({ target: surface }, (pass) => pass.draw(wave));
+frameLoop(gpu, (frame) => {
+  frame.pass({ target: canvasSurface }, (pass) => pass.draw(wave));
 });
 ```
 
@@ -124,7 +124,7 @@ gpu.frame.loop((frame) => {
 ## Notes
 
 - There is no implicit screen property and no implicit default target. Pass `target` explicitly to frame passes and one-shot draws.
-- Canvas-specific `size`, `dpr`, and `autoResize` live on `gpu.surface(canvas, opts)`, not on `init()`.
+- Canvas-specific `size`, `dpr`, and `autoResize` live on `surface(gpu, canvas, opts)`, not on `init()`.
 - Time is explicit JS state. Pass `gpu.time`, `gpu.deltaTime`, or `gpu.frameCount` through `set()` or `SharedUniforms` when shaders need them.
 - **See also:** `init`, `Surface`, `Effect`, `Draw`, `Compute`, `Frame`, `Target`, `Bundle`, `SharedUniforms`, `Timer`, `Visibility`.
 

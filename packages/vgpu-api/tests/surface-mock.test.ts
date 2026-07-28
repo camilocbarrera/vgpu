@@ -202,7 +202,7 @@ test("target is required for frame and one-shot draws, and target size is requir
   expect(() => shader1.draw()).toThrowError(/VGPU-TARGET-REQUIRED|Target required/);
   expect(() => drawable.draw()).toThrowError(/VGPU-TARGET-REQUIRED|Target required/);
   expect(() => {
-    // @ts-expect-error gpu.target requires size; this asserts the runtime JS error.
+    // @ts-expect-error target(gpu, opts) requires size; this asserts the runtime JS error.
     target(gpu, {});
   }).toThrowError(/VGPU-TARGET-SIZE-REQUIRED|Target size required/);
   const pp = pingPong(gpu, 8,

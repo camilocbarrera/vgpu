@@ -187,7 +187,7 @@ export function createRenderer(options: BrowserRendererOptions<TransmissionContr
   };
 
   // One rendered frame is three submits — scene + blur chain, the mip copies, then glass
-  // and present — so the loop is a plain rAF instead of `gpu.frame.loop`, which owns the
+  // and present — so the loop is a plain rAF instead of `frameLoop`, which owns the
   // whole frame and rejects the nested `frame(gpu)` calls the copies sit between.
   const tick = (now: number) => {
     animationFrame = 0;

@@ -35,7 +35,7 @@ function expectOutsideFrame(fn: () => unknown): void {
   throw new Error("Expected VGPU-SURFACE-NOT-IN-FRAME");
 }
 
-test("surface pipeline creation is rejected outside gpu.frame with an offscreen precompile hint", async () => {
+test("surface pipeline creation is rejected outside frame(gpu) with an offscreen precompile hint", async () => {
   const gpu = await init();
   const canvasSurface = surface(gpu, surfaceCanvas());
   const drawable = draw(gpu, { shader: WGSL });

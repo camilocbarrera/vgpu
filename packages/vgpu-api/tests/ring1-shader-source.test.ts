@@ -27,7 +27,7 @@ struct Params { value: f32 }
 @compute @workgroup_size(1) fn main() { _ = params.value; }
 `;
 
-test("gpu.effect accepts string and ShaderSource with identical reflection", async () => {
+test("effect(gpu, ...) accepts string and ShaderSource with identical reflection", async () => {
   const gpu = await init();
   const fromString = effect(gpu, FRAGMENT, { label: "shader" });
   const fromArtifact = effect(gpu, { version: 1, wgsl: FRAGMENT }, { label: "shader" });
@@ -37,7 +37,7 @@ test("gpu.effect accepts string and ShaderSource with identical reflection", asy
   gpu.dispose();
 });
 
-test("gpu.draw accepts ShaderSource and keeps Draw internals string-only", async () => {
+test("draw(gpu, ...) accepts ShaderSource and keeps Draw internals string-only", async () => {
   const gpu = await init();
   const drawable = draw(gpu, { shader: { version: 1, wgsl: DRAW }, label: "artifact-draw" });
 
@@ -45,7 +45,7 @@ test("gpu.draw accepts ShaderSource and keeps Draw internals string-only", async
   gpu.dispose();
 });
 
-test("gpu.compute accepts ShaderSource", async () => {
+test("compute(gpu, ...) accepts ShaderSource", async () => {
   const gpu = await init();
   const job = compute(gpu, { version: 1, wgsl: COMPUTE }, { label: "artifact-compute" });
 

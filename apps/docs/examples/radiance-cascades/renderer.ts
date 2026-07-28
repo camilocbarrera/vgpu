@@ -134,7 +134,7 @@ export function createRenderer(options: RadianceCascadesRendererOptions): Radian
 
   // One dirty frame is a paint, a jump flood and six cascade merges, all reading what the
   // previous pass wrote. They go out as a single submit from a plain rAF loop instead of
-  // `gpu.frame.loop`, which owns the frame and would not let the present pass be its own.
+  // `frameLoop`, which owns the frame and would not let the present pass be its own.
   const tick = () => {
     animationFrame = 0;
     if (disposed) return;
