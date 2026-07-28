@@ -49,7 +49,7 @@ struct VertexOut {
 }
 `;
 
-test("gpu.draw records storage-driven vertices and instances without vertex buffers", async () => {
+test("draw(gpu, opts) records storage-driven vertices and instances without vertex buffers", async () => {
   const gpu = await init();
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {

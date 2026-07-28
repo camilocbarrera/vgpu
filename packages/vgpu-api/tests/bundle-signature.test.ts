@@ -15,7 +15,7 @@ const TEXTURE = `
 }
 `;
 
-test("gpu.bundle can record against a target signature and replay on a compatible target", async () => {
+test("bundle(gpu, ...) can record against a target signature and replay on a compatible target", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const shader = effect(gpu, SOLID, { label: "signatureFx" });
@@ -42,7 +42,7 @@ test("bundle replay target signature mismatches throw R3 stale with recorded and
   gpu.dispose();
 });
 
-test("gpu.bundle validates malformed signatures at record time", async () => {
+test("bundle(gpu, ...) validates malformed signatures at record time", async () => {
   const gpu = await init();
   const shader = effect(gpu, SOLID);
 

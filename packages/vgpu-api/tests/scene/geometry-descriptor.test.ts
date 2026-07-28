@@ -7,7 +7,7 @@ function meshErrorOf(fn: () => unknown): VGPUError {
   throw new Error("Expected a VGPUError");
 }
 
-test("gpu.geometry normalizes record attributes, derives counts, and freezes slice layout identity", async () => {
+test("geometry(gpu, ...) normalizes record attributes, derives counts, and freezes slice layout identity", async () => {
   const gpu = await init();
   try {
     const vertices = new Float32Array([
@@ -52,7 +52,7 @@ test("gpu.geometry normalizes record attributes, derives counts, and freezes sli
   }
 });
 
-test("gpu.geometry derives tight auto stride, stepMode instance count, and rejects invalid layouts", async () => {
+test("geometry(gpu, ...) derives tight auto stride, stepMode instance count, and rejects invalid layouts", async () => {
   const gpu = await init();
   try {
     const instances = geometry(gpu, { buffers: [{
@@ -74,7 +74,7 @@ test("gpu.geometry derives tight auto stride, stepMode instance count, and rejec
   }
 });
 
-test("gpu.geometry validates locations, enums, and tight auto-stride eagerly", async () => {
+test("geometry(gpu, ...) validates locations, enums, and tight auto-stride eagerly", async () => {
   const gpu = await init();
   try {
     const base = { data: new Float32Array([0]), attributes: { value: { format: "float32" as const, location: 0 } } };

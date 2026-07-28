@@ -8,7 +8,7 @@ function errorOf(fn: () => unknown): VGPUError {
   throw new Error("Expected a VGPUError");
 }
 
-test("named geometry attributes resolve to reflected vertex locations at gpu.draw construction", async () => {
+test("named geometry attributes resolve to reflected vertex locations at draw(gpu, opts) construction", async () => {
   const gpu = await init();
   try {
     const geo = geometry(gpu, { buffers: [{ data: new Float32Array(15), attributes: {
