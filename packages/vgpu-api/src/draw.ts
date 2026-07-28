@@ -13,7 +13,7 @@ import { blendConstantInvalidError, blendInvalidError, claimedGroupNativeValidat
 import { isFrameActive, isSurface } from "./surface.ts";
 import { geometryLayoutResolver, type GeometryLayoutResolvable } from "./scene/geometry-descriptor.ts";
 import { resolveIndirect } from "./storage.ts";
-import type { StorageBuffer } from "./gpu.ts";
+import type { StorageBuffer } from "./api-types.ts";
 
 export type BlendPreset = "alpha" | "additive" | "premultiplied";
 

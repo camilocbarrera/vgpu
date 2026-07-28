@@ -1,5 +1,5 @@
 import type { Device } from "@vgpu/core";
-import type { PingPongStorage, PingPongTargets, StorageAccess, StorageBuffer } from "./gpu.ts";
+import type { PingPongStorage, PingPongTargets, StorageAccess, StorageBuffer } from "./api-types.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 import { OffscreenTarget } from "./target-offscreen.ts";
 import { createStorageBuffer } from "./storage.ts";

@@ -1,12 +1,15 @@
-export { createGpu, type AdapterFactory, type Compute, type ComputeOptions, type DispatchOptions, type Gpu, type GpuErrorListener, type InitOptions, type PingPongStorage, type PingPongTargets, type SharedUniforms, type StorageAccess, type StorageBuffer, type StorageOptions } from "./gpu.ts";
+export { createGpu, type Gpu } from "./gpu.ts";
+export type { AdapterFactory, InitOptions } from "./kernel.ts";
+export type { Compute, ComputeOptions, DispatchOptions, GpuErrorListener, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions } from "./api-types.ts";
 export type { ClearColor } from "./target-utils.ts";
 export type { Timer, TimerSpan } from "./timer.ts";
 export type { Visibility, VisibilityOptions, VisibilityQuery } from "./visibility.ts";
 export type { Bundle, BundleOptions, BundleRecorder } from "./bundle.ts";
 export type { Surface, SurfaceOptions, SurfaceResizeEvent } from "./surface.ts";
 
-import { createGpu, type AdapterFactory, type InitOptions } from "./gpu.ts";
+import { createGpu } from "./gpu.ts";
+import type { AdapterFactory, EntryKind, InitOptions } from "./kernel.ts";
 
-export function initWithAdapter(entry: "browser" | "node" | "mock", adapterFactory?: AdapterFactory, options?: InitOptions) {
-  return createGpu(entry, options, {}, adapterFactory);
+export function initWithAdapter(entry: EntryKind, adapterFactory?: AdapterFactory, options?: InitOptions) {
+  return createGpu(entry, options, adapterFactory);
 }

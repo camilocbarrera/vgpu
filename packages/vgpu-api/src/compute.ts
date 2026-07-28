@@ -3,7 +3,7 @@ import { reflectSource, type BindingInfo, type EntryPointInfo, type Reflection }
 import { createBindGroupCache, identityKey, type BindGroupCache, type BindGroupIdentityPart } from "./bind-cache.ts";
 import { createSetCore, bindGroupLayoutsForReflection, pipelineLayoutFor, type SetBag, type SetCore } from "./set-core.ts";
 import { visibilityForEntries } from "./set-layouts.ts";
-import type { Compute, ComputeOptions, DispatchOptions } from "./gpu.ts";
+import type { Compute, ComputeOptions, DispatchOptions } from "./api-types.ts";
 import { normalizeConstantsOptions, selectEntryPoint } from "./pipeline-store.ts";
 import { indirectInvalidError, unsupportedError, writableStorageAliasingError } from "./errors.ts";
 import { resolveIndirect } from "./storage.ts";

@@ -1,5 +1,5 @@
 import { Buffer, type BufferUsageName, type BufferWriteData, type Device } from "@vgpu/core";
-import type { StorageAccess, StorageBuffer } from "./gpu.ts";
+import type { StorageAccess, StorageBuffer } from "./api-types.ts";
 import { indirectInvalidError } from "./errors.ts";
 
 /**

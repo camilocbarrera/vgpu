@@ -19,5 +19,5 @@ export type { ResolvedShader, ShaderSource, SourceMap, WGSLAst, WGSLSource } fro
 
 /** Mock entrypoint. */
 export function init(options?: InitOptions): ReturnType<typeof createGpu> {
-  return createGpu("mock", options, {}, createMockAdapter);
+  return createGpu("mock", options, createMockAdapter);
 }

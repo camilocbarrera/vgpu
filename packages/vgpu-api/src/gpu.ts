@@ -1,17 +1,28 @@
+/**
+ * TEMPORARY compatibility bridge (T202-01 … T202-04).
+ *
+ * The core `Gpu` now lives in `kernel.ts`: device, `disposed`, `onError`, `settled`, `dispose`.
+ * Everything below re-attaches the 0.1.x methods to that object so tests, examples and docs keep
+ * compiling while the free-function families land (T202-02 render, T202-03 non-render) and the
+ * first-party consumers migrate (T202-04).
+ *
+ * MUST BE DELETED IN T202-05, together with `LegacyGpuMethods` and this file: after the clean cut
+ * the public surface is `createGpu()` from `kernel.ts` plus free functions. Nothing new should be
+ * added here, and no code outside this file should rely on these methods.
+ *
+ * The bridge is already lazy: no cache, frame runner, query ring or surface exists until the
+ * corresponding method is called, so the lifetime/ownership semantics are the final ones.
+ */
 import type { ShaderSource } from "@vgpu/wgsl";
-import type { RequiredDeviceLimits, VGPUAdapter } from "@vgpu/core";
-import { Device, validateRequiredFeatures } from "@vgpu/core";
-import { createBindGroupCache } from "./bind-cache.ts";
 import { createBundle, type Bundle, type BundleOptions, type BundleRecorder } from "./bundle.ts";
 import { InternalDraw, type Draw, type DrawOptions } from "./draw.ts";
-import { Frame, FrameRunner, type FrameLoopHandle } from "./frame.ts";
+import { Frame, FrameRunner } from "./frame.ts";
 import { InternalEffect, type Effect, type EffectOptions } from "./effect.ts";
-import { createSamplerCache } from "./sampler.ts";
 import { createGeometry } from "./scene/geometry-factory.ts";
 import { Geometry, type GeometryOptions } from "./scene/geometry-descriptor.ts";
 import type { SceneGeometry } from "./scene/geometry.ts";
 import { OffscreenTarget, type Target, type TargetOptions, type TargetTextureOptions } from "./target.ts";
-import { frameReentrantError, surfaceDuplicateError, unsupportedError, VGPUError } from "./errors.ts";
+import { surfaceDuplicateError, unsupportedError } from "./errors.ts";
 import { ComputePipeline } from "./compute.ts";
 import { createStorageBuffer } from "./storage.ts";
 import { createPingPongStorage, createPingPongTargets } from "./ping-pong.ts";
@@ -21,45 +32,19 @@ import { CanvasSurface, type Surface, type SurfaceCanvas, type SurfaceOptions } 
 import { createTimer, type Timer } from "./timer.ts";
 import { createVisibility, type Visibility, type VisibilityOptions } from "./visibility.ts";
 import type { ClearColor } from "./target-utils.ts";
-import { createPipelineLayoutCache, createPipelineStore, createShaderModuleCache, type PipelineLayoutCache, type PipelineStore, type SettledSource, type ShaderModuleCache } from "./pipeline-store.ts";
+import type { Compute, ComputeOptions, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions } from "./api-types.ts";
+import { frameState } from "./frame-state.ts";
+import { renderService } from "./render-service.ts";
+import { createCoreGpu, kernelOf, type AdapterFactory, type EntryKind, type Gpu as CoreGpu, type InitOptions, type Kernel } from "./kernel.ts";
 
-export interface InitOptions {
-  readonly adapter?: VGPUAdapter;
-  readonly powerPreference?: GPUPowerPreference;
-  readonly requiredFeatures?: readonly GPUFeatureName[];
-  readonly requiredLimits?: RequiredDeviceLimits;
-  readonly label?: string;
-}
+export type { AdapterFactory, InitOptions } from "./kernel.ts";
+export type { Compute, ComputeOptions, DispatchOptions, GpuErrorListener, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions } from "./api-types.ts";
 
-export interface ComputeOptions {
-  readonly label?: string;
-  readonly set?: Record<string, unknown>;
-  /** Values for WGSL `override` constants, keyed by name (or by numeric id as a string when the override has @id). Immutable after construction. */
-  readonly constants?: Readonly<Record<string, number | boolean>>;
-  /** Compute entry point to use when the shader has several. Defaults to the first @compute entry point. */
-  readonly entry?: string;
-}
-export interface DispatchOptions {
-  /** GPU-driven dispatch: read the workgroup counts from a buffer instead of CPU-side counts. */
-  readonly indirect: StorageBuffer | { readonly buffer: StorageBuffer; readonly offset?: number };
-}
-export interface Compute { set(values: Record<string, unknown>): this; dispatch(x: number, y?: number, z?: number): void; dispatch(opts: DispatchOptions): void }
-export type StorageAccess = "read" | "read-write";
-export interface StorageOptions {
-  /** Binding access for shader reflection. Defaults to "read-write". */
-  readonly access?: StorageAccess;
-  /** Adds the "indirect" buffer usage so the buffer can supply GPU-read draw/dispatch arguments. Defaults to false. */
-  readonly indirect?: boolean;
-}
-export interface StorageBuffer { readonly size: number; readonly access: StorageAccess; read(): Promise<ArrayBuffer>; write(data: BufferSource): void }
-export interface PingPongTargets { readonly read: Target; readonly write: Target; swap(): void }
-export interface PingPongStorage { readonly read: StorageBuffer; readonly write: StorageBuffer; swap(): void }
-export interface SharedUniforms<T extends Record<string, unknown> = Record<string, unknown>> { set(values: Partial<T>): void }
-export type GpuErrorListener = (error: VGPUError) => void;
-/** Ring-1 facade shared by browser, node, and mock entrypoints. */
-export interface Gpu {
-  readonly device: Device;
-  readonly gpu: GPUDevice;
+/**
+ * @deprecated TEMPORARY — removed in T202-05. Each member becomes a free function that takes the
+ * `Gpu` as first argument (`draw(gpu, opts)`, `frame(gpu, cb)`, `createSurface(gpu, canvas)`, ...).
+ */
+export interface LegacyGpuMethods {
   time: number;
   deltaTime: number;
   frameCount: number;
@@ -72,7 +57,6 @@ export interface Gpu {
   sampler(desc?: GPUSamplerDescriptor): GPUSampler;
   geometry(geometry: SceneGeometry): Geometry;
   geometry(options: GeometryOptions): Geometry;
-  dispose(): void;
   compute(source: string | ShaderSource, opts?: ComputeOptions): Compute;
   storage(bytes: number, access?: StorageAccess | StorageOptions): StorageBuffer;
   /** GPU pass timing. Needs the "timestamp-query" device feature — request it at init: init({ requiredFeatures: ["timestamp-query"] }). */
@@ -83,219 +67,115 @@ export interface Gpu {
   pingPongStorage(bytes: number): PingPongStorage;
   uniforms<T extends Record<string, unknown>>(values: T): SharedUniforms<T>;
   bundle(opts: BundleOptions, cb: (recorder: BundleRecorder) => void): Bundle;
-  onError(cb: GpuErrorListener): () => void;
-  settled(): Promise<void>;
 }
 
-export type AdapterFactory = () => VGPUAdapter;
+/** Ring-1 facade shared by browser, node, and mock entrypoints. Shrinks to {@link CoreGpu} in T202-05. */
+export interface Gpu extends CoreGpu, LegacyGpuMethods {}
 
-export async function createGpu(entry: "browser" | "node" | "mock", opts: InitOptions = {}, _unused: InitOptions = {}, adapterFactory?: AdapterFactory): Promise<Gpu> {
-  const device = await createDevice(entry, opts, adapterFactory);
-  return new RingGpu(device);
+export async function createGpu(entry: EntryKind, opts: InitOptions = {}, adapterFactory?: AdapterFactory): Promise<Gpu> {
+  return installLegacyBridge(await createCoreGpu(entry, opts, adapterFactory));
 }
 
-class RingGpu implements Gpu {
-  readonly gpu: GPUDevice;
-  time = 0;
-  deltaTime = 0;
-  frameCount = 0;
-  #lastTimeMs = nowMs();
-  readonly #cache = createBindGroupCache();
-  readonly #pipelineStore: PipelineStore;
-  readonly #shaderModules: ShaderModuleCache;
-  readonly #pipelineLayouts: PipelineLayoutCache;
-  readonly #samplers;
-  readonly #surfaces = new Map<SurfaceCanvas, CanvasSurface>();
-  readonly #errorListeners = new Set<GpuErrorListener>();
-  readonly #pendingDeliveries = new Set<Promise<void>>();
-  /** Query-based features created by this gpu, disposed with it (each drops itself on its own dispose()). */
-  readonly #timers = new Set<Timer>();
-  readonly #visibilities = new Set<Visibility>();
-  /** Render loops started through gpu.frame.loop(), stopped with the gpu (each drops itself when it stops on its own). */
-  readonly #loops = new Set<FrameLoopHandle>();
-  readonly #settledSources = new Set<SettledSource>();
-  #disposed = false;
-  #advancing = false;
-  #clearColorValue: ClearColor = [0, 0, 0, 1];
-  readonly frame: FrameRunner & ((cb?: (frame: Frame) => void) => Frame);
+/** @deprecated TEMPORARY — see the file header. Deleted in T202-05. */
+function installLegacyBridge(core: CoreGpu): Gpu {
+  const kernel = kernelOf(core);
+  const device = kernel.device;
+  let runner: LegacyGpuMethods["frame"] | undefined;
+  let surfaces: Map<SurfaceCanvas, CanvasSurface> | undefined;
+  const errorSink = (error: Parameters<Kernel["reportError"]>[0]) => kernel.reportError(error);
+  const trackSettled = (promise: Promise<unknown>) => kernel.trackDelivery(promise);
 
-  constructor(readonly device: Device) {
-    this.gpu = device.gpu;
-    this.#pipelineStore = createPipelineStore(device, { errorSink: (error) => this.#reportError(error), registerSettledSource: (source) => this.#registerSettledSource(source) });
-    this.#shaderModules = createShaderModuleCache(device);
-    this.#pipelineLayouts = createPipelineLayoutCache(device);
-    this.#samplers = createSamplerCache(device);
-    const runner = new FrameRunner(() => new Frame(device, undefined, (error) => this.#reportError(error), (promise) => this.#trackDelivery(promise), () => this.#clearColorValue), () => this.#advanceFrameState(), (handle) => this.#registerLoop(handle));
-    this.frame = callableFrameRunner(runner);
-  }
+  const methods = {
+    surface(canvas: SurfaceCanvas, opts: SurfaceOptions = {}): Surface {
+      surfaces ??= new Map<SurfaceCanvas, CanvasSurface>();
+      const open = surfaces;
+      const existing = open.get(canvas);
+      if (existing && !existing.disposed) throw surfaceDuplicateError(existing.label);
+      const surface = new CanvasSurface(device, canvas, opts, (s) => {
+        if (open.get(s.canvas) === s) open.delete(s.canvas);
+        releaseAutoResize();
+        releaseOwnership();
+      });
+      // Surfaces resize themselves right after the frame clock advances, and go down with the gpu
+      // before its caches and its device.
+      const releaseAutoResize = frameState(kernel).onAdvance(() => surface.applyAutoResize());
+      const releaseOwnership = kernel.own("resource", () => surface.dispose());
+      open.set(canvas, surface);
+      return surface;
+    },
+    effect(source: string | ShaderSource, opts: EffectOptions = {}): Effect {
+      if (hasGeometry(opts)) throw unsupportedError("gpu.effect", "gpu.effect() never accepts vertex buffers; use gpu.draw({ shader, geometry: gpu.geometry(descriptor) }).");
+      const render = renderService(kernel);
+      return new InternalEffect(device, toWgsl(source), opts, render.binds, undefined, render.pipelines, render.shaderModules, render.pipelineLayouts, errorSink, trackSettled);
+    },
+    draw(opts: DrawOptions): Draw {
+      const shader = toWgsl(opts.shader);
+      const render = renderService(kernel);
+      return new InternalDraw(device, shader, { ...opts, shader }, render.binds, undefined, render.pipelines, render.shaderModules, render.pipelineLayouts, errorSink, trackSettled);
+    },
+    target(opts: TargetOptions): Target { return new OffscreenTarget(device, opts); },
+    sampler(desc?: GPUSamplerDescriptor): GPUSampler { return renderService(kernel).sampler(desc); },
+    geometry(input: SceneGeometry | GeometryOptions): Geometry {
+      return isGeometryOptions(input) ? new Geometry(device, input) : createGeometry(device, input);
+    },
+    compute(source: string | ShaderSource, opts: ComputeOptions = {}): Compute { return new ComputePipeline(device, toWgsl(source), opts, renderService(kernel).binds); },
+    storage(bytes: number, access: StorageAccess | StorageOptions = "read-write"): StorageBuffer {
+      const opts = typeof access === "string" ? { access } : access;
+      return createStorageBuffer(device, bytes, opts.access ?? "read-write", undefined, opts.indirect ?? false);
+    },
+    timer(): Timer {
+      let release = (): void => undefined;
+      const timer: Timer = createTimer(device, {
+        trackSettled,
+        errorSink,
+        onDispose: () => { release(); },
+      });
+      release = kernel.own("resource", () => timer.dispose());
+      return timer;
+    },
+    visibility(options: VisibilityOptions = {}): Visibility {
+      let release = (): void => undefined;
+      const visibility: Visibility = createVisibility(device, options, () => frameState(kernel).frameCount, {
+        trackSettled,
+        errorSink,
+        onDispose: () => { release(); },
+      });
+      release = kernel.own("resource", () => visibility.dispose());
+      return visibility;
+    },
+    pingPong(width: number, height: number, opts: TargetTextureOptions = {}): PingPongTargets { return createPingPongTargets(device, width, height, opts); },
+    pingPongStorage(bytes: number): PingPongStorage { return createPingPongStorage(device, bytes); },
+    uniforms<T extends Record<string, unknown>>(values: T): SharedUniforms<T> { return createSharedUniforms(device, values); },
+    bundle(opts: BundleOptions, cb: (recorder: BundleRecorder) => void): Bundle { return createBundle(device, opts, cb); },
+  };
 
-  get clearColor(): ClearColor { return this.#clearColorValue; }
-  set clearColor(value: ClearColor) {
-    const o = value as any, n = Array.isArray(value) ? value : [o?.r, o?.g, o?.b, o?.a];
-    if (n.length !== 4 || !n.every(Number.isFinite)) throw new VGPUError({ code: "VGPU-CLEAR-COLOR-INVALID", message: "invalid gpu.clearColor.", where: "gpu.clearColor" });
-    this.#clearColorValue = value;
-  }
-
-  surface(canvas: SurfaceCanvas, opts: SurfaceOptions = {}): Surface {
-    const existing = this.#surfaces.get(canvas);
-    if (existing && !existing.disposed) throw surfaceDuplicateError(existing.label);
-    const surface = new CanvasSurface(this.device, canvas, opts, (s) => {
-      if (this.#surfaces.get(s.canvas) === s) this.#surfaces.delete(s.canvas);
-    });
-    this.#surfaces.set(canvas, surface);
-    return surface;
-  }
-  effect(source: string | ShaderSource, opts: EffectOptions = {}): Effect {
-    if (hasGeometry(opts)) throw unsupportedError("gpu.effect", "gpu.effect() never accepts vertex buffers; use gpu.draw({ shader, geometry: gpu.geometry(descriptor) }).");
-    return new InternalEffect(this.device, toWgsl(source), opts, this.#cache, undefined, this.#pipelineStore, this.#shaderModules, this.#pipelineLayouts, (error) => this.#reportError(error), (promise) => this.#trackDelivery(promise));
-  }
-  draw(opts: DrawOptions): Draw {
-    const shader = toWgsl(opts.shader);
-    return new InternalDraw(this.device, shader, { ...opts, shader }, this.#cache, undefined, this.#pipelineStore, this.#shaderModules, this.#pipelineLayouts, (error) => this.#reportError(error), (promise) => this.#trackDelivery(promise));
-  }
-  target(opts: TargetOptions): Target { return new OffscreenTarget(this.device, opts); }
-  sampler(desc?: GPUSamplerDescriptor): GPUSampler { return this.#samplers.sampler(desc); }
-  geometry(geometry: SceneGeometry): Geometry;
-  geometry(options: GeometryOptions): Geometry;
-  geometry(input: SceneGeometry | GeometryOptions): Geometry {
-    return isGeometryOptions(input) ? new Geometry(this.device, input) : createGeometry(this.device, input);
-  }
-  dispose(): void {
-    if (this.#disposed) return;
-    this.#disposed = true;
-    // Stop scheduling first: a loop left running would keep encoding frames against a disposed
-    // device (and a rAF tick landing mid-teardown would throw from inside the scheduler).
-    for (const loop of [...this.#loops]) loop.stop();
-    this.#loops.clear();
-    for (const surface of [...this.#surfaces.values()]) surface.dispose();
-    // Query features own a query set plus resolve/staging buffers: release them with the gpu that made them.
-    for (const timer of [...this.#timers]) timer.dispose();
-    for (const visibility of [...this.#visibilities]) visibility.dispose();
-    this.#timers.clear();
-    this.#visibilities.clear();
-    this.#pipelineStore.dispose();
-    this.#shaderModules.dispose();
-    this.#pipelineLayouts.dispose();
-    this.#cache.dispose();
-    this.#settledSources.clear();
-    this.device.dispose();
-  }
-  compute(source: string | ShaderSource, opts: ComputeOptions = {}): Compute { return new ComputePipeline(this.device, toWgsl(source), opts, this.#cache); }
-  storage(bytes: number, access: StorageAccess | StorageOptions = "read-write"): StorageBuffer {
-    const opts = typeof access === "string" ? { access } : access;
-    return createStorageBuffer(this.device, bytes, opts.access ?? "read-write", undefined, opts.indirect ?? false);
-  }
-  timer(): Timer {
-    const timer: Timer = createTimer(this.device, {
-      trackSettled: (promise) => this.#trackDelivery(promise),
-      errorSink: (error) => this.#reportError(error),
-      onDispose: () => { this.#timers.delete(timer); },
-    });
-    this.#timers.add(timer);
-    return timer;
-  }
-  visibility(options: VisibilityOptions = {}): Visibility {
-    const visibility: Visibility = createVisibility(this.device, options, () => this.frameCount, {
-      trackSettled: (promise) => this.#trackDelivery(promise),
-      errorSink: (error) => this.#reportError(error),
-      onDispose: () => { this.#visibilities.delete(visibility); },
-    });
-    this.#visibilities.add(visibility);
-    return visibility;
-  }
-  pingPong(width: number, height: number, opts: TargetTextureOptions = {}): PingPongTargets { return createPingPongTargets(this.device, width, height, opts); }
-  pingPongStorage(bytes: number): PingPongStorage { return createPingPongStorage(this.device, bytes); }
-  uniforms<T extends Record<string, unknown>>(values: T): SharedUniforms<T> { return createSharedUniforms(this.device, values); }
-  bundle(opts: BundleOptions, cb: (recorder: BundleRecorder) => void): Bundle { return createBundle(this.device, opts, cb); }
-
-  onError(cb: GpuErrorListener): () => void {
-    this.#errorListeners.add(cb);
-    return () => { this.#errorListeners.delete(cb); };
-  }
-
-  async settled(): Promise<void> {
-    const snapshot = [
-      ...this.#pendingDeliveries,
-      ...[...this.#settledSources].flatMap((source) => source()),
-    ];
-    await Promise.allSettled(snapshot);
-  }
-
-  #registerLoop(handle: FrameLoopHandle): () => void {
-    this.#loops.add(handle);
-    return () => { this.#loops.delete(handle); };
-  }
-
-  #registerSettledSource(source: SettledSource): () => void {
-    this.#settledSources.add(source);
-    return () => { this.#settledSources.delete(source); };
-  }
-
-  #reportError(error: VGPUError): Promise<void> {
-    if (this.#disposed) return Promise.resolve();
-    const delivery = Promise.resolve().then(() => {
-      const listeners = [...this.#errorListeners];
-      if (!listeners.length) {
-        console.error(error);
-        return;
-      }
-      for (const listener of listeners) {
-        try { listener(error); }
-        catch (listenerError) { console.error(listenerError); }
-      }
-    });
-    return this.#trackDelivery(delivery);
-  }
-
-  #trackDelivery(promise: Promise<unknown>): Promise<void> {
-    const tracked = Promise.resolve(promise).then(() => undefined, (error) => { console.error(error); });
-    this.#pendingDeliveries.add(tracked);
-    void tracked.finally(() => this.#pendingDeliveries.delete(tracked));
-    return tracked;
-  }
-
-  #advanceFrameState(): void {
-    if (this.#advancing) throw frameReentrantError();
-    this.#advancing = true;
-    try {
-      this.#advanceTime();
-      for (const surface of this.#surfaces.values()) surface.applyAutoResize();
-    } finally {
-      this.#advancing = false;
-    }
-  }
-
-  #advanceTime(): void {
-    const next = nowMs();
-    this.deltaTime = Math.max(0, (next - this.#lastTimeMs) / 1000);
-    this.time += this.deltaTime;
-    this.#lastTimeMs = next;
-    this.frameCount += 1;
-  }
+  Object.defineProperties(core, {
+    time: { get: () => frameState(kernel).time, set: (value: number) => { frameState(kernel).time = value; }, enumerable: true, configurable: true },
+    deltaTime: { get: () => frameState(kernel).deltaTime, set: (value: number) => { frameState(kernel).deltaTime = value; }, enumerable: true, configurable: true },
+    frameCount: { get: () => frameState(kernel).frameCount, set: (value: number) => { frameState(kernel).frameCount = value; }, enumerable: true, configurable: true },
+    clearColor: { get: () => frameState(kernel).clearColor, set: (value: ClearColor) => { frameState(kernel).clearColor = value; }, enumerable: true, configurable: true },
+    frame: { get: () => (runner ??= createFrameRunner(kernel)), enumerable: true, configurable: true },
+  });
+  return Object.assign(core, methods) as Gpu;
 }
 
-async function createDevice(entry: "browser" | "node" | "mock", opts: InitOptions, adapterFactory?: AdapterFactory): Promise<Device> {
-  if (opts.adapter || adapterFactory) return (opts.adapter ?? adapterFactory!()).requestDevice(opts);
-  if (entry === "browser") return requestBrowserDevice(opts);
-  throw unsupportedError("init", `init(${entry}) requires adapterFactory.`);
-}
-
-function callableFrameRunner(runner: FrameRunner): FrameRunner & ((cb?: (frame: Frame) => void) => Frame) {
-  const callable = ((cb?: (frame: Frame) => void) => runner.frame(cb)) as FrameRunner & ((cb?: (frame: Frame) => void) => Frame);
+/**
+ * @deprecated TEMPORARY — moves to `frame.ts` as `frame(gpu, cb)` / `frameLoop(gpu, cb)` in T202-02.
+ * Loops register in the kernel's `scheduler` phase so `dispose()` stops them before touching the device.
+ */
+function createFrameRunner(kernel: Kernel): LegacyGpuMethods["frame"] {
+  const state = frameState(kernel);
+  const runner = new FrameRunner(
+    () => new Frame(kernel.device, undefined, (error) => kernel.reportError(error), (promise) => kernel.trackDelivery(promise), () => state.clearColor),
+    () => state.advance(),
+    (handle) => kernel.own("scheduler", () => handle.stop()),
+  );
+  const callable = ((cb?: (frame: Frame) => void) => runner.frame(cb)) as LegacyGpuMethods["frame"];
   Object.setPrototypeOf(callable, FrameRunner.prototype);
   Object.assign(callable, runner);
   callable.frame = runner.frame.bind(runner);
   callable.loop = runner.loop.bind(runner);
   return callable;
-}
-
-async function requestBrowserDevice(opts: InitOptions): Promise<Device> {
-  const nav = globalThis.navigator as Navigator & { gpu?: GPU };
-  const adapter = await nav.gpu?.requestAdapter({ powerPreference: opts.powerPreference });
-  if (!adapter) throw unsupportedError("init", "navigator.gpu.requestAdapter() returned null.");
-  validateRequiredFeatures(adapter.features, opts.requiredFeatures);
-  const gpuDevice = await adapter.requestDevice({ requiredFeatures: opts.requiredFeatures, requiredLimits: opts.requiredLimits });
-  return new Device(gpuDevice, adapter.info ?? null);
 }
 
 function hasGeometry(opts: EffectOptions): boolean {
@@ -305,5 +185,3 @@ function hasGeometry(opts: EffectOptions): boolean {
 function isGeometryOptions(value: SceneGeometry | GeometryOptions): value is GeometryOptions {
   return typeof value === "object" && value !== null && "buffers" in value;
 }
-
-function nowMs(): number { return globalThis.performance?.now?.() ?? Date.now(); }

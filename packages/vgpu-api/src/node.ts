@@ -25,6 +25,6 @@ export async function init(options: NodeInitOptions = {}): Promise<NodeGpu> {
   const requested = override ?? options.adapter ?? "auto";
   const custom = typeof requested === "object" ? requested : undefined;
   const { adapter: _, ...deviceOptions } = options;
-  const gpu = await createGpu("node", custom ? { ...deviceOptions, adapter: custom } : deviceOptions, {}, () => createNodeAdapter({ adapter: typeof requested === "string" ? requested : "auto" }));
+  const gpu = await createGpu("node", custom ? { ...deviceOptions, adapter: custom } : deviceOptions, () => createNodeAdapter({ adapter: typeof requested === "string" ? requested : "auto" }));
   return Object.assign(gpu, { adapter: Object.freeze(describeNodeAdapter(gpu.device.adapterInfo)) });
 }
