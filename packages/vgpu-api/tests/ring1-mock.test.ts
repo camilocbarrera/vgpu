@@ -39,14 +39,14 @@ struct Camera { value: f32 }
 
 test("set() writes lib-owned values in-place and keeps bind group stable on mock", async () => {
   const gpu = await init();
-  const wave = gpu.effect(WAVE, { label: "wave" });
-  const target = gpu.target({ size: [4, 4] });
+  const wave = effect(gpu, WAVE, { label: "wave" });
+  const colorTarget = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
   wave.set({ speed: 2 });
-  gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(wave)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
   wave.set({ time: 0.5 });
-  gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(wave)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
 
   expect(mock.calls.createBuffer).toBe(1);
   expect(mock.calls.createBindGroup).toBe(1);
@@ -55,12 +55,12 @@ test("set() writes lib-owned values in-place and keeps bind group stable on mock
 
 test("creation-time set sugar is exactly an initial set()", async () => {
   const gpu = await init();
-  const wave = gpu.effect(WAVE, { label: "wave", set: { speed: 2 } });
-  const target = gpu.target({ size: [4, 4] });
+  const wave = effect(gpu, WAVE, { label: "wave", set: { speed: 2 } });
+  const colorTarget = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
   wave.set({ time: 0.25 });
-  gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(wave)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
 
   expect(mock.calls.createBuffer).toBe(1);
   expect(mock.calls.createBindGroup).toBe(1);
@@ -69,7 +69,7 @@ test("creation-time set sugar is exactly an initial set()", async () => {
 
 test("R1 ownership flip reports canonical fix-it text", async () => {
   const gpu = await init();
-  const wave = gpu.effect(WAVE, { label: "wave" });
+  const wave = effect(gpu, WAVE, { label: "wave" });
   wave.set({ speed: 2 });
   const userBuffer = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
 
@@ -82,10 +82,10 @@ test("R1 ownership flip reports canonical fix-it text", async () => {
 
 test("binding never set, including samplers, reports canonical no-phantom-resource error", async () => {
   const gpu = await init();
-  const lighting = gpu.effect(SAMPLER_SHADER, { label: "lighting" });
-  const target = gpu.target({ size: [4, 4] });
+  const lighting = effect(gpu, SAMPLER_SHADER, { label: "lighting" });
+  const colorTarget = target(gpu, { size: [4, 4] });
 
-  expect(() => gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(lighting)))).toThrowError(
+  expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(lighting)))).toThrowError(
     "Unset `samp` @group(0) @binding(0) in 'lighting'. Fix: lighting.set({samp:gpu.sampler()}); " +
       "or lighting.group(0, bindGroup).",
   );
@@ -94,27 +94,27 @@ test("binding never set, including samplers, reports canonical no-phantom-resour
 
 test("missing texture binding reports a texture-specific fix-it", async () => {
   const gpu = await init();
-  const post = gpu.effect(TEXTURE_SHADER, { label: "post" });
-  const target = gpu.target({ size: [4, 4] });
+  const post = effect(gpu, TEXTURE_SHADER, { label: "post" });
+  const colorTarget = target(gpu, { size: [4, 4] });
 
-  expect(() => gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(post)))).toThrowError(/post\.set\(\{src:scene\.color\}\)/);
+  expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(post)))).toThrowError(/post\.set\(\{src:scene\.color\}\)/);
   gpu.dispose();
 });
 
 test("R2 cache hits when alternating between two user-owned resource identities", async () => {
   const gpu = await init();
-  const draw = gpu.effect(CAMERA_SHADER, { label: "cameraPass" });
-  const target = gpu.target({ size: [4, 4] });
+  const drawable = effect(gpu, CAMERA_SHADER, { label: "cameraPass" });
+  const colorTarget = target(gpu, { size: [4, 4] });
   const a = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
   const b = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
-  draw.set({ camera: a });
-  gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(draw)));
-  draw.set({ camera: b });
-  gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(draw)));
-  draw.set({ camera: a });
-  gpu.frame((frame) => frame.pass({ target }, (p) => p.draw(draw)));
+  drawable.set({ camera: a });
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(drawable)));
+  drawable.set({ camera: b });
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(drawable)));
+  drawable.set({ camera: a });
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(drawable)));
 
   expect(mock.calls.createBindGroup).toBe(2);
   gpu.dispose();
@@ -122,7 +122,7 @@ test("R2 cache hits when alternating between two user-owned resource identities"
 
 test("bundle back-refs stale only on identity changes, never lib-owned in-place writes", async () => {
   const gpu = await init();
-  const wave = gpu.effect(WAVE, { label: "wave", set: { speed: 2 } });
+  const wave = effect(gpu, WAVE, { label: "wave", set: { speed: 2 } });
   const events: unknown[] = [];
   registerDrawBundle(effectDraw(wave), { id: "bundle", markStale: (event) => { events.push(event); } });
 
@@ -130,7 +130,7 @@ test("bundle back-refs stale only on identity changes, never lib-owned in-place 
   wave.set({ speed: 3 });
   expect(events).toEqual([]);
 
-  const camera = gpu.draw({ shader: CAMERA_SHADER, label: "camera" });
+  const camera = draw(gpu, { shader: CAMERA_SHADER, label: "camera" });
   const a = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
   const b = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
   camera.set({ camera: a });
@@ -144,13 +144,13 @@ test("bundle back-refs stale only on identity changes, never lib-owned in-place 
 
 test("set() accepts Targets as texture resources and uses color texture identity", async () => {
   const gpu = await init();
-  const post = gpu.effect(TEXTURE_SHADER, { label: "post" });
-  const target = gpu.target({ size: [4, 4] });
-  const output = gpu.target({ size: [4, 4] });
+  const post = effect(gpu, TEXTURE_SHADER, { label: "post" });
+  const colorTarget = target(gpu, { size: [4, 4] });
+  const output = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
-  post.set({ src: target });
-  gpu.frame((frame) => frame.pass({ target: output }, (p) => p.draw(post)));
+  post.set({ src: colorTarget });
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: output }, (p) => p.draw(post)));
 
   expect(mock.calls.createBindGroup).toBe(1);
   gpu.dispose();
@@ -158,13 +158,13 @@ test("set() accepts Targets as texture resources and uses color texture identity
 
 test("plain draws sampling a resized target rebind with fresh bind groups across repeated resizes and no pipeline creates", async () => {
   const gpu = await init();
-  const post = gpu.effect(TEXTURE_SHADER, { label: "post" });
-  const source = gpu.target({ size: [4, 4] });
-  const output = gpu.target({ size: [4, 4] });
+  const post = effect(gpu, TEXTURE_SHADER, { label: "post" });
+  const source = target(gpu, { size: [4, 4] });
+  const output = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
   post.set({ src: source });
-  gpu.frame((frame) => frame.pass({ target: output }, (p) => p.draw(post)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: output }, (p) => p.draw(post)));
   const bindGroupsBeforeResize = mock.calls.createBindGroup;
   const pipelinesBeforeResize = mock.calls.createRenderPipeline;
   const asyncPipelinesBeforeResize = mock.calls.createRenderPipelineAsync;
@@ -172,20 +172,20 @@ test("plain draws sampling a resized target rebind with fresh bind groups across
   source.resize([8, 8]);
   expect(mock.calls.createRenderPipeline).toBe(pipelinesBeforeResize);
   expect(mock.calls.createRenderPipelineAsync).toBe(asyncPipelinesBeforeResize);
-  gpu.frame((frame) => frame.pass({ target: output }, (p) => p.draw(post)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: output }, (p) => p.draw(post)));
   expect(mock.calls.createBindGroup).toBe(bindGroupsBeforeResize + 1);
 
   source.resize([16, 16]);
   expect(mock.calls.createRenderPipeline).toBe(pipelinesBeforeResize);
   expect(mock.calls.createRenderPipelineAsync).toBe(asyncPipelinesBeforeResize);
-  gpu.frame((frame) => frame.pass({ target: output }, (p) => p.draw(post)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: output }, (p) => p.draw(post)));
   expect(mock.calls.createBindGroup).toBe(bindGroupsBeforeResize + 2);
 
   post.set({ src: source });
   source.resize([32, 32]);
   expect(mock.calls.createRenderPipeline).toBe(pipelinesBeforeResize);
   expect(mock.calls.createRenderPipelineAsync).toBe(asyncPipelinesBeforeResize);
-  gpu.frame((frame) => frame.pass({ target: output }, (p) => p.draw(post)));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: output }, (p) => p.draw(post)));
   expect(mock.calls.createBindGroup).toBe(bindGroupsBeforeResize + 3);
   expect(mock.calls.createRenderPipeline).toBe(pipelinesBeforeResize);
   expect(mock.calls.createRenderPipelineAsync).toBe(asyncPipelinesBeforeResize);
@@ -194,10 +194,10 @@ test("plain draws sampling a resized target rebind with fresh bind groups across
 
 test("target recreation subscriptions refresh across repeated resizes and are removed on re-set", async () => {
   const gpu = await init();
-  const post = gpu.draw({ shader: TEXTURE_SHADER, label: "post" });
-  const sourceA = gpu.target({ size: [4, 4] });
-  const sourceB = gpu.target({ size: [4, 4] });
-  const sourceC = gpu.target({ size: [4, 4] });
+  const post = draw(gpu, { shader: TEXTURE_SHADER, label: "post" });
+  const sourceA = target(gpu, { size: [4, 4] });
+  const sourceB = target(gpu, { size: [4, 4] });
+  const sourceC = target(gpu, { size: [4, 4] });
   const events: unknown[] = [];
 
   post.set({ src: sourceA });
@@ -232,9 +232,9 @@ test("target recreation subscriptions refresh across repeated resizes and are re
 
 test("resizing a target only drawn onto does not emit bind-group stale events", async () => {
   const gpu = await init();
-  const post = gpu.draw({ shader: TEXTURE_SHADER, label: "post" });
-  const sampled = gpu.target({ size: [4, 4] });
-  const output = gpu.target({ size: [4, 4] });
+  const post = draw(gpu, { shader: TEXTURE_SHADER, label: "post" });
+  const sampled = target(gpu, { size: [4, 4] });
+  const output = target(gpu, { size: [4, 4] });
   const events: unknown[] = [];
 
   post.set({ src: sampled });
@@ -247,10 +247,10 @@ test("resizing a target only drawn onto does not emit bind-group stale events", 
 
 test("set() validates resource kind against reflection before WebGPU bind-group creation", async () => {
   const gpu = await init();
-  const lighting = gpu.effect(SAMPLER_SHADER, { label: "lighting" });
-  const target = gpu.target({ size: [4, 4] });
+  const lighting = effect(gpu, SAMPLER_SHADER, { label: "lighting" });
+  const colorTarget = target(gpu, { size: [4, 4] });
 
-  expect(() => lighting.set({ samp: target })).toThrowError(/needs sampler/);
+  expect(() => lighting.set({ samp: colorTarget })).toThrowError(/needs sampler/);
   gpu.dispose();
 });
 
@@ -258,20 +258,20 @@ test("set() validates resource kind against reflection before WebGPU bind-group 
 test("surface resize reallocates canvas dimensions and notifies on explicit and auto resize", async () => {
   const canvas = mockCanvas(10, 5);
   const gpu = await initBrowser({ adapter: createMockAdapter() });
-  const surface = gpu.surface(canvas, { dpr: 2 });
+  const canvasSurface = surface(gpu, canvas, { dpr: 2 });
   const seen: readonly [number, number][] = [];
-  surface.onResize(({ width, height }) => { seen.push([width, height]); });
+  canvasSurface.onResize(({ width, height }) => { seen.push([width, height]); });
 
-  expect(surface.size).toEqual([20, 10]);
-  surface.resize([30, 12]);
+  expect(canvasSurface.size).toEqual([20, 10]);
+  canvasSurface.resize([30, 12]);
   expect(canvas.width).toBe(30);
   expect(canvas.height).toBe(12);
   expect(seen).toEqual([[20, 10], [30, 12]]);
 
   canvas.clientWidth = 20;
   canvas.clientHeight = 10;
-  gpu.frame();
-  expect(surface.size).toEqual([40, 20]);
+  frame(gpu);
+  expect(canvasSurface.size).toEqual([40, 20]);
   expect(seen).toEqual([[20, 10], [30, 12], [40, 20]]);
   gpu.dispose();
 });
@@ -345,11 +345,11 @@ test("frame(gpu) and gpu.frame drive the same runner: the clock advances once an
   const fx = effect(gpu, FREE_FN_FRAGMENT);
 
   frame(gpu, (f) => f.pass(scene, fx));
-  gpu.frame((f) => f.pass(scene, fx));
+  frame(gpu, (f) => f.pass(scene, fx));
   expect(gpu.frameCount).toBe(2);
 
-  expect(codeOf(() => frame(gpu, () => { gpu.frame(() => undefined); }))).toBe("VGPU-FRAME-REENTRANT");
-  expect(codeOf(() => gpu.frame(() => { frame(gpu, () => undefined); }))).toBe("VGPU-FRAME-REENTRANT");
+  expect(codeOf(() => frame(gpu, () => { frame(gpu, () => undefined); }))).toBe("VGPU-FRAME-REENTRANT");
+  expect(codeOf(() => frame(gpu, () => { frame(gpu, () => undefined); }))).toBe("VGPU-FRAME-REENTRANT");
   gpu.dispose();
 });
 

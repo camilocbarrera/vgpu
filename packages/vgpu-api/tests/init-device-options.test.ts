@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { createMockGPUDevice, Device, type CreateDeviceOptions, type VGPUAdapter } from "@vgpu/core";
-import { init as initBrowser } from "../src/index.ts";
+import { init as initBrowser, draw, effect, frame } from "../src/index.ts";
 import { createMockAdapter, init } from "../src/mock.ts";
 import { kernelOf } from "../src/kernel.ts";
 import { renderServiceToken } from "../src/render-service.ts";
@@ -87,22 +87,22 @@ test("init builds only the core gpu: no caches, frame runner, surfaces or query 
   expect(kernel.peekService(frameStateToken)).toBeUndefined();
   expect(gpu.disposed).toBe(false);
 
-  const effect = gpu.effect(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+  const shader1 = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
   const render = kernel.peekService(renderServiceToken);
   expect(render).toBeDefined();
   expect(kernel.peekService(frameStateToken)).toBeUndefined();
 
   // Render family shares one service instance, so draw/effect share pipeline and bind caches.
-  gpu.draw({ shader: `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }` });
+  draw(gpu, { shader: `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }` });
   expect(kernel.peekService(renderServiceToken)).toBe(render);
 
   // Frame state appears with the first frame — reading the accessor still builds nothing, because
   // the runner itself is the kernel service frame(gpu, cb) resolves on its first call.
   void gpu.frame;
   expect(kernel.peekService(frameStateToken)).toBeUndefined();
-  gpu.frame().cancel();
+  frame(gpu).cancel();
   expect(kernel.peekService(frameStateToken)).toBeDefined();
-  expect(effect).toBeDefined();
+  expect(shader1).toBeDefined();
   gpu.dispose();
 });
 

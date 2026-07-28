@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { FrameRunner } from "../src/frame.ts";
-import { init } from "../src/mock.ts";
+import { init, effect, frame, frameLoop, target } from "../src/mock.ts";
 
 type RafCallback = (timestamp: number) => void;
 
@@ -47,13 +47,13 @@ test("FrameRunner.loop caps callbacks to the requested fps", () => {
 test("gpu.dispose() stops the render loops that gpu started", async () => {
   const callbacks = mockAnimationFrames();
   const gpu = await init();
-  const target = gpu.target({ size: [4, 4] });
-  const effect = gpu.effect(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+  const colorTarget = target(gpu, { size: [4, 4] });
+  const shader = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
 
   let calls = 0;
-  gpu.frame.loop((frame) => {
+  frameLoop(gpu, (currentFrame) => {
     calls += 1;
-    frame.pass(target, effect);
+    currentFrame.pass(colorTarget, shader);
   });
   fire(callbacks, 1, 0);
   expect(calls).toBe(1);
@@ -74,7 +74,7 @@ test("a loop stopped by hand is untracked, so gpu.dispose() has nothing left to 
   const gpu = await init();
 
   let calls = 0;
-  const handle = gpu.frame.loop(() => { calls += 1; });
+  const handle = frameLoop(gpu, () => { calls += 1; });
   fire(callbacks, 1, 0);
   handle.stop();
   expect(callbacks.size).toBe(0);
@@ -87,7 +87,7 @@ test("disposing the gpu inside its loop callback does not enqueue one final tick
   const callbacks = mockAnimationFrames();
   const gpu = await init();
 
-  gpu.frame.loop(() => { gpu.dispose(); });
+  frameLoop(gpu, () => { gpu.dispose(); });
   fire(callbacks, 1, 0);
 
   // dispose() ran while tick 1 was executing. The tick must observe stop() before scheduling tick 2.
@@ -117,12 +117,12 @@ test("dispose stops the loops before the device goes down, then tears down once"
   const gpu = await init();
   const order: string[] = [];
 
-  const handle = gpu.frame.loop(() => undefined);
+  const handle = frameLoop(gpu, () => undefined);
   const stop = handle.stop.bind(handle);
   handle.stop = () => { order.push("loop.stop"); stop(); };
-  const target = gpu.target({ size: [4, 4] });
-  const effect = gpu.effect(`@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
-  gpu.frame((frame) => frame.pass(target, effect)); // materializes the pipeline cache
+  const colorTarget = target(gpu, { size: [4, 4] });
+  const shader = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+  frame(gpu, (currentFrame) => currentFrame.pass(colorTarget, shader)); // materializes the pipeline cache
   vi.spyOn(gpu.device, "dispose").mockImplementation(() => { order.push("device.dispose"); });
 
   gpu.dispose();

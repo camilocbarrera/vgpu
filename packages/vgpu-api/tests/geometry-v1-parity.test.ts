@@ -1,6 +1,6 @@
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { expect, test } from "vitest";
-import { init } from "../src/mock.ts";
+import { init, draw, geometry, target } from "../src/mock.ts";
 import { geometry as geometryOf } from "../src/scene/geometry-descriptor.ts";
 import {
   box,
@@ -63,19 +63,19 @@ struct VertexOut {
 }
 `;
 
-test("gpu.geometry(scene geometry) v1 parity: layouts, counts, buffers, and usages", async () => {
+test("geometry(gpu, scene geometry) v1 parity: layouts, counts, buffers, and usages", async () => {
   const gpu = await init();
   try {
     const snapshot: Record<string, unknown> = {};
     for (const [kind, descriptor] of GEOMETRIES) {
-      const geometry = gpu.geometry(descriptor);
+      const geo = geometry(gpu, descriptor);
       snapshot[kind] = {
-        vertexCount: geometry.vertexCount,
-        indexCount: geometry.indexCount,
-        indexFormat: geometry.indexFormat,
-        vertexBufferLayouts: geometry.vertexBufferLayouts,
-        vertexBuffers: geometry.vertexBuffers?.map(bufferSummary),
-        indexBuffer: geometry.indexBuffer ? bufferSummary(geometry.indexBuffer) : undefined,
+        vertexCount: geo.vertexCount,
+        indexCount: geo.indexCount,
+        indexFormat: geo.indexFormat,
+        vertexBufferLayouts: geo.vertexBufferLayouts,
+        vertexBuffers: geo.vertexBuffers?.map(bufferSummary),
+        indexBuffer: geo.indexBuffer ? bufferSummary(geo.indexBuffer) : undefined,
       };
     }
 
@@ -762,14 +762,14 @@ test("gpu.geometry(scene geometry) v1 parity: layouts, counts, buffers, and usag
   }
 });
 
-test("gpu.geometry(scene geometry) v1 parity: mock pipeline descriptor receives exact vertex layout", async () => {
+test("geometry(gpu, scene geometry) v1 parity: mock pipeline descriptor receives exact vertex layout", async () => {
   const gpu = await init();
   try {
-    const geometry = gpu.geometry(capsule());
-    const target = gpu.target({ size: [4, 4], format: "rgba8unorm" });
-    const draw = gpu.draw({ shader: PRIMITIVE_SHADER, geometry, label: "geometry-v1-parity-capsule" });
+    const geo = geometry(gpu, capsule());
+    const colorTarget = target(gpu, { size: [4, 4], format: "rgba8unorm" });
+    const drawable = draw(gpu, { shader: PRIMITIVE_SHADER, geometry: geo, label: "geometry-v1-parity-capsule" });
 
-    draw.pipelineFor(target);
+    drawable.pipelineFor(colorTarget);
 
     const instrumentation = getMockGPUDeviceInstrumentation(gpu.device.gpu);
     expect(instrumentation.createRenderPipelineDescriptors).toHaveLength(1);
@@ -904,7 +904,7 @@ test("geometry(gpu, recipe) matches the facade upload for every primitive kind",
   const gpu = await init();
   try {
     for (const [kind, recipe] of GEOMETRIES) {
-      const viaFacade = gpu.geometry(recipe);
+      const viaFacade = geometry(gpu, recipe);
       const viaFactory = geometryOf(gpu, recipe);
       expect({ kind, ...summarize(viaFactory) }).toEqual({ kind, ...summarize(viaFacade) });
     }
@@ -963,14 +963,14 @@ test("the same recipe value can be uploaded to two gpus", async () => {
   second.dispose();
 });
 
-function summarize(geometry: ReturnType<typeof geometryOf>): Record<string, unknown> {
+function summarize(geo: ReturnType<typeof geometryOf>): Record<string, unknown> {
   return {
-    vertexCount: geometry.vertexCount,
-    indexCount: geometry.indexCount,
-    indexFormat: geometry.indexFormat,
-    topology: geometry.topology,
-    vertexBufferLayouts: geometry.vertexBufferLayouts,
-    vertexBuffers: geometry.vertexBuffers.map(bufferSummary),
-    indexBuffer: geometry.indexBuffer ? bufferSummary(geometry.indexBuffer) : undefined,
+    vertexCount: geo.vertexCount,
+    indexCount: geo.indexCount,
+    indexFormat: geo.indexFormat,
+    topology: geo.topology,
+    vertexBufferLayouts: geo.vertexBufferLayouts,
+    vertexBuffers: geo.vertexBuffers.map(bufferSummary),
+    indexBuffer: geo.indexBuffer ? bufferSummary(geo.indexBuffer) : undefined,
   };
 }

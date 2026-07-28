@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
-import { createMockAdapter, init } from "../src/mock.ts";
+import { createMockAdapter, init, bundle, draw, effect, frame, surface, target } from "../src/mock.ts";
 import { init as initBrowser } from "../src/index.ts";
 
 const DRAW_SHADER = `
@@ -24,8 +24,8 @@ test("blend presets are emitted on render pipeline targets", async () => {
 
   for (const [preset, expected] of cases) {
     const gpu = await init();
-    const target = gpu.target({ size: [2, 2] });
-    gpu.draw({ shader: DRAW_SHADER, blend: preset }).draw(target);
+    const colorTarget = target(gpu, { size: [2, 2] });
+    draw(gpu, { shader: DRAW_SHADER, blend: preset }).draw(colorTarget);
     const desc = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors.at(-1);
     expect(desc?.fragment?.targets?.[0]).toMatchObject({ format: "rgba8unorm", blend: expected });
     gpu.dispose();
@@ -34,10 +34,10 @@ test("blend presets are emitted on render pipeline targets", async () => {
 
 test("custom blend defaults op and alpha; writeMask normalizes arrays", async () => {
   const gpu = await init();
-  const target = gpu.target({ size: [2, 2] });
-  gpu.draw({ shader: DRAW_SHADER, label: "custom", blend: { color: { src: "one", dst: "zero" } }, writeMask: ["r", "g", "b"] }).draw(target);
-  gpu.draw({ shader: DRAW_SHADER, label: "empty-mask", writeMask: [] }).draw(target);
-  gpu.draw({ shader: DRAW_SHADER, label: "default-mask" }).draw(target);
+  const colorTarget = target(gpu, { size: [2, 2] });
+  draw(gpu, { shader: DRAW_SHADER, label: "custom", blend: { color: { src: "one", dst: "zero" } }, writeMask: ["r", "g", "b"] }).draw(colorTarget);
+  draw(gpu, { shader: DRAW_SHADER, label: "empty-mask", writeMask: [] }).draw(colorTarget);
+  draw(gpu, { shader: DRAW_SHADER, label: "default-mask" }).draw(colorTarget);
 
   const descs = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors;
   expect(descs.at(-3)?.fragment?.targets?.[0]).toMatchObject({
@@ -51,17 +51,17 @@ test("custom blend defaults op and alpha; writeMask normalizes arrays", async ()
 
 test("invalid blend and writeMask options fail at draw construction", async () => {
   const gpu = await init();
-  expect(() => gpu.draw({ shader: DRAW_SHADER, label: "badBlend", blend: "screen" as never })).toThrowError(/VGPU-BLEND-INVALID|Invalid blend/);
-  expect(() => gpu.draw({ shader: DRAW_SHADER, label: "badObject", blend: { alpha: { src: "one", dst: "zero" } } as never })).toThrowError(/VGPU-BLEND-INVALID|Invalid blend/);
-  expect(() => gpu.draw({ shader: DRAW_SHADER, label: "badMask", writeMask: "rgb" as never })).toThrowError(/VGPU-WRITEMASK-INVALID|Invalid writeMask/);
-  expect(() => gpu.draw({ shader: DRAW_SHADER, label: "badChannel", writeMask: ["r", "x"] as never })).toThrowError(/VGPU-WRITEMASK-INVALID|Invalid writeMask/);
+  expect(() => draw(gpu, { shader: DRAW_SHADER, label: "badBlend", blend: "screen" as never })).toThrowError(/VGPU-BLEND-INVALID|Invalid blend/);
+  expect(() => draw(gpu, { shader: DRAW_SHADER, label: "badObject", blend: { alpha: { src: "one", dst: "zero" } } as never })).toThrowError(/VGPU-BLEND-INVALID|Invalid blend/);
+  expect(() => draw(gpu, { shader: DRAW_SHADER, label: "badMask", writeMask: "rgb" as never })).toThrowError(/VGPU-WRITEMASK-INVALID|Invalid writeMask/);
+  expect(() => draw(gpu, { shader: DRAW_SHADER, label: "badChannel", writeMask: ["r", "x"] as never })).toThrowError(/VGPU-WRITEMASK-INVALID|Invalid writeMask/);
   gpu.dispose();
 });
 
 test("effect options pass blend and writeMask through to the fullscreen draw", async () => {
   const gpu = await init();
-  const target = gpu.target({ size: [2, 2] });
-  gpu.effect(EFFECT_SHADER, { blend: "additive", writeMask: ["a"] }).draw(target);
+  const colorTarget = target(gpu, { size: [2, 2] });
+  effect(gpu, EFFECT_SHADER, { blend: "additive", writeMask: ["a"] }).draw(colorTarget);
   const desc = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors.at(-1);
   expect(desc?.fragment?.targets?.[0]).toMatchObject({
     blend: { color: { srcFactor: "one", dstFactor: "one", operation: "add" }, alpha: { srcFactor: "one", dstFactor: "one", operation: "add" } },
@@ -73,9 +73,9 @@ test("effect options pass blend and writeMask through to the fullscreen draw", a
 test("frame.pass clear false preserves color and depth attachments", async () => {
   const gpu = await init();
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
-  const target = gpu.target({ size: [2, 2], depth: true });
+  const colorTarget = target(gpu, { size: [2, 2], depth: true });
 
-  gpu.frame((frame) => frame.pass({ target, clear: false }, () => undefined));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: false }, () => undefined));
 
   expect(descriptors[0]?.colorAttachments?.[0]).toMatchObject({ loadOp: "load", storeOp: "store" });
   expect(descriptors[0]?.colorAttachments?.[0]?.clearValue).toBeUndefined();
@@ -87,21 +87,21 @@ test("frame.pass clear false preserves color and depth attachments", async () =>
 
 test("frame.pass rejects clear false with MSAA targets", async () => {
   const gpu = await init();
-  const msaa = gpu.target({ size: [2, 2], msaa: true });
-  expect(() => gpu.frame((frame) => frame.pass({ target: msaa, clear: false }, () => undefined))).toThrowError(/VGPU-PASS-PRESERVE-MSAA|preserve MSAA/);
+  const msaa = target(gpu, { size: [2, 2], msaa: true });
+  expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: msaa, clear: false }, () => undefined))).toThrowError(/VGPU-PASS-PRESERVE-MSAA|preserve MSAA/);
   gpu.dispose();
 });
 
 test("gpu.clearColor defaults, assigns, and drives omitted or true pass clear", async () => {
   const gpu = await init();
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
-  const a = gpu.target({ size: [2, 2] });
-  const b = gpu.target({ size: [2, 2] });
+  const a = target(gpu, { size: [2, 2] });
+  const b = target(gpu, { size: [2, 2] });
 
   expect(gpu.clearColor).toEqual([0, 0, 0, 1]);
-  gpu.frame((frame) => frame.pass(a, () => undefined));
+  frame(gpu, (currentFrame) => currentFrame.pass(a, () => undefined));
   gpu.clearColor = { r: 0.25, g: 0.5, b: 0.75, a: 1 };
-  gpu.frame((frame) => frame.pass({ target: b, clear: true }, () => undefined));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: b, clear: true }, () => undefined));
 
   expect(descriptors[0]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0, g: 0, b: 0, a: 1 });
   expect(descriptors[1]?.colorAttachments?.[0]?.clearValue).toEqual({ r: 0.25, g: 0.5, b: 0.75, a: 1 });
@@ -119,9 +119,9 @@ test("gpu.clearColor validates assignments", async () => {
 test("surface render pass descriptors honor clear false within a frame", async () => {
   const gpu = await initBrowser({ adapter: createMockAdapter() });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
-  const surface = gpu.surface(canvasLike());
+  const canvasSurface = surface(gpu, canvasLike());
 
-  gpu.frame((frame) => frame.pass({ target: surface, clear: false }, () => undefined));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: canvasSurface, clear: false }, () => undefined));
 
   expect(descriptors[0]?.colorAttachments?.[0]).toMatchObject({ loadOp: "load", storeOp: "store" });
   expect(descriptors[0]?.colorAttachments?.[0]?.clearValue).toBeUndefined();
@@ -131,12 +131,12 @@ test("surface render pass descriptors honor clear false within a frame", async (
 
 test("bundles record and replay draws with blend without extending the replay signature", async () => {
   const gpu = await init();
-  const target = gpu.target({ size: [2, 2] });
-  const draw = gpu.draw({ shader: DRAW_SHADER, blend: "alpha" });
+  const colorTarget = target(gpu, { size: [2, 2] });
+  const drawable = draw(gpu, { shader: DRAW_SHADER, blend: "alpha" });
 
-  const bundle = gpu.bundle({ target, label: "blendedBundle" }, (b) => b.draw(draw));
+  const recorded = bundle(gpu, { target: colorTarget, label: "blendedBundle" }, (b) => b.draw(drawable));
 
-  expect(() => gpu.frame((frame) => frame.pass(target, (p) => p.bundles(bundle)))).not.toThrow();
+  expect(() => frame(gpu, (currentFrame) => currentFrame.pass(colorTarget, (p) => p.bundles(recorded)))).not.toThrow();
   const desc = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors.at(-1);
   expect(desc?.fragment?.targets?.[0]).toMatchObject({ blend: { color: { srcFactor: "src-alpha" } } });
   gpu.dispose();

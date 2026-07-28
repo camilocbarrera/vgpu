@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { getMockGPUDeviceInstrumentation, init, VGPUError } from "../../src/mock.ts";
+import { getMockGPUDeviceInstrumentation, init, VGPUError, geometry } from "../../src/mock.ts";
 import { geometry as geometryOf } from "../../src/scene/geometry-descriptor.ts";
 
 function meshErrorOf(fn: () => unknown): VGPUError {
@@ -14,7 +14,7 @@ test("gpu.geometry normalizes record attributes, derives counts, and freezes sli
       0, 0, 1, 1, 7, 0,
       1, 0, 1, 1, 8, 0,
     ]);
-    const geometry = gpu.geometry({
+    const geo = geometry(gpu, {
       label: "led",
       buffers: [{
         data: vertices,
@@ -28,18 +28,18 @@ test("gpu.geometry normalizes record attributes, derives counts, and freezes sli
       indices: new Uint16Array([0, 1]),
     });
 
-    expect(geometry.vertexCount).toBe(2);
-    expect(geometry.indexCount).toBe(2);
-    expect(geometry.indexFormat).toBe("uint16");
-    expect(geometry.vertexBufferLayouts).toEqual([{ arrayStride: 24, attributes: [
+    expect(geo.vertexCount).toBe(2);
+    expect(geo.indexCount).toBe(2);
+    expect(geo.indexFormat).toBe("uint16");
+    expect(geo.vertexBufferLayouts).toEqual([{ arrayStride: 24, attributes: [
       { shaderLocation: 0, offset: 0, format: "float32x2" },
       { shaderLocation: 1, offset: 8, format: "float32x2" },
       { shaderLocation: 2, offset: 16, format: "float32" },
     ] }]);
 
-    const slice = geometry.slice({ firstIndex: 1, indexCount: 1, baseVertex: 2, instanceCount: 3 });
-    expect(slice.vertexBufferLayouts).toBe(geometry.vertexBufferLayouts);
-    expect(slice.vertexBuffers).toBe(geometry.vertexBuffers);
+    const slice = geo.slice({ firstIndex: 1, indexCount: 1, baseVertex: 2, instanceCount: 3 });
+    expect(slice.vertexBufferLayouts).toBe(geo.vertexBufferLayouts);
+    expect(slice.vertexBuffers).toBe(geo.vertexBuffers);
     expect(slice.indexCount).toBe(1);
     expect(slice.firstIndex).toBe(1);
     expect(slice.baseVertex).toBe(2);
@@ -55,7 +55,7 @@ test("gpu.geometry normalizes record attributes, derives counts, and freezes sli
 test("gpu.geometry derives tight auto stride, stepMode instance count, and rejects invalid layouts", async () => {
   const gpu = await init();
   try {
-    const instances = gpu.geometry({ buffers: [{
+    const instances = geometry(gpu, { buffers: [{
       stepMode: "instance",
       data: new Float32Array([0, 0, 1, 1, 2, 2]),
       attributes: { pos: { format: "float32x2", location: 0 } },
@@ -63,11 +63,11 @@ test("gpu.geometry derives tight auto stride, stepMode instance count, and rejec
     expect(instances.vertexBufferLayouts[0]).toMatchObject({ arrayStride: 8, stepMode: "instance" });
     expect(instances.instanceCount).toBe(3);
 
-    expect(() => gpu.geometry({ buffers: [{ data: new Float32Array([1, 2, 3, 4]), attributes: { pos: { format: "float32x3", location: 0 } } }] }))
+    expect(() => geometry(gpu, { buffers: [{ data: new Float32Array([1, 2, 3, 4]), attributes: { pos: { format: "float32x3", location: 0 } } }] }))
       .toThrowError(/VGPU-MESH-DATA-MISALIGNED/);
-    expect(() => gpu.geometry({ buffers: [{ data: new Float32Array([1, 2]), attributes: { 0: { format: "float32x2", location: 0 } } }] }))
+    expect(() => geometry(gpu, { buffers: [{ data: new Float32Array([1, 2]), attributes: { 0: { format: "float32x2", location: 0 } } }] }))
       .toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
-    expect(() => gpu.geometry({ buffers: [{ data: new Float32Array([1, 2, 3, 4]), attributes: { a: { format: "float32x2", location: 0 }, b: { format: "float32x2", location: 0 } } }] }))
+    expect(() => geometry(gpu, { buffers: [{ data: new Float32Array([1, 2, 3, 4]), attributes: { a: { format: "float32x2", location: 0 }, b: { format: "float32x2", location: 0 } } }] }))
       .toThrowError(/VGPU-MESH-LOCATION-CONFLICT/);
   } finally {
     gpu.dispose();
@@ -79,15 +79,15 @@ test("gpu.geometry validates locations, enums, and tight auto-stride eagerly", a
   try {
     const base = { data: new Float32Array([0]), attributes: { value: { format: "float32" as const, location: 0 } } };
     for (const location of [-1, 1.5, Number.NaN, gpu.device.gpu.limits.maxVertexAttributes]) {
-      expect(() => gpu.geometry({ buffers: [{ ...base, attributes: { value: { format: "float32", location } } }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+      expect(() => geometry(gpu, { buffers: [{ ...base, attributes: { value: { format: "float32", location } } }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
     }
-    expect(() => gpu.geometry({ topology: "bogus" as GPUPrimitiveTopology, buffers: [base] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
-    expect(() => gpu.geometry({ buffers: [{ ...base, stepMode: "bogus" as GPUVertexStepMode }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    expect(() => geometry(gpu, { topology: "bogus" as GPUPrimitiveTopology, buffers: [base] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    expect(() => geometry(gpu, { buffers: [{ ...base, stepMode: "bogus" as GPUVertexStepMode }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
     for (const format of ["float16", "float16x3", "unorm8x3", "uint8x3"] as GPUVertexFormat[]) {
-      expect(() => gpu.geometry({ buffers: [{ data: new Uint8Array(12), attributes: { value: { format, location: 0 } } }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+      expect(() => geometry(gpu, { buffers: [{ data: new Uint8Array(12), attributes: { value: { format, location: 0 } } }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
     }
-    expect(() => gpu.geometry({ buffers: [{ data: new Float32Array(5), attributes: { value: { format: "float32", offset: 16, location: 0 } } }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
-    const padded = gpu.geometry({ buffers: [{ data: new Float32Array(5), stride: 20, attributes: { value: { format: "float32", offset: 16, location: 0 } } }] });
+    expect(() => geometry(gpu, { buffers: [{ data: new Float32Array(5), attributes: { value: { format: "float32", offset: 16, location: 0 } } }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    const padded = geometry(gpu, { buffers: [{ data: new Float32Array(5), stride: 20, attributes: { value: { format: "float32", offset: 16, location: 0 } } }] });
     expect(padded.vertexBufferLayouts[0]?.arrayStride).toBe(20);
   } finally {
     gpu.dispose();
@@ -100,17 +100,17 @@ test("caller-owned buffers require explicit counts and a complete index trio", a
     const vertex = gpu.device.gpu.createBuffer({ size: 64, usage: 32 });
     const index = gpu.device.gpu.createBuffer({ size: 64, usage: 16 });
     const raw = { buffer: vertex, attributes: { pos: { format: "float32x2" as const, location: 0 } } };
-    expect(() => gpu.geometry({ buffers: [raw] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
-    expect(gpu.geometry({ buffers: [raw], vertexCount: 3 }).vertexCount).toBe(3);
+    expect(() => geometry(gpu, { buffers: [raw] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    expect(geometry(gpu, { buffers: [raw], vertexCount: 3 }).vertexCount).toBe(3);
     const owned = { data: new Float32Array(6), attributes: { position: { format: "float32x2" as const, location: 0 } } };
     const hybridRaw = { buffer: vertex, attributes: { uv: { format: "float32x2" as const, location: 1 } } };
-    expect(gpu.geometry({ buffers: [owned, hybridRaw] }).vertexCount).toBe(3);
+    expect(geometry(gpu, { buffers: [owned, hybridRaw] }).vertexCount).toBe(3);
     const instances = [owned, hybridRaw].map((buffer) => ({ ...buffer, stepMode: "instance" as const }));
-    expect(gpu.geometry({ buffers: instances }).instanceCount).toBe(3);
-    expect(() => gpu.geometry({ buffers: [{ ...hybridRaw, stepMode: "instance" }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
-    expect(() => gpu.geometry({ buffers: [raw], vertexCount: 3, indexBuffer: index })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
-    expect(() => gpu.geometry({ buffers: [raw], vertexCount: 3, indexBuffer: index, indexFormat: "uint16" })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
-    expect(gpu.geometry({ buffers: [raw], vertexCount: 3, indexBuffer: index, indexFormat: "uint16", indexCount: 4 }).indexCount).toBe(4);
+    expect(geometry(gpu, { buffers: instances }).instanceCount).toBe(3);
+    expect(() => geometry(gpu, { buffers: [{ ...hybridRaw, stepMode: "instance" }] })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    expect(() => geometry(gpu, { buffers: [raw], vertexCount: 3, indexBuffer: index })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    expect(() => geometry(gpu, { buffers: [raw], vertexCount: 3, indexBuffer: index, indexFormat: "uint16" })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    expect(geometry(gpu, { buffers: [raw], vertexCount: 3, indexBuffer: index, indexFormat: "uint16", indexCount: 4 }).indexCount).toBe(4);
   } finally {
     gpu.dispose();
   }
@@ -120,18 +120,18 @@ test("owned counts cannot exceed data capacity and geometry layout properties ar
   const gpu = await init();
   try {
     const descriptor = { buffers: [{ data: new Float32Array([0, 0]), attributes: { pos: { format: "float32x2" as const, location: 0 } } }] };
-    expect(() => gpu.geometry({ ...descriptor, vertexCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
-    expect(() => gpu.geometry({ ...descriptor, indices: new Uint16Array([0, 0]), indexCount: 3 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
-    expect(() => gpu.geometry({ ...descriptor, indices: new Uint16Array([0, 0]), indexFormat: "uint32" })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
+    expect(() => geometry(gpu, { ...descriptor, vertexCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
+    expect(() => geometry(gpu, { ...descriptor, indices: new Uint16Array([0, 0]), indexCount: 3 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
+    expect(() => geometry(gpu, { ...descriptor, indices: new Uint16Array([0, 0]), indexFormat: "uint32" })).toThrowError(/VGPU-MESH-LAYOUT-INVALID/);
     const planar = [{ data: new Float32Array(6), attributes: { pos: { format: "float32x2" as const, location: 0 } } }, { data: new Float32Array(2), attributes: { uv: { format: "float32x2" as const, location: 1 } } }];
-    expect(gpu.geometry({ buffers: planar }).vertexCount).toBe(1);
-    expect(() => gpu.geometry({ buffers: planar, vertexCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
+    expect(geometry(gpu, { buffers: planar }).vertexCount).toBe(1);
+    expect(() => geometry(gpu, { buffers: planar, vertexCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
     const instances = planar.map((buffer) => ({ ...buffer, stepMode: "instance" as const }));
-    expect(gpu.geometry({ buffers: instances }).instanceCount).toBe(1);
-    expect(() => gpu.geometry({ buffers: instances, instanceCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
-    const geometry = gpu.geometry(descriptor);
-    expect(() => { (geometry as { topology: string }).topology = "line-list"; }).toThrow(TypeError);
-    expect(geometry.topology).toBe("triangle-list");
+    expect(geometry(gpu, { buffers: instances }).instanceCount).toBe(1);
+    expect(() => geometry(gpu, { buffers: instances, instanceCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
+    const geo = geometry(gpu, descriptor);
+    expect(() => { (geo as { topology: string }).topology = "line-list"; }).toThrow(TypeError);
+    expect(geo.topology).toBe("triangle-list");
   } finally {
     gpu.dispose();
   }
@@ -140,13 +140,13 @@ test("owned counts cannot exceed data capacity and geometry layout properties ar
 test("geometry writes enforce WebGPU alignment and stay structured after destroy", async () => {
   const gpu = await init();
   try {
-    const geometry = gpu.geometry({ buffers: [{ data: new Float32Array([0, 0]), attributes: { pos: { format: "float32x2", location: 0 } } }], indices: new Uint16Array([0, 1]) });
-    expect(() => geometry.write(new Uint8Array(2))).toThrowError(/VGPU-MESH-WRITE-RANGE/);
-    expect(() => geometry.write(new Uint32Array([1]), 2)).toThrowError(/VGPU-MESH-WRITE-RANGE/);
-    expect(() => geometry.writeIndices(new Uint16Array([0]), 0)).toThrowError(/VGPU-MESH-WRITE-RANGE/);
-    geometry.destroy();
-    expect(() => geometry.write(new Uint32Array([1]))).toThrowError(/VGPU-MESH-WRITE-RANGE/);
-    expect(() => geometry.writeIndices(new Uint32Array([1]))).toThrowError(/VGPU-MESH-WRITE-RANGE/);
+    const geo = geometry(gpu, { buffers: [{ data: new Float32Array([0, 0]), attributes: { pos: { format: "float32x2", location: 0 } } }], indices: new Uint16Array([0, 1]) });
+    expect(() => geo.write(new Uint8Array(2))).toThrowError(/VGPU-MESH-WRITE-RANGE/);
+    expect(() => geo.write(new Uint32Array([1]), 2)).toThrowError(/VGPU-MESH-WRITE-RANGE/);
+    expect(() => geo.writeIndices(new Uint16Array([0]), 0)).toThrowError(/VGPU-MESH-WRITE-RANGE/);
+    geo.destroy();
+    expect(() => geo.write(new Uint32Array([1]))).toThrowError(/VGPU-MESH-WRITE-RANGE/);
+    expect(() => geo.writeIndices(new Uint32Array([1]))).toThrowError(/VGPU-MESH-WRITE-RANGE/);
   } finally {
     gpu.dispose();
   }
@@ -156,12 +156,12 @@ test("geometry construction-time error codes include actionable fix hints", asyn
   const gpu = await init();
   try {
     const buffer = () => ({ data: new Float32Array([0, 0]), attributes: { pos: { format: "float32x2" as const, location: 0 } } });
-    const valid = gpu.geometry({ buffers: [buffer()] });
+    const valid = geometry(gpu, { buffers: [buffer()] });
     const errors = [
-      meshErrorOf(() => gpu.geometry({ buffers: [{ ...buffer(), stride: 3 }] })),
-      meshErrorOf(() => gpu.geometry({ buffers: Array.from({ length: 9 }, buffer) })),
-      meshErrorOf(() => gpu.geometry({ buffers: [{ data: new Float32Array(4), attributes: { a: { format: "float32x2", location: 0 }, b: { format: "float32x2", location: 0 } } }] })),
-      meshErrorOf(() => gpu.geometry({ buffers: [{ data: new Float32Array(3), attributes: { pos: { format: "float32x2", location: 0 } } }] })),
+      meshErrorOf(() => geometry(gpu, { buffers: [{ ...buffer(), stride: 3 }] })),
+      meshErrorOf(() => geometry(gpu, { buffers: Array.from({ length: 9 }, buffer) })),
+      meshErrorOf(() => geometry(gpu, { buffers: [{ data: new Float32Array(4), attributes: { a: { format: "float32x2", location: 0 }, b: { format: "float32x2", location: 0 } } }] })),
+      meshErrorOf(() => geometry(gpu, { buffers: [{ data: new Float32Array(3), attributes: { pos: { format: "float32x2", location: 0 } } }] })),
       meshErrorOf(() => valid.slice({ firstVertex: 1, vertexCount: 1 })),
       meshErrorOf(() => valid.write(new Uint8Array(2))),
     ];
@@ -182,12 +182,12 @@ test("geometry construction-time error codes include actionable fix hints", asyn
 test("geometry writes are range checked and slices validate indexed/non-indexed direction eagerly", async () => {
   const gpu = await init();
   try {
-    const geometry = gpu.geometry({ buffers: [{ data: new Float32Array([0, 0, 1, 1]), attributes: { pos: { format: "float32x2", location: 0 } } }] });
-    expect(() => geometry.write(new Float32Array([1]), 16)).toThrowError(/VGPU-MESH-WRITE-RANGE/);
-    expect(() => geometry.slice({ firstIndex: 0, indexCount: 1 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
-    expect(() => geometry.slice({ firstVertex: 1, vertexCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
+    const geo = geometry(gpu, { buffers: [{ data: new Float32Array([0, 0, 1, 1]), attributes: { pos: { format: "float32x2", location: 0 } } }] });
+    expect(() => geo.write(new Float32Array([1]), 16)).toThrowError(/VGPU-MESH-WRITE-RANGE/);
+    expect(() => geo.slice({ firstIndex: 0, indexCount: 1 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
+    expect(() => geo.slice({ firstVertex: 1, vertexCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
 
-    const indexed = gpu.geometry({ buffers: [{ data: new Float32Array([0, 0, 1, 1]), attributes: { pos: { format: "float32x2", location: 0 } } }], indices: [0, 1] });
+    const indexed = geometry(gpu, { buffers: [{ data: new Float32Array([0, 0, 1, 1]), attributes: { pos: { format: "float32x2", location: 0 } } }], indices: [0, 1] });
     expect(() => indexed.slice({ firstVertex: 0, vertexCount: 1 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
     expect(() => indexed.slice({ firstIndex: 1, indexCount: 2 })).toThrowError(/VGPU-MESH-RANGE-INVALID/);
     expect(() => indexed.writeIndices(new Uint32Array([0]), 8)).toThrowError(/VGPU-MESH-WRITE-RANGE/);
