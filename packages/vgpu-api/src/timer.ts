@@ -14,7 +14,7 @@ export interface TimerSpan {
   readonly name: string;
 }
 
-/** GPU pass timer created by `gpu.timer()`. Needs the "timestamp-query" device feature. */
+/** GPU pass timer created by `timer(gpu)`. Needs the "timestamp-query" device feature. */
 export interface Timer {
   /** Marks a pass for timing. Pass the result as FramePassOptions.timer. One name per frame. */
   span(name: string): TimerSpan;
@@ -108,7 +108,7 @@ export class InternalTimer {
     // createQuerySet would throw a TypeError for a timestamp set without it. Fail at creation instead.
     if (!device.features.has("timestamp-query")) {
       throw timerInvalidError(
-        `gpu.timer() needs the "timestamp-query" device feature — request it at init: init({ requiredFeatures: ["timestamp-query"] }).`,
+        `timer(gpu) needs the "timestamp-query" device feature — request it at init: init({ requiredFeatures: ["timestamp-query"] }).`,
         `Pass init({ requiredFeatures: ["timestamp-query"] }) on an adapter that supports it; gate optional timing on gpu.device.features.has("timestamp-query").`,
       );
     }
@@ -159,7 +159,7 @@ export class InternalTimer {
   attachSpan(span: InternalTimerSpan, frame: unknown, frameDevice: Device): GPURenderPassTimestampWrites | undefined {
     this.#assertUsable("Frame.pass");
     if (frameDevice !== this.#device) {
-      throw timerInvalidError(`span '${span.name}' belongs to a timer created on a different gpu; timestamp queries cannot cross devices.`, "Create one gpu.timer() per gpu and use its spans only with that gpu's frames.", "Frame.pass");
+      throw timerInvalidError(`span '${span.name}' belongs to a timer created on a different gpu; timestamp queries cannot cross devices.`, "Create one timer(gpu) per gpu and use its spans only with that gpu's frames.", "Frame.pass");
     }
     if (frame !== this.#frame) this.#beginFrame(frame);
     if (this.#frameNames.has(span.name)) {
@@ -274,7 +274,7 @@ export class InternalTimer {
   }
 
   #assertUsable(where: string): void {
-    if (this.#disposed) throw timerInvalidError("the timer is disposed.", "Create a new timer with gpu.timer().", where);
+    if (this.#disposed) throw timerInvalidError("the timer is disposed.", "Create a new timer with timer(gpu).", where);
   }
 }
 

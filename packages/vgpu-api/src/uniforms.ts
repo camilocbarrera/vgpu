@@ -80,7 +80,7 @@ export class SharedUniformsImpl<T extends Record<string, unknown>> implements Sh
   #assertCompatibleLayout(binding: BindingInfo, layout: HostShareableLayout, addressSpace: "uniform" | "storage", sourceHint: string): void {
     const state = this.#state!;
     if (state.addressSpace !== addressSpace) {
-      throw unsupportedError("gpu.uniforms", `shared uniforms '${state.bindingName}' already adopted address space ${state.addressSpace}; '${binding.name}' uses ${addressSpace}.`);
+      throw unsupportedError("uniforms", `shared uniforms '${state.bindingName}' already adopted address space ${state.addressSpace}; '${binding.name}' uses ${addressSpace}.`);
     }
     if (sharedUniformLayoutSignature(layout) === state.layoutSignature) return;
     throw sharedUniformLayoutMismatchError({
@@ -98,7 +98,7 @@ export class SharedUniformsImpl<T extends Record<string, unknown>> implements Sh
   }
 
   #requiredBuffer(): Buffer {
-    if (!this.#bufferRef) throw unsupportedError("gpu.uniforms", "shared uniforms have not adopted a layout yet.");
+    if (!this.#bufferRef) throw unsupportedError("uniforms", "shared uniforms have not adopted a layout yet.");
     return this.#bufferRef;
   }
 
@@ -135,12 +135,12 @@ export function isSharedUniformsValue(value: unknown): value is SharedUniformsIm
 
 function ensureBufferBinding(binding: BindingInfo): void {
   if (binding.bindingLayout?.kind === "buffer") return;
-  throw unsupportedError("gpu.uniforms", `Binding '${binding.name}' does not accept shared uniforms; the shader reflected ${binding.bindingLayout?.kind ?? "none"}.`);
+  throw unsupportedError("uniforms", `Binding '${binding.name}' does not accept shared uniforms; the shader reflected ${binding.bindingLayout?.kind ?? "none"}.`);
 }
 
 function staticBindingLayout(binding: BindingInfo): HostShareableLayout & { readonly size: number } {
-  if (!binding.layout) throw unsupportedError("gpu.uniforms", `Binding '${binding.name}' does not expose a host-shareable layout.`);
-  if (binding.layout.size === undefined) throw unsupportedError("gpu.uniforms", `Binding '${binding.name}' has a runtime-sized layout; it cannot be shared.`);
+  if (!binding.layout) throw unsupportedError("uniforms", `Binding '${binding.name}' does not expose a host-shareable layout.`);
+  if (binding.layout.size === undefined) throw unsupportedError("uniforms", `Binding '${binding.name}' has a runtime-sized layout; it cannot be shared.`);
   return binding.layout as HostShareableLayout & { readonly size: number };
 }
 

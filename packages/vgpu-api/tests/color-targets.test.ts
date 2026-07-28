@@ -101,7 +101,7 @@ test("colors length must match the target signature's color attachment count", a
   expect(() => drawable.draw(mrt)).toThrowError(/VGPU-COLORS-INVALID|colors has 1, but the target signature has 2/);
   expect(() => drawable.compileSync({ colors: ["rgba8unorm", "rgba8unorm", "rgba8unorm"] })).toThrowError(/colors has 1, but the target signature has 3/);
   expect(() => drawable.draw(single)).not.toThrow();
-  // targets: [...] compiles at construction, so the mismatch surfaces from gpu.draw itself.
+  // targets: [...] compiles at construction, so the mismatch surfaces from draw itself.
   expect(() => draw(gpu, { shader: MRT_SHADER, label: "eager-mismatch", targets: [mrt], colors: [null] })).toThrowError(/VGPU-COLORS-INVALID|colors has 1, but the target signature has 2/);
   gpu.dispose();
 });

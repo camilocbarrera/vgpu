@@ -140,9 +140,9 @@ test("compute entry selects the named @compute entry point and its binding visib
   gpu.dispose();
 });
 
-test("compute entry validates at construction with where gpu.compute", async () => {
+test("compute entry validates at construction with where compute", async () => {
   const gpu = await init();
-  expect(() => compute(gpu, TWO_COMPUTE_WGSL, { label: "unknown", entry: "cs_c" })).toThrow(expect.objectContaining({ code: "VGPU-ENTRY-INVALID", where: "gpu.compute" }));
+  expect(() => compute(gpu, TWO_COMPUTE_WGSL, { label: "unknown", entry: "cs_c" })).toThrow(expect.objectContaining({ code: "VGPU-ENTRY-INVALID", where: "compute" }));
   expect(() => compute(gpu, TWO_COMPUTE_WGSL, { label: "unknown-list", entry: "cs_c" })).toThrowError(/"cs_a" \(@compute\), "cs_b" \(@compute\)/);
   expect(() => compute(gpu, MIXED_STAGE_COMPUTE_WGSL, { label: "wrong-stage", entry: "vs_main" })).toThrowError(/VGPU-ENTRY-INVALID|is a @vertex entry point, not @compute/);
   expect(() => compute(gpu, TWO_COMPUTE_WGSL, { label: "not-string", entry: 1 as never })).toThrowError(/VGPU-ENTRY-INVALID|expected an entry point name string/);

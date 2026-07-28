@@ -256,9 +256,9 @@ export interface Draw {
   group(n: number, bindGroup: GPUBindGroup): this;
   layout(n: number, opts?: DrawLayoutOptions): GPUBindGroupLayout;
   draw(target?: Target | DrawCallOptions): void;
-  /** @throws VGPU-SURFACE-NOT-IN-FRAME when passed a Surface outside gpu.frame(). */
+  /** @throws VGPU-SURFACE-NOT-IN-FRAME when passed a Surface outside frame(gpu). */
   compile(target?: CompileTarget): Promise<this>;
-  /** @throws VGPU-SURFACE-NOT-IN-FRAME when passed a Surface outside gpu.frame(). */
+  /** @throws VGPU-SURFACE-NOT-IN-FRAME when passed a Surface outside frame(gpu). */
   compileSync(target?: CompileTarget): this;
 }
 
@@ -285,8 +285,8 @@ export class InternalDraw implements Draw {
     // Entry selection runs before everything derived from the selected entries — binding visibility,
     // storage-stage limits, bind group layouts, and vertex input layouts all reflect the chosen variant.
     const entryNames = normalizeEntryOptions(this.label, opts.entry);
-    const vertexEntry = selectEntryPoint(this.label, reflection.entryPoints, "vertex", entryNames.vertex, "gpu.draw");
-    const fragmentEntry = selectEntryPoint(this.label, reflection.entryPoints, "fragment", entryNames.fragment, "gpu.draw");
+    const vertexEntry = selectEntryPoint(this.label, reflection.entryPoints, "vertex", entryNames.vertex, "draw");
+    const fragmentEntry = selectEntryPoint(this.label, reflection.entryPoints, "fragment", entryNames.fragment, "draw");
     const entryKey = entryKeyFor(reflection, vertexEntry, fragmentEntry);
     const selectedEntries = [vertexEntry, fragmentEntry].filter((entry): entry is EntryPointInfo => !!entry);
     const visibility = visibilityForEntries(reflection.bindings, selectedEntries);
@@ -304,7 +304,7 @@ export class InternalDraw implements Draw {
     const depthOptions = normalizeDepthOptions(device, this.label, opts);
     const stencilOptions = normalizeStencilOptions(this.label, opts);
     const multisampleOptions = normalizeMultisampleOptions(this.label, opts);
-    const constantsOptions = normalizeConstantsOptions(this.label, opts.constants, reflection.overrides, "gpu.draw");
+    const constantsOptions = normalizeConstantsOptions(this.label, opts.constants, reflection.overrides, "draw");
     const setCore = createSetCore({
       device,
       label: this.label,
@@ -1046,10 +1046,10 @@ export function drawBindingState(draw: Draw, name: string): BindingState | undef
 
 export function registerDrawBundle(draw: Draw, bundle: BundleBackReference): void { drawState(draw).recordedIn.add(bundle); }
 
-/** Render bundle encoders cannot set the pass blend constant; gpu.bundle uses this to reject such draws at recording. */
+/** Render bundle encoders cannot set the pass blend constant; bundle uses this to reject such draws at recording. */
 export function drawUsesBlendConstant(draw: Draw): boolean { return drawState(draw).blendConstant !== undefined; }
 
-/** Render bundle encoders cannot set the pass stencil reference; gpu.bundle uses this to reject such draws at recording. */
+/** Render bundle encoders cannot set the pass stencil reference; bundle uses this to reject such draws at recording. */
 export function drawUsesStencilReference(draw: Draw): boolean { return drawState(draw).stencilRef !== undefined; }
 
 /**

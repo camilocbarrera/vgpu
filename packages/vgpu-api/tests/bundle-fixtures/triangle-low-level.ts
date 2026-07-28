@@ -1,22 +1,28 @@
 /**
  * Low-level triangle path. The descriptor is intentionally inline: this fixture must prove that
  * `geometry(gpu, descriptor)` does not retain the scene recipe factory or its primitive meshes.
- * It uses the canonical gpu-first names that T202-05 publishes.
+ * It uses the canonical gpu-first names of the 0.2.0 API.
  */
-import { draw, effect, frame, geometry, init, surface } from "vgpu";
+import { draw, frame, geometry, init, surface } from "vgpu";
 
 const TRIANGLE = `
-@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
-  let points = array<vec2f, 3>(vec2f(0.0, 0.5), vec2f(-0.5, -0.5), vec2f(0.5, -0.5));
-  return vec4f(points[index], 0.0, 1.0);
+@vertex fn vertex(@location(0) position: vec2f) -> @builtin(position) vec4f {
+  return vec4f(position, 0.0, 1.0);
 }
 @fragment fn fragment() -> @location(0) vec4f { return vec4f(1.0); }`;
 
 export async function renderTriangle(canvas: HTMLCanvasElement) {
   const gpu = await init();
   const target = surface(gpu, canvas);
-  const mesh = geometry(gpu, { topology: "triangle-list", vertexCount: 3 });
-  const triangle = draw(gpu, { geometry: mesh, effect: effect(gpu, TRIANGLE) });
+  const mesh = geometry(gpu, {
+    topology: "triangle-list",
+    buffers: [{
+      data: new Float32Array([0.0, 0.5, -0.5, -0.5, 0.5, -0.5]),
+      stride: 8,
+      attributes: { position: "float32x2" },
+    }],
+  });
+  const triangle = draw(gpu, { geometry: mesh, shader: TRIANGLE });
   frame(gpu, (next) => next.pass({ target }, (pass) => pass.draw(triangle)));
   return gpu;
 }

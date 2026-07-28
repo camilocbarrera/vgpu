@@ -151,7 +151,7 @@ test("stencil requires a target signature whose depth format has a stencil aspec
   expect(() => drawable.compileSync({ colors: ["rgba8unorm"], depth: "depth24plus-stencil8" })).not.toThrow();
   expect(() => drawable.compileSync({ colors: ["rgba8unorm"], depth: "depth32float-stencil8" })).not.toThrow();
   expect(() => drawable.draw(stencilTarget)).not.toThrow();
-  // targets: [...] compiles at construction, so the mismatch surfaces from gpu.draw itself.
+  // targets: [...] compiles at construction, so the mismatch surfaces from draw itself.
   expect(() => draw(gpu, { shader: DRAW_SHADER, label: "eager-needs-stencil", targets: [depthOnly], stencil: { front: { compare: "equal" } } })).toThrowError(/VGPU-STENCIL-INVALID|depth24plus-stencil8/);
   gpu.dispose();
 });

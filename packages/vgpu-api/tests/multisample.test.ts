@@ -61,7 +61,7 @@ test("alphaToCoverage requires an MSAA target signature", async () => {
   expect(() => drawable.compileSync({ colors: ["rgba8unorm"] })).toThrowError(/VGPU-MULTISAMPLE-INVALID|msaa: true/);
   expect(() => drawable.compileSync({ colors: ["rgba8unorm"], sampleCount: 4 })).not.toThrow();
   expect(() => drawable.draw(msaa)).not.toThrow();
-  // targets: [...] compiles at construction, so the mismatch surfaces from gpu.draw itself.
+  // targets: [...] compiles at construction, so the mismatch surfaces from draw itself.
   expect(() => draw(gpu, { shader: SOLID, label: "eager-needs-msaa", targets: [plain], multisample: { alphaToCoverage: true } })).toThrowError(/VGPU-MULTISAMPLE-INVALID|msaa: true/);
   gpu.dispose();
 });

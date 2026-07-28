@@ -56,7 +56,7 @@ export class ComputePipeline implements Compute {
     // layouts, and the active-binding set for storage aliasing all reflect the chosen variant.
     const entry = computeEntryPoint(this.reflection, this.label, opts.entry);
     this.entryPoint = entry.name;
-    const { constants } = normalizeConstantsOptions(this.label, opts.constants, this.reflection.overrides, "gpu.compute");
+    const { constants } = normalizeConstantsOptions(this.label, opts.constants, this.reflection.overrides, "compute");
     this.bindGroupLayouts = bindGroupLayoutsForReflection(device, this.label, this.reflection, visibilityForEntries(this.reflection.bindings, [entry]));
     this.pipelineLayout = pipelineLayoutFor(device, this.bindGroupLayouts);
     this.shaderModule = device.gpu.createShaderModule({ label: `${this.label}.shader`, code: source });
@@ -121,7 +121,7 @@ export class ComputePipeline implements Compute {
 function computeEntryPoint(reflection: Reflection, label: string, name?: string): EntryPointInfo {
   // A named entry validates existence and stage inside selectEntryPoint (VGPU-ENTRY-INVALID); only the
   // no-name case can come back undefined, keeping today's error for a shader without any @compute entry.
-  const entry = selectEntryPoint(label, reflection.entryPoints, "compute", name, "gpu.compute");
+  const entry = selectEntryPoint(label, reflection.entryPoints, "compute", name, "compute");
   if (!entry) throw unsupportedError(`${label}.compute`, "The compute shader requires a @compute entry point.");
   return entry;
 }

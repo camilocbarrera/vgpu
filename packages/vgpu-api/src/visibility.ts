@@ -15,7 +15,7 @@ export interface VisibilityOptions {
 export type VisibilityState = "visible" | "hidden" | "unknown";
 
 /**
- * Occlusion query results for visibility culling, created by `gpu.visibility()`.
+ * Occlusion query results for visibility culling, created by `visibility(gpu)`.
  * Core WebGPU — no device feature required. Pass the instance as
  * `FramePassOptions.visibility`, wrap proxy draws in `pass.occlusion(handle, body)`,
  * and condition real draws on `handle.hidden`.
@@ -222,7 +222,7 @@ export class InternalVisibility {
   attachFrame(frame: unknown, frameDevice: Device): void {
     this.#assertUsable("Frame.pass");
     if (frameDevice !== this.#device) {
-      throw visibilityInvalidError("the visibility instance belongs to a different gpu; occlusion queries cannot cross devices.", "Create one gpu.visibility() per gpu and use it only with that gpu's frames.", "Frame.pass");
+      throw visibilityInvalidError("the visibility instance belongs to a different gpu; occlusion queries cannot cross devices.", "Create one visibility(gpu) per gpu and use it only with that gpu's frames.", "Frame.pass");
     }
     if (frame !== this.#frame) this.#beginFrame(frame);
     // The pass descriptor's occlusionQuerySet references the ring's query set for the rest of the frame:
@@ -239,11 +239,11 @@ export class InternalVisibility {
       throw visibilityInvalidError(`occlusion() received ${previewLabel(query)}; expected a VisibilityQuery from vis.query(label).`, `Create const q = vis.query("label") once from the pass's visibility instance, then p.occlusion(q, body).`, "FramePass.occlusion");
     }
     if (query.owner !== this) {
-      throw visibilityInvalidError(`query '${query.label}' belongs to a different visibility instance than the one this pass was opened with.`, "Use handles from the same gpu.visibility() instance passed as the pass's visibility option.", "FramePass.occlusion");
+      throw visibilityInvalidError(`query '${query.label}' belongs to a different visibility instance than the one this pass was opened with.`, "Use handles from the same visibility(gpu) instance passed as the pass's visibility option.", "FramePass.occlusion");
     }
     if (query.disposed) throw visibilityDisposedError("query handle", "FramePass.occlusion");
     if (frame !== this.#frame) {
-      throw visibilityInvalidError("the pass is not part of the current frame; occlusion() must run inside the frame that opened the pass.", "Encode occlusion scopes inside the pass callback of the current gpu.frame().", "FramePass.occlusion");
+      throw visibilityInvalidError("the pass is not part of the current frame; occlusion() must run inside the frame that opened the pass.", "Encode occlusion scopes inside the pass callback of the current frame(gpu).", "FramePass.occlusion");
     }
     // Duplicate use is forbidden across passes too: cross-pass reuse of a query index silently
     // overwrites the earlier result in native WebGPU, so vgpu rejects it up front.

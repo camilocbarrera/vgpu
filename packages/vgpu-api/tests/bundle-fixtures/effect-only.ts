@@ -1,6 +1,6 @@
 /**
  * Consumer-cost fixture for a fullscreen effect. It deliberately uses the post-T202-05 gpu-first
- * API rather than the temporary `gpu.effect` facade. `pnpm bundle-check --experiences` is expected
+ * API rather than the temporary `effect` facade. `pnpm bundle-check --experiences` is expected
  * to fail to resolve these named exports until that clean cut and its ceilings have landed.
  */
 import { effect, frame, init, surface } from "vgpu";

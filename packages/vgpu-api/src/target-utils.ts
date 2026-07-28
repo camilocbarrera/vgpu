@@ -52,7 +52,7 @@ export function validateTargetOptions(options: Partial<TargetOptions> | undefine
 function validateMsaaFormat(format: GPUTextureFormat, caps: TargetDeviceCaps): void {
   if (!(caps.isCompatibilityMode && format === "rgba16float")) return;
   throw unsupportedError(
-    "gpu.target",
+    "target",
     "Dawn compatibility mode does not support rgba16float+msaa.",
     "Use rgba8unorm for MSAA here, or disable msaa.",
   );

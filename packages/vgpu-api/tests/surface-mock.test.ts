@@ -86,7 +86,7 @@ test("immediate onResize callback also guards frame reentrancy", async () => {
 
   canvasSurface.onResize(() => {
     checked = true;
-    expect(() => frame(gpu)).toThrowError(/VGPU-FRAME-REENTRANT|Nested gpu.frame/);
+    expect(() => frame(gpu)).toThrowError(/VGPU-FRAME-REENTRANT|Nested frame/);
   });
 
   expect(checked).toBe(true);
@@ -185,7 +185,7 @@ test("resize and frame reentrancy are guarded, but resizing another surface and 
   a.onResize(() => { expect(() => target(gpu, { size: [2, 2] })).not.toThrow(); });
   a.onResize(() => { b.resize([12, 12]); });
   a.onResize(() => { expect(() => a.resize([20, 20])).toThrowError(/VGPU-SURFACE-RESIZE-REENTRANT|Cannot resize/); });
-  a.onResize(() => { expect(() => frame(gpu)).toThrowError(/VGPU-FRAME-REENTRANT|Nested gpu.frame/); });
+  a.onResize(() => { expect(() => frame(gpu)).toThrowError(/VGPU-FRAME-REENTRANT|Nested frame/); });
   expect(() => a.resize([11, 11])).not.toThrow();
   expect(b.size).toEqual([12, 12]);
   gpu.dispose();

@@ -114,7 +114,7 @@ export function resolveIndirect(label: string, where: string, value: IndirectOpt
   if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) throw indirectInvalidError(label, `offset must be an integer >= 0; received ${previewIndirect(offset)}.`, where);
   if (offset % 4 !== 0) throw indirectInvalidError(label, `offset must be a multiple of 4 (WebGPU requires "indirectOffset is a multiple of 4"); received ${offset}.`, where);
   if (!storage.buffer.options.usage.includes("indirect")) {
-    throw indirectInvalidError(label, `the buffer lacks the "indirect" usage (WebGPU requires "indirectBuffer.usage contains INDIRECT"); create it with gpu.storage(${storage.size}, { indirect: true }).`, where);
+    throw indirectInvalidError(label, `the buffer lacks the "indirect" usage (WebGPU requires "indirectBuffer.usage contains INDIRECT"); create it with storage(gpu, ${storage.size}, { indirect: true }).`, where);
   }
   const { bytes, args } = INDIRECT_METHODS[method];
   if (offset + bytes > storage.size) {

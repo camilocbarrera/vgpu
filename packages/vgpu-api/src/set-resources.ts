@@ -82,7 +82,7 @@ function normalizeTextureResource(binding: BindingInfo, value: unknown, context:
 
 function normalizeSamplerResource(binding: BindingInfo, value: unknown): NormalizedBindingResource {
   if (isSamplerLike(value)) return { resource: value, identity: syntheticIdentity(value) };
-  throw incompatibleResourceError(binding, "sampler", `Use the cached sampler: set({ ${binding.name}: gpu.sampler() }).`);
+  throw incompatibleResourceError(binding, "sampler", `Use the cached sampler: set({ ${binding.name}: sampler(gpu) }).`);
 }
 
 function isSamplerLike(value: unknown): value is GPUSampler {

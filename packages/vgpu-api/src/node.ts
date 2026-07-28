@@ -3,7 +3,7 @@ import type { VGPUAdapter } from "@vgpu/core";
 import { createGpu, type Gpu, type InitOptions } from "./init.ts";
 
 export { createNodeAdapter } from "@vgpu/adapter-node";
-export type { Bundle, BundleOptions, BundleRecorder, Compute, ComputeOptions, DispatchOptions, Gpu, ClearColor, GpuErrorListener, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions, Surface, SurfaceOptions, SurfaceResizeEvent, Timer, TimerSpan, Visibility, VisibilityOptions, VisibilityQuery } from "./init.ts";
+export type { Bundle, BundleOptions, BundleRecorder, Compute, ComputeOptions, DispatchOptions, ClearColor, GpuErrorListener, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions, Surface, SurfaceOptions, SurfaceResizeEvent, Timer, TimerSpan, Visibility, VisibilityOptions, VisibilityQuery } from "./init.ts";
 export type { BlendComponentOptions, BlendOptions, BlendPreset, DepthOptions, Draw, DrawOptions, DrawCallOptions, DrawLayoutOptions, GeometryLike, StencilFaceOptions, StencilOptions } from "./draw.ts";
 export { Geometry } from "./scene/geometry-descriptor.ts";
 export type { GeometryAttributeOverride, GeometryAttributes, GeometryBuffer, GeometryBufferOptions, GeometryData, GeometryOptions, GeometrySlice, GeometrySliceOptions } from "./scene/geometry-descriptor.ts";
@@ -16,8 +16,9 @@ export { Uniform } from "./core/uniform.ts";
 export type { UniformOptions } from "./core/uniform.ts";
 export type { ResolvedShader, ShaderSource, SourceMap, WGSLAst, WGSLSource } from "@vgpu/wgsl";
 
-// --- gpu-first free functions (T202-02 / T202-03). The `gpu.*` methods of `gpu.ts` are a temporary
-// bridge and disappear in T202-05; these named exports are the public creation API.
+// --- The public creation API: gpu-first free functions. There is no facade — the `Gpu` is a
+// device handle plus a lifetime, and everything else takes it as its first argument.
+export type { Gpu } from "./kernel.ts";
 export { bundle } from "./bundle.ts";
 export { clock } from "./clock.ts";
 export type { Clock } from "./clock.ts";

@@ -28,7 +28,7 @@ function expectOutsideFrame(fn: () => unknown): void {
   catch (error) {
     expect(error).toMatchObject({
       code: "VGPU-SURFACE-NOT-IN-FRAME",
-      fix: "surface passes must run inside gpu.frame(...); precompile against an offscreen gpu.target(...) instead",
+      fix: "surface passes must run inside frame(gpu, ...); precompile against an offscreen target(gpu, ...) instead",
     });
     return;
   }

@@ -137,7 +137,7 @@ test("indirect draws require a buffer created with the indirect flag", async () 
   const args = storage(gpu, 16);
   const drawable = draw(gpu, { shader: DRAW_SHADER, label: "no-usage" });
 
-  expect(() => drawable.draw({ target: colorTarget, indirect: args })).toThrowError(/VGPU-INDIRECT-INVALID|gpu\.storage\(16, \{ indirect: true \}\)/);
+  expect(() => drawable.draw({ target: colorTarget, indirect: args })).toThrowError(/VGPU-INDIRECT-INVALID|storage\(gpu, 16, \{ indirect: true \}\)/);
   gpu.dispose();
 });
 
@@ -335,7 +335,7 @@ test("a storage(gpu) buffer drives an indirect draw and keeps the missing-usage 
 
   const plain = storage(gpu, 16);
   expect(() => draw(gpu, { shader: DRAW_SHADER }).draw({ target: colorTarget, indirect: plain }))
-    .toThrowError(/VGPU-INDIRECT-INVALID|gpu\.storage\(16, \{ indirect: true \}\)/);
+    .toThrowError(/VGPU-INDIRECT-INVALID|storage\(gpu, 16, \{ indirect: true \}\)/);
   gpu.dispose();
 });
 

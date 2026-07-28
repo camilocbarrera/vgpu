@@ -144,7 +144,7 @@ test("compute constants reach the compute stage; @id keys and omission behave li
   gpu.dispose();
 });
 
-test("compute constants validate at construction with where gpu.compute", async () => {
+test("compute constants validate at construction with where compute", async () => {
   const gpu = await init();
   expect(() => compute(gpu, COMPUTE_WGSL, { label: "unknown", constants: { LIMIT: 4 } })).toThrowError(/VGPU-CONSTANTS-INVALID|"STEP", "3" \(@id of LIMIT\)/);
   expect(() => compute(gpu, COMPUTE_WGSL, { label: "nan", constants: { STEP: Number.NaN } })).toThrowError(/VGPU-CONSTANTS-INVALID|finite number or a boolean/);

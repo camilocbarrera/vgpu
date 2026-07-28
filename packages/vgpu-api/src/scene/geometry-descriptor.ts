@@ -117,7 +117,7 @@ export class Geometry implements GeometryLike {
   #destroyed = false;
 
   constructor(device: Device, opts: GeometryOptions) {
-    const where = "gpu.geometry";
+    const where = "geometry";
     if (opts.buffers.length > 8) throw meshLimitExceededError(where, `${opts.buffers.length} vertex buffers exceed limit 8.`);
     let attrCount = 0;
     const locations = new Set<number>();

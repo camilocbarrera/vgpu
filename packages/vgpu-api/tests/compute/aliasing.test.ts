@@ -36,7 +36,7 @@ describe("compute storage aliasing", () => {
     const sim = compute(gpu, ALIASING_SHADER, { label: "sim" });
     const buffer = storage(gpu, 16);
     sim.set({ src: buffer, dst: buffer });
-    expect(() => sim.dispatch(1)).toThrowError("`src` and writable `dst` alias. Fix: alternate them with gpu.pingPongStorage().");
+    expect(() => sim.dispatch(1)).toThrowError("`src` and writable `dst` alias. Fix: alternate them with pingPongStorage(gpu).");
   });
 
   test("read + read aliasing passes without warnings", async () => {
@@ -86,7 +86,7 @@ describe("compute(gpu) / storage(gpu) free functions", () => {
     const sim = compute(gpu, ALIASING_SHADER, { label: "sim" });
     const buffer = storage(gpu, 16);
     sim.set({ src: buffer, dst: buffer });
-    expect(() => sim.dispatch(1)).toThrowError("`src` and writable `dst` alias. Fix: alternate them with gpu.pingPongStorage().");
+    expect(() => sim.dispatch(1)).toThrowError("`src` and writable `dst` alias. Fix: alternate them with pingPongStorage(gpu).");
   });
 
   test("ping-pong halves alternate the same shader without aliasing", async () => {

@@ -87,7 +87,7 @@ test("binding never set, including samplers, reports canonical no-phantom-resour
   const colorTarget = target(gpu, { size: [4, 4] });
 
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(lighting)))).toThrowError(
-    "Unset `samp` @group(0) @binding(0) in 'lighting'. Fix: lighting.set({samp:gpu.sampler()}); " +
+    "Unset `samp` @group(0) @binding(0) in 'lighting'. Fix: lighting.set({samp:sampler(gpu)}); " +
       "or lighting.group(0, bindGroup).",
   );
   gpu.dispose();
@@ -340,7 +340,7 @@ test("sampler(gpu, desc) caches by descriptor and dies with the gpu's service ph
   gpu.dispose();
 });
 
-test("frame(gpu) and gpu.frame drive the same runner: the clock advances once and reentrancy is rejected", async () => {
+test("frame(gpu) drives one runner per gpu: the clock advances once per frame and reentrancy is rejected", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, FREE_FN_FRAGMENT);

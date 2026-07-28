@@ -36,7 +36,7 @@ test("bundle replay target signature mismatches throw R3 stale with recorded and
     "bundle 'signatureMismatch' is stale: the replay target signature does not match the recorded signature. Bundles freeze format/depth/sampleCount and bind groups.\n" +
       "  Recorded signature: rgba8unorm:none:1\n" +
       "  Actual signature: bgra8unorm:none:1\n" +
-      "  Fix: re-record the bundle for this target → signatureMismatch = gpu.bundle({ target: scene }, ...)\n" +
+      "  Fix: re-record the bundle for this target → signatureMismatch = bundle(gpu, { target: scene }, ...)\n" +
       "  (re-recording is always your responsibility; the library only detects this).",
   );
   gpu.dispose();

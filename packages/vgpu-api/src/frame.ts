@@ -75,9 +75,9 @@ export interface FramePassOptions {
   };
   /** Scissor rectangle [x, y, width, height] for every draw in this pass. Integers. Note: does not affect the clear — loadOp "clear" always clears the full attachment. */
   readonly scissor?: readonly [number, number, number, number];
-  /** Times this pass on the GPU: pass `timer.span(name)` from a `gpu.timer()`. The pass duration lands in `timer.onResults` under `name`, in milliseconds. One span name per frame. */
+  /** Times this pass on the GPU: pass `timer.span(name)` from a `timer(gpu)`. The pass duration lands in `timer.onResults` under `name`, in milliseconds. One span name per frame. */
   readonly timer?: TimerSpan;
-  /** Enables occlusion queries in this pass: pass a `gpu.visibility()` instance, then wrap proxy draws in `pass.occlusion(handle, body)`. Requires a target with a depth attachment. */
+  /** Enables occlusion queries in this pass: pass a `visibility(gpu)` instance, then wrap proxy draws in `pass.occlusion(handle, body)`. Requires a target with a depth attachment. */
   readonly visibility?: Visibility;
 }
 
@@ -217,7 +217,7 @@ export class Frame {
 
   submit(): void {
     // Closed either way: a re-submit has nothing left to flush, and a canceled frame dropped its
-    // encoder. Both are silent no-ops so `gpu.frame(cb)`'s submit-in-finally never masks a cancel()
+    // encoder. Both are silent no-ops so `frame(gpu, cb)`'s submit-in-finally never masks a cancel()
     // (or an exception) from inside the callback.
     if (this.#submitted || this.#canceled) return;
     this.#submitted = true;
@@ -273,8 +273,8 @@ export class Frame {
   /**
    * Discards the frame without submitting it: the command encoder is dropped (nothing this frame
    * encoded ever runs) and every telemetry instance it attached releases the retain it took on its
-   * query ring, so a `gpu.timer()` / `gpu.visibility()` can be disposed for good without waiting for
-   * `gpu.dispose()`. This is the explicit way out of the leak a manual `gpu.frame()` would otherwise
+   * query ring, so a `timer(gpu)` / `visibility(gpu)` can be disposed for good without waiting for
+   * `gpu.dispose()`. This is the explicit way out of the leak a manual `frame(gpu)` would otherwise
    * hold: a frame is never assumed abandoned, because an old frame can still be submitted.
    *
    * Idempotent, like `submit()`: cancelling twice is a no-op, and `submit()` after `cancel()` does
@@ -401,10 +401,10 @@ export class FramePass {
   bundles(...bundles: readonly Bundle[]): void {
     this.assertFrameOpen?.("FramePass.bundles");
     // WebGPU executeBundles: "If this.[[depthReadOnly]] is true, bundle.[[depthReadOnly]] must be true.
-    // If this.[[stencilReadOnly]] is true, bundle.[[stencilReadOnly]] must be true." gpu.bundle always
+    // If this.[[stencilReadOnly]] is true, bundle.[[stencilReadOnly]] must be true." bundle always
     // records bundles with both flags false, so no recorded bundle can replay into a read-only pass;
     // reject up front instead of leaving it to native validation.
-    if (this.depthReadOnly) throw passDepthReadOnlyError("pass cannot replay bundles: gpu.bundle records bundles with writable depth/stencil, and WebGPU only executes read-only-recorded bundles in a read-only pass.", "Encode the draws directly with pass.draw(...) inside the depthReadOnly pass.", "FramePass.bundles");
+    if (this.depthReadOnly) throw passDepthReadOnlyError("pass cannot replay bundles: bundle records bundles with writable depth/stencil, and WebGPU only executes read-only-recorded bundles in a read-only pass.", "Encode the draws directly with pass.draw(...) inside the depthReadOnly pass.", "FramePass.bundles");
     const recorded = bundles.map((entry) => frameBundleOf(entry) ?? invalidBundle());
     // Staleness is checked for every bundle before the first one replays: a pass either replays the
     // whole list or none of it.
@@ -441,15 +441,15 @@ function frameDrawable(drawable: Draw | Effect): FrameDrawableProtocol {
 }
 
 function invalidBundle(): never {
-  throw new VGPUError({ code: "VGPU-R3-BUNDLE-INVALID", message: "p.bundles() expected bundles created by gpu.bundle({ target }, cb).", where: "FramePass.bundles" });
+  throw new VGPUError({ code: "VGPU-R3-BUNDLE-INVALID", message: "p.bundles() expected bundles created by bundle(gpu, { target }, cb).", where: "FramePass.bundles" });
 }
 
 function timerAttachmentInvalidError(value: unknown): VGPUError {
-  return timerInvalidError(`FramePassOptions.timer received ${previewValue(value)}; expected a TimerSpan from timer.span(name).`, `Create const timer = gpu.timer() once, then pass timer.span("name") per pass.`, "Frame.pass");
+  return timerInvalidError(`FramePassOptions.timer received ${previewValue(value)}; expected a TimerSpan from timer.span(name).`, `Create const passTimer = timer(gpu) once, then pass passTimer.span("name") per pass.`, "Frame.pass");
 }
 
 function visibilityAttachmentInvalidError(value: unknown): VGPUError {
-  return visibilityInvalidError(`FramePassOptions.visibility received ${previewValue(value)}; expected a Visibility from gpu.visibility().`, "Create const vis = gpu.visibility() once, then pass { target, visibility: vis } per pass.", "Frame.pass");
+  return visibilityInvalidError(`FramePassOptions.visibility received ${previewValue(value)}; expected a Visibility from visibility(gpu).`, "Create const vis = visibility(gpu) once, then pass { target, visibility: vis } per pass.", "Frame.pass");
 }
 
 /**

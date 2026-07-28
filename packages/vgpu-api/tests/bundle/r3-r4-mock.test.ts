@@ -49,7 +49,7 @@ test("R3 bundle replay stays valid after JS value writes and stales on bind-grou
   expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(staticScene)))).toThrowError(
     "bundle 'staticScene' is stale: binding `detail` (@group(0) @binding(0)) of draw\n" +
       "  'walls' changed resource after recording. Bundles freeze commands and bind groups.\n" +
-      "  Fix: re-record it → staticScene = gpu.bundle({ target: scene }, ...)\n" +
+      "  Fix: re-record it → staticScene = bundle(gpu, { target: scene }, ...)\n" +
       "  (re-recording is always your responsibility; the library only detects this).",
   );
   gpu.dispose();
@@ -70,7 +70,7 @@ test("R3 bundle sampling a repeatedly resized target stales through binding iden
   expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(firstBundle)))).toThrowError(
     "bundle 'postBundleA' is stale: binding `detail` (@group(0) @binding(0)) of draw\n" +
       "  'post' changed resource after recording. Bundles freeze commands and bind groups.\n" +
-      "  Fix: re-record it → postBundleA = gpu.bundle({ target: scene }, ...)\n" +
+      "  Fix: re-record it → postBundleA = bundle(gpu, { target: scene }, ...)\n" +
       "  (re-recording is always your responsibility; the library only detects this).",
   );
 
@@ -80,7 +80,7 @@ test("R3 bundle sampling a repeatedly resized target stales through binding iden
   expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(secondBundle)))).toThrowError(
     "bundle 'postBundleB' is stale: binding `detail` (@group(0) @binding(0)) of draw\n" +
       "  'post' changed resource after recording. Bundles freeze commands and bind groups.\n" +
-      "  Fix: re-record it → postBundleB = gpu.bundle({ target: scene }, ...)\n" +
+      "  Fix: re-record it → postBundleB = bundle(gpu, { target: scene }, ...)\n" +
       "  (re-recording is always your responsibility; the library only detects this).",
   );
   gpu.dispose();

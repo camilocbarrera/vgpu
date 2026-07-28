@@ -42,7 +42,7 @@ let recordingDepth = 0;
 /** Records explicit WebGPU render bundles and keeps the R3 stale signature checked at replay time. */
 export function createBundle(device: { readonly gpu: GPUDevice }, opts: BundleOptions, record: (recorder: BundleRecorder) => void): Bundle {
   const id = opts.label ?? `bundle${nextBundleId++}`;
-  if (isSurface(opts.target) && !isFrameActive()) throw surfaceNotInFrameError("gpu.bundle");
+  if (isSurface(opts.target) && !isFrameActive()) throw surfaceNotInFrameError("bundle");
   const signature = normalizeBundleSignature(opts.target);
   const bundle = new RecordedBundle(device, id, signature);
   bundle.record(record);
@@ -117,19 +117,19 @@ class ExplicitBundleRecorder implements BundleRecorder {
 
 function normalizeBundleSignature(target: CompileTarget): TargetSignature {
   const signature = normalizeSignature(target);
-  validateTargetSignature(signature, "gpu.bundle");
+  validateTargetSignature(signature, "bundle");
   return signature;
 }
 
 function targetSignatureStaleMessage(id: string, recordedKey: string, actualKey: string): string {
-  return `bundle '${id}' is stale: the replay target signature does not match the recorded signature. Bundles freeze format/depth/sampleCount and bind groups.\n  Recorded signature: ${recordedKey}\n  Actual signature: ${actualKey}\n  Fix: re-record the bundle for this target → ${id} = gpu.bundle({ target: scene }, ...)\n  (re-recording is always your responsibility; the library only detects this).`;
+  return `bundle '${id}' is stale: the replay target signature does not match the recorded signature. Bundles freeze format/depth/sampleCount and bind groups.\n  Recorded signature: ${recordedKey}\n  Actual signature: ${actualKey}\n  Fix: re-record the bundle for this target → ${id} = bundle(gpu, { target: scene }, ...)\n  (re-recording is always your responsibility; the library only detects this).`;
 }
 
 function staleEventMessage(id: string, event: BundleStaleEvent): string {
   if (event.kind === "group-claim") {
-    return `bundle '${id}' is stale: group ${event.group} of draw\n  '${event.drawLabel}' changed bind group after recording. Bundles freeze commands and bind groups.\n  Fix: re-record it → ${id} = gpu.bundle({ target: scene }, ...)\n  (re-recording is always your responsibility; the library only detects this).`;
+    return `bundle '${id}' is stale: group ${event.group} of draw\n  '${event.drawLabel}' changed bind group after recording. Bundles freeze commands and bind groups.\n  Fix: re-record it → ${id} = bundle(gpu, { target: scene }, ...)\n  (re-recording is always your responsibility; the library only detects this).`;
   }
-  return `bundle '${id}' is stale: binding \`${event.bindingName}\` (@group(${event.group}) @binding(${event.binding})) of draw\n  '${event.drawLabel}' changed resource after recording. Bundles freeze commands and bind groups.\n  Fix: re-record it → ${id} = gpu.bundle({ target: scene }, ...)\n  (re-recording is always your responsibility; the library only detects this).`;
+  return `bundle '${id}' is stale: binding \`${event.bindingName}\` (@group(${event.group}) @binding(${event.binding})) of draw\n  '${event.drawLabel}' changed resource after recording. Bundles freeze commands and bind groups.\n  Fix: re-record it → ${id} = bundle(gpu, { target: scene }, ...)\n  (re-recording is always your responsibility; the library only detects this).`;
 }
 
 function bundleStaleError(id: string, message: string): VGPUError {
