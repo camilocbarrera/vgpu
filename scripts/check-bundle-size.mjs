@@ -206,7 +206,7 @@ function report() {
   if (structuralFailures.length) console.error(`\n${structuralFailures.length} experience metafile assertion${structuralFailures.length === 1 ? "" : "s"} failed:\n${structuralFailures.map((failure) => `  ${failure}`).join("\n")}\n`);
   if (failures.length) console.error(`\n${failures.length} bundle budget${failures.length === 1 ? "" : "s"} exceeded:\n`);
   for (const failure of failures) console.error(`${formatFailure(failure)}\n`);
-  if (failures.length) console.error("Run `pnpm bundle-check --update` to re-baseline every budget to the convention (next 512 B multiple at least 512 B above measured), then review the one-line diffs.");
+  if (failures.length) console.error("Run `pnpm bundle-check --update` to re-baseline every budget to the convention (next 512 B multiple strictly above measured), then review the one-line diffs.");
   process.exit(1);
 }
 
@@ -217,7 +217,7 @@ function parseArgs(argv) {
     else if (arg === "--experiences") parsed.experiences = true;
     else if (arg.startsWith("--threshold=")) parsed.threshold = parseThreshold(arg.slice("--threshold=".length));
     else if (arg === "--help" || arg === "-h") {
-      console.log("Usage: pnpm bundle-check [--update] [--experiences] [--threshold=<fraction|percent%>]\n\n  --experiences        measure opt-in T202-06 consumer fixtures and assert metafile exclusions (requires post-T202-05 manifest ceilings)\n  --update             rewrite every budget to the convention (next 512 B multiple at least 512 B above measured)\n  --threshold=0.05     override the tooling growth threshold (accepts 0.05 or 5%)");
+      console.log("Usage: pnpm bundle-check [--update] [--experiences] [--threshold=<fraction|percent%>]\n\n  --experiences        measure opt-in T202-06 consumer fixtures and assert metafile exclusions (requires post-T202-05 manifest ceilings)\n  --update             rewrite every budget to the convention (next 512 B multiple strictly above measured)\n  --threshold=0.05     override the tooling growth threshold (accepts 0.05 or 5%)");
       process.exit(0);
     } else {
       console.error(`Unknown argument ${arg}. Usage: pnpm bundle-check [--update] [--experiences] [--threshold=<fraction|percent%>]`);

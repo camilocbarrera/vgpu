@@ -4,9 +4,6 @@
 /** Budgets are always multiples of this many bytes. */
 export const BUDGET_STEP = 512;
 
-/** Minimum guaranteed headroom between a measured size and its budget. */
-export const MIN_HEADROOM = 512;
-
 /** Default growth threshold for `tooling` budgets: 5% over budget still passes (with a warning). */
 export const DEFAULT_GROWTH_THRESHOLD = 0.05;
 
@@ -24,12 +21,11 @@ export const EXPORT_NOTE_FIELD = "vgpuExportBundleBudgetNote";
 export const PACKAGE_NOTE_FIELD = "vgpuBundleBudgetNote";
 
 /**
- * Convention: the smallest multiple of 512 that sits at least 512 B above the measured size, so
- * headroom is never an accident of rounding (see issue #200).
+ * Convention: the smallest 512 B multiple strictly greater than the measured size.
  */
 export function nextBudgetBytes(measuredBytes) {
   if (!Number.isFinite(measuredBytes) || measuredBytes < 0) throw new Error(`cannot derive a budget from ${measuredBytes}`);
-  return Math.ceil((measuredBytes + MIN_HEADROOM) / BUDGET_STEP) * BUDGET_STEP;
+  return (Math.floor(measuredBytes / BUDGET_STEP) + 1) * BUDGET_STEP;
 }
 
 /** Soft ceiling for `tooling` budgets: growth up to this size warns instead of failing. */
@@ -118,7 +114,7 @@ export function formatFailure({ label, field, manifestPath, verdict }) {
   } else {
     lines.push(`  audience: client (hard gate) -> browser bytes, ${verdict.overBudgetBytes} B over budget; prefer shrinking the entry over raising the budget`);
   }
-  lines.push(`  fix: if the growth is intentional run \`pnpm bundle-check --update\` to re-baseline (would write ${verdict.suggestedBudgetBytes} B: next ${BUDGET_STEP} B multiple at least ${MIN_HEADROOM} B above measured)`);
+  lines.push(`  fix: if the growth is intentional run \`pnpm bundle-check --update\` to re-baseline (would write ${verdict.suggestedBudgetBytes} B: next ${BUDGET_STEP} B multiple strictly above measured)`);
   return lines.join("\n");
 }
 
@@ -130,7 +126,7 @@ export function exportLabel(pkgName, subpath) {
   return `${pkgName}${subpath === "." ? "" : subpath.slice(1)}`;
 }
 
-export const BUDGET_NOTE = `Gzip ceilings use 512-byte granularity: each budget is the next 512-byte multiple at least 512 B above the measured size, so headroom is never a rounding accident. Regenerate with \`pnpm bundle-check --update\`. ${PACKAGE_AUDIENCE_FIELD}/${EXPORT_AUDIENCE_FIELD} select the gate: "client" entries ship to browsers and fail on any byte over budget; "tooling" entries (loaders, Node runtime, CLI, package tarballs) only warn until growth passes ${THRESHOLD_FIELD} (default 5%). Tarballs measure published dist bytes with sourcemap sourcesContent stripped and *.docs.md excluded.`;
+export const BUDGET_NOTE = `Gzip ceilings use 512-byte granularity: each budget is the next 512-byte multiple strictly above the measured size. Regenerate with \`pnpm bundle-check --update\`. ${PACKAGE_AUDIENCE_FIELD}/${EXPORT_AUDIENCE_FIELD} select the gate: "client" entries ship to browsers and fail on any byte over budget; "tooling" entries (loaders, Node runtime, CLI, package tarballs) only warn until growth passes ${THRESHOLD_FIELD} (default 5%). Tarballs measure published dist bytes with sourcemap sourcesContent stripped and *.docs.md excluded.`;
 
 /**
  * Tarball measurement (issue #200 C): count published dist bytes only. Co-located `*.docs.md`
@@ -315,6 +311,8 @@ const EXPERIENCE_EXCLUSIONS = {
     ["compute", /(?:^|\/)compute(?:\.[^/]+)?$/],
     ["bundle", /(?:^|\/)bundle(?:\.[^/]+)?$/],
     ["uniforms", /(?:^|\/)uniforms(?:\.[^/]+)?$/],
+    ["storage", /(?:^|\/)storage(?:\.[^/]+)?$/],
+    ["geometry descriptor", /(?:^|\/)geometry-descriptor(?:\.[^/]+)?$/],
   ],
   "triangle-low-level": [
     ["scene primitive mesh", /(?:^|\/)mesh-[^/]+(?:\.[^/]+)?$/],
