@@ -16,6 +16,26 @@ export { Uniform } from "./core/uniform.ts";
 export type { UniformOptions } from "./core/uniform.ts";
 export type { ResolvedShader, ShaderSource, SourceMap, WGSLAst, WGSLSource } from "@vgpu/wgsl";
 
+// --- gpu-first free functions (T202-02 / T202-03). The `gpu.*` methods of `gpu.ts` are a temporary
+// bridge and disappear in T202-05; these named exports are the public creation API.
+export { bundle } from "./bundle.ts";
+export { compute } from "./compute.ts";
+export { draw } from "./draw.ts";
+export { effect } from "./effect.ts";
+export { frame, frameLoop } from "./frame.ts";
+export type { FrameLoopCallback } from "./frame.ts";
+export { pingPong, pingPongStorage } from "./ping-pong.ts";
+export { sampler } from "./sampler.ts";
+export { storage } from "./storage.ts";
+export { surface } from "./surface.ts";
+export type { SurfaceCanvas } from "./surface.ts";
+export { target } from "./target-offscreen.ts";
+export { timer } from "./timer.ts";
+export { uniforms } from "./uniforms.ts";
+export { visibility } from "./visibility.ts";
+export { geometry } from "./scene/geometry-descriptor.ts";
+export type { GeometryRecipe, GeometryRecipeOf } from "./scene/geometry-recipe.ts";
+
 export interface NodeInitOptions extends Omit<InitOptions, "adapter"> { readonly adapter?: NodeAdapterMode | VGPUAdapter }
 export interface NodeGpu extends Gpu { readonly adapter: NodeAdapterInfo }
 
