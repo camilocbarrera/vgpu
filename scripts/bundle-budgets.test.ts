@@ -17,6 +17,7 @@ import {
   nextBudgetBytes,
   parseTarEntries,
   prohibitedExperienceInputs,
+  retainedMetafileInputs,
   resolveExportAudience,
   resolvePackageAudience,
   resolveThreshold,
@@ -27,25 +28,40 @@ import {
 
 const script = fileURLToPath(new URL("./check-bundle-size.mjs", import.meta.url));
 
-test("experience metafile exclusions name every retained forbidden input", () => {
+test("experience metafile exclusions inspect retained primitive inputs, not deleted factory modules", () => {
   expect(
     prohibitedExperienceInputs("effect-only", [
       "packages/vgpu-api/dist/effect.js",
-      "packages/vgpu-api/dist/scene/geometry-factory.js",
       "packages/vgpu-api/dist/scene/geometry-src/mesh-box.js",
       "packages/vgpu-api/dist/timer.js",
       "packages/vgpu-api/dist/query-ring.js",
     ]),
   ).toEqual([
-    { category: "geometry recipe factory", input: "packages/vgpu-api/dist/scene/geometry-factory.js" },
     { category: "scene primitive mesh", input: "packages/vgpu-api/dist/scene/geometry-src/mesh-box.js" },
     { category: "timer", input: "packages/vgpu-api/dist/timer.js" },
     { category: "query ring", input: "packages/vgpu-api/dist/query-ring.js" },
   ]);
   expect(prohibitedExperienceInputs("triangle-low-level", ["packages/vgpu-api/dist/draw.js"])).toEqual([]);
-  expect(prohibitedExperienceInputs("triangle-low-level", ["packages\\vgpu-api\\dist\\scene\\geometry-factory.js"])).toEqual([
-    { category: "geometry recipe factory", input: "packages/vgpu-api/dist/scene/geometry-factory.js" },
+  expect(prohibitedExperienceInputs("triangle-low-level", ["packages\\vgpu-api\\dist\\scene\\geometry-src\\mesh-box.js"])).toEqual([
+    { category: "scene primitive mesh", input: "packages/vgpu-api/dist/scene/geometry-src/mesh-box.js" },
   ]);
+  expect(prohibitedExperienceInputs("draw-recipe-box", [
+    "packages/vgpu-api/dist/scene/geometry-src/mesh-box.js",
+    "packages/vgpu-api/dist/scene/geometry-src/mesh-cache.js",
+    "packages/vgpu-api/dist/scene/geometry-src/mesh-torus.js",
+  ])).toEqual([
+    { category: "non-box scene primitive mesh", input: "packages/vgpu-api/dist/scene/geometry-src/mesh-torus.js" },
+  ]);
+});
+
+test("experience input lists use bytes retained in the output, not all scanned metafile inputs", () => {
+  expect(retainedMetafileInputs({
+    inputs: {
+      "fixtures/effect-only.ts": { bytesInOutput: 121 },
+      "src/effect.ts": { bytesInOutput: 97 },
+      "src/scene/geometry-src/mesh-torus.ts": { bytesInOutput: 0 },
+    },
+  })).toEqual(["fixtures/effect-only.ts", "src/effect.ts"]);
 });
 
 test("a budget is the next 512 B multiple at least 512 B above measured", () => {

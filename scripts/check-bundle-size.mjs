@@ -19,6 +19,7 @@ import {
   nextBudgetBytes,
   parseTarEntries,
   prohibitedExperienceInputs,
+  retainedMetafileInputs,
   resolveExportAudience,
   resolvePackageAudience,
   resolveThreshold,
@@ -107,7 +108,9 @@ async function checkExperienceBudgets(dir, manifestPath, pkg) {
       mainFields: ["module", "main"],
     });
     const contents = result.outputFiles[0].contents;
-    const inputs = Object.keys(result.metafile.inputs).map((input) => relative(root, input).replaceAll("\\", "/")).sort();
+    const output = Object.values(result.metafile.outputs)[0];
+    if (!output) throw new Error(`esbuild returned no metafile output for experience ${experience.name}`);
+    const inputs = retainedMetafileInputs(output).map((input) => relative(root, input).replaceAll("\\", "/")).sort();
     measurements.push({ experience, budget, rawBytes: contents.length, gzipBytes: gzipSync(contents).length, inputs });
   }
 

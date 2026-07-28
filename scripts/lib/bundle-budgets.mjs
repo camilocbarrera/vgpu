@@ -308,7 +308,6 @@ function readField(header, start, length) {
  */
 const EXPERIENCE_EXCLUSIONS = {
   "effect-only": [
-    ["geometry recipe factory", /(?:^|\/)geometry-factory(?:\.[^/]+)?$/],
     ["scene primitive mesh", /(?:^|\/)mesh-[^/]+(?:\.[^/]+)?$/],
     ["timer", /(?:^|\/)timer(?:\.[^/]+)?$/],
     ["visibility", /(?:^|\/)visibility(?:\.[^/]+)?$/],
@@ -318,10 +317,23 @@ const EXPERIENCE_EXCLUSIONS = {
     ["uniforms", /(?:^|\/)uniforms(?:\.[^/]+)?$/],
   ],
   "triangle-low-level": [
-    ["geometry recipe factory", /(?:^|\/)geometry-factory(?:\.[^/]+)?$/],
     ["scene primitive mesh", /(?:^|\/)mesh-[^/]+(?:\.[^/]+)?$/],
   ],
+  // A recipe may retain its own generator and shared cache, but must not pull in the other 14.
+  "draw-recipe-box": [
+    ["non-box scene primitive mesh", /(?:^|\/)mesh-(?:capsule|cone|cylinder|disk|dodecahedron|fullscreen-quad|icosahedron|icosphere|octahedron|plane|ring|sphere|tetrahedron|torus)(?:\.[^/]+)?$/],
+  ],
 };
+
+/**
+ * Inputs actually retained in an esbuild output. `metafile.inputs` alone lists every scanned
+ * module, including dead branches of a barrel, so it cannot support tree-shaking assertions.
+ */
+export function retainedMetafileInputs(output) {
+  return Object.entries(output.inputs ?? {})
+    .filter(([, details]) => details.bytesInOutput > 0)
+    .map(([input]) => input);
+}
 
 /** Returns retained forbidden modules as `{ category, input }`, suitable for CI diagnostics. */
 export function prohibitedExperienceInputs(experience, inputs) {
