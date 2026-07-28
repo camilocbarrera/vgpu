@@ -29,7 +29,7 @@ Docs app workflows live in `apps/docs/README.md`. Use it when you need to re-bak
 - **Context** — Everything in vgpu starts from one call.  `references/guides/concepts-context.docs.md`
 - **Draws** — A Draw renders geometry with custom vertex buffers: you write both the vertex and the fragment stage, and a geometry supplies the buffers.  `references/guides/concepts-draws.docs.md`
 - **Compilation** — Pipelines compile lazily: the first draw() against a new target pays the pipeline creation cost, and that cost lands inside your frame.  `references/guides/concepts-compilation.docs.md`
-- **Effects** — An Effect is a full-screen fragment shader created with gpu.effect(source).  `references/guides/concepts-effects.docs.md`
+- **Effects** — An Effect is a full-screen fragment shader created with effect(gpu, source).  `references/guides/concepts-effects.docs.md`
 - **Passes** — A pass is a render-pass section inside a frame.  `references/guides/concepts-passes.docs.md`
 - **Frames** — A frame is one unit of GPU work.  `references/guides/concepts-frames.docs.md`
 - **Render bundles** — A render loop re-encodes every pipeline, bind group, and draw on every tick — even when nothing changed.  `references/guides/concepts-render-bundles.docs.md`
@@ -44,7 +44,7 @@ Writing or optimizing a shader? Read **performance-model** first, then the rest 
 
 - **WebGPU screenshots with agent-browser** — Use agent-browser to verify and capture vgpu previews that run WebGPU on Linux, including containers without a GPU.  `references/guides/agent-browser-webgpu.docs.md`
 - **Authoring shaders for performance** — Write WGSL so reflection can build stable layouts.  `references/guides/authoring-for-perf.docs.md`
-- **Browser testing with Playwright WebGPU** — Browser tests should exercise the same public API users copy: init(), gpu.surface(canvas, opts), explicit targets, and deterministic frame submission.  `references/guides/browser-testing.docs.md`
+- **Browser testing with Playwright WebGPU** — Browser tests should exercise the same public API users copy: init(), surface(gpu, canvas, opts), explicit targets, and deterministic frame submiss…  `references/guides/browser-testing.docs.md`
 - **Getting started** — Start with the public vgpu package.  `references/guides/getting-started.docs.md`
 - **Measuring** — Measure the thing you intend to optimize: CPU encoding, pipeline warm-up, bind-group churn, target memory, or shader cost.  `references/guides/measuring.docs.md`
 - **Optimize a pass** — Optimize one pass by first deciding what changes every frame.  `references/guides/optimize-pass.docs.md`
