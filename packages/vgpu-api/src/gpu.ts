@@ -14,23 +14,25 @@
  * corresponding method is called, so the lifetime/ownership semantics are the final ones.
  */
 import type { ShaderSource } from "@vgpu/wgsl";
-import { createBundle, type Bundle, type BundleOptions, type BundleRecorder } from "./bundle.ts";
-import { InternalDraw, type Draw, type DrawOptions } from "./draw.ts";
-import { Frame, FrameRunner } from "./frame.ts";
-import { InternalEffect, type Effect, type EffectOptions } from "./effect.ts";
-import { createGeometry } from "./scene/geometry-factory.ts";
+import { bundle, type Bundle, type BundleOptions, type BundleRecorder } from "./bundle.ts";
+import { draw, type Draw, type DrawOptions } from "./draw.ts";
+import { frame, frameLoop, type Frame, type FrameLoopCallback, type FrameLoopHandle, type FrameLoopOptions } from "./frame.ts";
+import { effect, type Effect, type EffectOptions } from "./effect.ts";
+import { geometryFromRecipe } from "./scene/geometry-factory.ts";
 import { Geometry, type GeometryOptions } from "./scene/geometry-descriptor.ts";
 import type { SceneGeometry } from "./scene/geometry.ts";
-import { OffscreenTarget, type Target, type TargetOptions, type TargetTextureOptions } from "./target.ts";
-import { surfaceDuplicateError, unsupportedError } from "./errors.ts";
-import { ComputePipeline } from "./compute.ts";
-import { createStorageBuffer } from "./storage.ts";
-import { createPingPongStorage, createPingPongTargets } from "./ping-pong.ts";
+import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
+import { target as createTarget } from "./target-offscreen.ts";
+import { compute as computeFactory } from "./compute.ts";
+import { storage as storageFactory } from "./storage.ts";
+import { pingPong as pingPongFactory, pingPongStorage as pingPongStorageFactory } from "./ping-pong.ts";
 import { toWgsl } from "./shader-source.ts";
-import { createSharedUniforms } from "./uniforms.ts";
-import { CanvasSurface, type Surface, type SurfaceCanvas, type SurfaceOptions } from "./surface.ts";
-import { createTimer, type Timer } from "./timer.ts";
-import { createVisibility, type Visibility, type VisibilityOptions } from "./visibility.ts";
+import { uniforms as uniformsFactory } from "./uniforms.ts";
+import { surface, type Surface, type SurfaceCanvas, type SurfaceOptions } from "./surface.ts";
+import { sampler } from "./sampler.ts";
+import { unsupportedError } from "./errors.ts";
+import { timer as timerFactory, type Timer } from "./timer.ts";
+import { visibility as visibilityFactory, type Visibility, type VisibilityOptions } from "./visibility.ts";
 import type { ClearColor } from "./target-utils.ts";
 import type { Compute, ComputeOptions, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions } from "./api-types.ts";
 import { frameState } from "./frame-state.ts";
@@ -39,6 +41,16 @@ import { createCoreGpu, kernelOf, type AdapterFactory, type EntryKind, type Gpu 
 
 export type { AdapterFactory, InitOptions } from "./kernel.ts";
 export type { Compute, ComputeOptions, DispatchOptions, GpuErrorListener, PingPongStorage, PingPongTargets, SharedUniforms, StorageAccess, StorageBuffer, StorageOptions } from "./api-types.ts";
+
+/**
+ * @deprecated TEMPORARY — the callable shape of `gpu.frame`. Replaced by the free functions
+ * `frame(gpu, cb)` and `frameLoop(gpu, cb, opts)`; deleted with the rest of the bridge in T202-05.
+ */
+export interface LegacyFrameRunner {
+  (cb?: (frame: Frame) => void): Frame;
+  frame(cb?: (frame: Frame) => void): Frame;
+  loop(cb: FrameLoopCallback, opts?: FrameLoopOptions): FrameLoopHandle;
+}
 
 /**
  * @deprecated TEMPORARY — removed in T202-05. Each member becomes a free function that takes the
@@ -53,7 +65,7 @@ export interface LegacyGpuMethods {
   effect(source: string | ShaderSource, opts?: EffectOptions): Effect;
   draw(opts: DrawOptions): Draw;
   target(opts: TargetOptions): Target;
-  readonly frame: FrameRunner & ((cb?: (frame: Frame) => void) => Frame);
+  readonly frame: LegacyFrameRunner;
   sampler(desc?: GPUSamplerDescriptor): GPUSampler;
   geometry(geometry: SceneGeometry): Geometry;
   geometry(options: GeometryOptions): Geometry;
@@ -79,74 +91,27 @@ export async function createGpu(entry: EntryKind, opts: InitOptions = {}, adapte
 /** @deprecated TEMPORARY — see the file header. Deleted in T202-05. */
 function installLegacyBridge(core: CoreGpu): Gpu {
   const kernel = kernelOf(core);
-  const device = kernel.device;
   let runner: LegacyGpuMethods["frame"] | undefined;
-  let surfaces: Map<SurfaceCanvas, CanvasSurface> | undefined;
-  const errorSink = (error: Parameters<Kernel["reportError"]>[0]) => kernel.reportError(error);
-  const trackSettled = (promise: Promise<unknown>) => kernel.trackDelivery(promise);
 
   const methods = {
-    surface(canvas: SurfaceCanvas, opts: SurfaceOptions = {}): Surface {
-      surfaces ??= new Map<SurfaceCanvas, CanvasSurface>();
-      const open = surfaces;
-      const existing = open.get(canvas);
-      if (existing && !existing.disposed) throw surfaceDuplicateError(existing.label);
-      const surface = new CanvasSurface(device, canvas, opts, (s) => {
-        if (open.get(s.canvas) === s) open.delete(s.canvas);
-        releaseAutoResize();
-        releaseOwnership();
-      });
-      // Surfaces resize themselves right after the frame clock advances, and go down with the gpu
-      // before its caches and its device.
-      const releaseAutoResize = frameState(kernel).onAdvance(() => surface.applyAutoResize());
-      const releaseOwnership = kernel.own("resource", () => surface.dispose());
-      open.set(canvas, surface);
-      return surface;
-    },
+    surface(canvas: SurfaceCanvas, opts: SurfaceOptions = {}): Surface { return surface(core, canvas, opts); },
     effect(source: string | ShaderSource, opts: EffectOptions = {}): Effect {
+      // The free function reports itself as `effect`; keep the 0.1.x wording for the method.
       if (hasGeometry(opts)) throw unsupportedError("gpu.effect", "gpu.effect() never accepts vertex buffers; use gpu.draw({ shader, geometry: gpu.geometry(descriptor) }).");
-      const render = renderService(kernel);
-      return new InternalEffect(device, toWgsl(source), opts, render.binds, undefined, render.pipelines, render.shaderModules, render.pipelineLayouts, errorSink, trackSettled);
+      return effect(core, source, opts);
     },
-    draw(opts: DrawOptions): Draw {
-      const shader = toWgsl(opts.shader);
-      const render = renderService(kernel);
-      return new InternalDraw(device, shader, { ...opts, shader }, render.binds, undefined, render.pipelines, render.shaderModules, render.pipelineLayouts, errorSink, trackSettled);
-    },
-    target(opts: TargetOptions): Target { return new OffscreenTarget(device, opts); },
-    sampler(desc?: GPUSamplerDescriptor): GPUSampler { return renderService(kernel).sampler(desc); },
-    geometry(input: SceneGeometry | GeometryOptions): Geometry {
-      return isGeometryOptions(input) ? new Geometry(device, input) : createGeometry(device, input);
-    },
-    compute(source: string | ShaderSource, opts: ComputeOptions = {}): Compute { return new ComputePipeline(device, toWgsl(source), opts, renderService(kernel).binds); },
-    storage(bytes: number, access: StorageAccess | StorageOptions = "read-write"): StorageBuffer {
-      const opts = typeof access === "string" ? { access } : access;
-      return createStorageBuffer(device, bytes, opts.access ?? "read-write", undefined, opts.indirect ?? false);
-    },
-    timer(): Timer {
-      let release = (): void => undefined;
-      const timer: Timer = createTimer(device, {
-        trackSettled,
-        errorSink,
-        onDispose: () => { release(); },
-      });
-      release = kernel.own("resource", () => timer.dispose());
-      return timer;
-    },
-    visibility(options: VisibilityOptions = {}): Visibility {
-      let release = (): void => undefined;
-      const visibility: Visibility = createVisibility(device, options, () => frameState(kernel).frameCount, {
-        trackSettled,
-        errorSink,
-        onDispose: () => { release(); },
-      });
-      release = kernel.own("resource", () => visibility.dispose());
-      return visibility;
-    },
-    pingPong(width: number, height: number, opts: TargetTextureOptions = {}): PingPongTargets { return createPingPongTargets(device, width, height, opts); },
-    pingPongStorage(bytes: number): PingPongStorage { return createPingPongStorage(device, bytes); },
-    uniforms<T extends Record<string, unknown>>(values: T): SharedUniforms<T> { return createSharedUniforms(device, values); },
-    bundle(opts: BundleOptions, cb: (recorder: BundleRecorder) => void): Bundle { return createBundle(device, opts, cb); },
+    draw(opts: DrawOptions): Draw { return draw(core, opts); },
+    target(opts: TargetOptions): Target { return createTarget(core, opts); },
+    sampler(desc?: GPUSamplerDescriptor): GPUSampler { return sampler(core, desc); },
+    geometry(input: SceneGeometry | GeometryOptions): Geometry { return geometryFromRecipe(core, input); },
+    compute(source: string | ShaderSource, opts: ComputeOptions = {}): Compute { return computeFactory(core, source, opts); },
+    storage(bytes: number, access: StorageAccess | StorageOptions = "read-write"): StorageBuffer { return storageFactory(core, bytes, access); },
+    timer(): Timer { return timerFactory(core); },
+    visibility(options: VisibilityOptions = {}): Visibility { return visibilityFactory(core, options); },
+    pingPong(width: number, height: number, opts: TargetTextureOptions = {}): PingPongTargets { return pingPongFactory(core, width, height, opts); },
+    pingPongStorage(bytes: number): PingPongStorage { return pingPongStorageFactory(core, bytes); },
+    uniforms<T extends Record<string, unknown>>(values: T): SharedUniforms<T> { return uniformsFactory(core, values); },
+    bundle(opts: BundleOptions, cb: (recorder: BundleRecorder) => void): Bundle { return bundle(core, opts, cb); },
   };
 
   Object.defineProperties(core, {
@@ -154,34 +119,23 @@ function installLegacyBridge(core: CoreGpu): Gpu {
     deltaTime: { get: () => frameState(kernel).deltaTime, set: (value: number) => { frameState(kernel).deltaTime = value; }, enumerable: true, configurable: true },
     frameCount: { get: () => frameState(kernel).frameCount, set: (value: number) => { frameState(kernel).frameCount = value; }, enumerable: true, configurable: true },
     clearColor: { get: () => frameState(kernel).clearColor, set: (value: ClearColor) => { frameState(kernel).clearColor = value; }, enumerable: true, configurable: true },
-    frame: { get: () => (runner ??= createFrameRunner(kernel)), enumerable: true, configurable: true },
+    frame: { get: () => (runner ??= legacyFrameRunner(core)), enumerable: true, configurable: true },
   });
   return Object.assign(core, methods) as Gpu;
 }
 
 /**
- * @deprecated TEMPORARY — moves to `frame.ts` as `frame(gpu, cb)` / `frameLoop(gpu, cb)` in T202-02.
- * Loops register in the kernel's `scheduler` phase so `dispose()` stops them before touching the device.
+ * @deprecated TEMPORARY — `gpu.frame(cb)` is `frame(gpu, cb)` and `gpu.frame.loop(cb)` is
+ * `frameLoop(gpu, cb)`. Callable object over the free functions: the runner itself (clock,
+ * reentrancy guard, loop registrations) lives in the kernel, so both spellings drive the same one.
  */
-function createFrameRunner(kernel: Kernel): LegacyGpuMethods["frame"] {
-  const state = frameState(kernel);
-  const runner = new FrameRunner(
-    () => new Frame(kernel.device, undefined, (error) => kernel.reportError(error), (promise) => kernel.trackDelivery(promise), () => state.clearColor),
-    () => state.advance(),
-    (handle) => kernel.own("scheduler", () => handle.stop()),
-  );
-  const callable = ((cb?: (frame: Frame) => void) => runner.frame(cb)) as LegacyGpuMethods["frame"];
-  Object.setPrototypeOf(callable, FrameRunner.prototype);
-  Object.assign(callable, runner);
-  callable.frame = runner.frame.bind(runner);
-  callable.loop = runner.loop.bind(runner);
+function legacyFrameRunner(core: CoreGpu): LegacyGpuMethods["frame"] {
+  const callable = ((cb?: (f: Frame) => void) => frame(core, cb)) as LegacyGpuMethods["frame"];
+  callable.frame = (cb?: (f: Frame) => void) => frame(core, cb);
+  callable.loop = (cb: FrameLoopCallback, opts?: FrameLoopOptions) => frameLoop(core, cb, opts);
   return callable;
 }
 
 function hasGeometry(opts: EffectOptions): boolean {
   return "geometry" in (opts as Record<string, unknown>);
-}
-
-function isGeometryOptions(value: SceneGeometry | GeometryOptions): value is GeometryOptions {
-  return typeof value === "object" && value !== null && "buffers" in value;
 }

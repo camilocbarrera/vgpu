@@ -1,6 +1,19 @@
 import { Texture, createResourceIdentity, DestroySignal, type Device, type ResourceDestroyCallback, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
 import type { RenderPassDescriptorOptions, Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 import { colorAttachment, colorSpecsFor, depthAttachment, depthFormatFor, sampleCountFor, sameSize, validateTargetOptions } from "./target-utils.ts";
+import { liveKernel } from "./live-kernel.ts";
+import type { Gpu } from "./kernel.ts";
+
+/**
+ * Offscreen render target: color attachments (plus optional depth and MSAA) sized in pixels.
+ *
+ * Its textures belong to the gpu's device, so `gpu.dispose()` releases them with the device; the
+ * target is not registered as a separate kernel resource because there is nothing to tear down
+ * ahead of the device — unlike a surface, which must unconfigure its canvas context first.
+ */
+export function target(gpu: Gpu, opts: TargetOptions): Target {
+  return new OffscreenTarget(liveKernel(gpu, "target").device, opts);
+}
 
 /** Offscreen render target. MSAA targets render into sampleCount=4 attachments and resolve into `.color`. */
 export class OffscreenTarget implements Target {

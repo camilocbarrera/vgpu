@@ -14,6 +14,38 @@ import { isFrameActive, isSurface } from "./surface.ts";
 import { geometryLayoutResolver, type GeometryLayoutResolvable } from "./scene/geometry-descriptor.ts";
 import { resolveIndirect } from "./storage.ts";
 import type { StorageBuffer } from "./api-types.ts";
+import { FRAME_DRAWABLE, type FrameDrawableProtocol } from "./frame-protocols.ts";
+import { liveKernel } from "./live-kernel.ts";
+import { renderService } from "./render-service.ts";
+import { toWgsl } from "./shader-source.ts";
+import type { Gpu } from "./kernel.ts";
+
+/**
+ * Renderable shader unit of this gpu: a WGSL shader plus its pipeline state, bindings and
+ * optional geometry. Encode it with `pass.draw(triangle)` or call `triangle.draw(target)`.
+ *
+ * Pipelines, bind groups, shader modules and layouts come from the gpu's single render service, so
+ * two draws with the same shader and target signature share one compiled pipeline — and an
+ * `effect()` shares that same cache set. Nothing here exists until the first render call: `init()`
+ * creates no cache.
+ */
+export function draw(gpu: Gpu, opts: DrawOptions): Draw {
+  const kernel = liveKernel(gpu, "draw");
+  const render = renderService(kernel);
+  const shader = toWgsl(opts.shader);
+  return new InternalDraw(
+    kernel.device,
+    shader,
+    { ...opts, shader },
+    render.binds,
+    undefined,
+    render.pipelines,
+    render.shaderModules,
+    render.pipelineLayouts,
+    (error) => kernel.reportError(error),
+    (promise) => { void kernel.trackDelivery(promise); },
+  );
+}
 
 export type BlendPreset = "alpha" | "additive" | "premultiplied";
 
@@ -296,6 +328,17 @@ export class InternalDraw implements Draw {
     return undefined;
   }
   get targets(): readonly Target[] | undefined { return drawState(this).opts.targets; }
+
+  /**
+   * Frame drawable protocol: a `Frame` encodes through this instead of importing draw.ts, so a
+   * program that never draws never pulls this module. The instance is its own protocol object —
+   * `encode`, `label` and the depth/stencil metadata below are exactly what a pass needs.
+   */
+  get [FRAME_DRAWABLE](): FrameDrawableProtocol { return this; }
+  /** @internal Frame drawable protocol; see {@link drawWritesDepth}. */
+  writesDepth(): boolean { return drawWritesDepth(this); }
+  /** @internal Frame drawable protocol; see {@link drawStencilWritingOps}. */
+  stencilWritingOps(): readonly string[] { return drawStencilWritingOps(this); }
 
   set(values: SetBag): this {
     const state = drawState(this);

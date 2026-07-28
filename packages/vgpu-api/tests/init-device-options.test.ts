@@ -96,8 +96,11 @@ test("init builds only the core gpu: no caches, frame runner, surfaces or query 
   gpu.draw({ shader: `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }` });
   expect(kernel.peekService(renderServiceToken)).toBe(render);
 
-  // Frame state appears only with the frame runner.
+  // Frame state appears with the first frame — reading the accessor still builds nothing, because
+  // the runner itself is the kernel service frame(gpu, cb) resolves on its first call.
   void gpu.frame;
+  expect(kernel.peekService(frameStateToken)).toBeUndefined();
+  gpu.frame().cancel();
   expect(kernel.peekService(frameStateToken)).toBeDefined();
   expect(effect).toBeDefined();
   gpu.dispose();

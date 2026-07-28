@@ -5,8 +5,12 @@ import {
   surfaceAutoResizeUnsupportedError,
   surfaceContextError,
   surfaceDisposedError,
+  surfaceDuplicateError,
   surfaceResizeReentrantError,
 } from "./errors.ts";
+import { frameState } from "./frame-state.ts";
+import { liveKernel } from "./live-kernel.ts";
+import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
 
 export interface SurfaceOptions {
   readonly autoResize?: boolean;
@@ -37,6 +41,39 @@ export interface Surface extends Target {
 }
 
 export type SurfaceCanvas = HTMLCanvasElement | OffscreenCanvas;
+
+/**
+ * Canvas render target of this gpu: configures the canvas context and keeps it sized.
+ *
+ * One live surface per canvas — a second `surface(gpu, canvas)` on the same canvas throws
+ * `VGPU-SURFACE-DUPLICATE`, because reconfiguring a context out from under a live surface silently
+ * invalidates its textures. Disposing the surface frees the canvas for a new one.
+ *
+ * Lifecycle: the surface resizes itself right after the frame clock advances (auto-resize is a
+ * frame-state hook, so no rAF of its own), and it goes down with the gpu in the `resource` phase —
+ * after the loops stopped, before the caches and the device.
+ */
+export function surface(gpu: Gpu, canvas: SurfaceCanvas, opts: SurfaceOptions = {}): Surface {
+  const kernel = liveKernel(gpu, "surface");
+  const open = openSurfaces(kernel);
+  const existing = open.get(canvas);
+  if (existing && !existing.disposed) throw surfaceDuplicateError(existing.label);
+  const created = new CanvasSurface(kernel.device, canvas, opts, (disposed) => {
+    if (open.get(disposed.canvas) === disposed) open.delete(disposed.canvas);
+    releaseAutoResize();
+    releaseOwnership();
+  });
+  const releaseAutoResize = frameState(kernel).onAdvance(() => created.applyAutoResize());
+  const releaseOwnership = kernel.own("resource", () => created.dispose());
+  open.set(canvas, created);
+  return created;
+}
+
+/** Live surfaces of a gpu, keyed by canvas: the duplicate-configure guard, created on first surface. */
+const openSurfacesToken = serviceToken<Map<SurfaceCanvas, CanvasSurface>>("surfaces");
+function openSurfaces(kernel: Kernel): Map<SurfaceCanvas, CanvasSurface> {
+  return kernel.service(openSurfacesToken, () => new Map<SurfaceCanvas, CanvasSurface>());
+}
 
 let resizeCallbackDepth = 0;
 let frameDepth = 0;

@@ -105,8 +105,12 @@ export interface FramePassAttachContext {
 /** Occlusion query source of a pass: supplied by the attachment, consumed by `FramePass.occlusion()`. */
 export interface FrameOcclusionSource {
   readonly querySet: GPUQuerySet;
-  /** Reserves the query index for `query` in this frame. Throws on an unknown/disposed handle. */
-  beginQuery(query: object, frame: FrameHandle): number;
+  /**
+   * Reserves the query index for `query` in this frame. Throws on an unknown/disposed handle.
+   * `frame` is optional because a pass can be encoded outside a frame (tests drive `FramePass`
+   * directly); the attachment then has no frame to bill the slot to.
+   */
+  beginQuery(query: object, frame?: FrameHandle): number;
 }
 
 /**
