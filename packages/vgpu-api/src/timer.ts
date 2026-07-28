@@ -43,10 +43,8 @@ class InternalTimerSpan implements TimerSpan, FramePassAttachment {
   }
 }
 
-/** @internal Frame.pass guard: FramePassOptions.timer must be a span produced by Timer.span(). */
-export function isTimerSpan(value: unknown): value is InternalTimerSpan {
-  return value instanceof InternalTimerSpan;
-}
+/** @internal The concrete span, for tests that need the internal shape behind the TimerSpan handle. */
+export type { InternalTimerSpan };
 
 /** @internal */
 export function createTimer(device: Device, host: QueryHostOptions = {}): Timer {

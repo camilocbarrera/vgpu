@@ -61,11 +61,6 @@ export function visibility(gpu: Gpu, options: VisibilityOptions = {}): Visibilit
   return ownQueryFeature(kernel, (host) => new InternalVisibility(kernel.device, options, () => frameState(kernel).frameCount, host));
 }
 
-/** @internal Frame.pass guard: FramePassOptions.visibility must come from gpu.visibility(). */
-export function isVisibility(value: unknown): value is InternalVisibility {
-  return value instanceof InternalVisibility;
-}
-
 class InternalVisibilityQuery implements VisibilityQuery {
   #state: VisibilityState = "unknown";
   /** gpu.frameCount stamped when the last result applied; age = frameCount - stamp. */
