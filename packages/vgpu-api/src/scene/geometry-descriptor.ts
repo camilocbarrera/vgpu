@@ -1,15 +1,16 @@
 /**
  * Low-level geometry: an immutable vertex/index layout plus the buffers it owns.
  *
- * This module is the whole cost of `geometry(gpu, descriptor)`: it never reaches the recipe bridge
- * (`geometry-factory.ts`) nor any of the 15 mesh primitives behind it, so a program that hands its
- * own vertex data to `draw()` does not pay for a primitive generator it never calls. The recipe
- * path is a separate symbol in a separate module — see `geometryFromRecipe`.
+ * This module is the whole cost of `geometry(gpu, descriptor)`. It also accepts a mesh recipe, but
+ * it imports no generator to expand one: a recipe carries its own `build()`, so the primitives a
+ * program links are exactly the ones it names. Handing your own vertex data to `draw()` never pays
+ * for a `box()` you did not write.
  */
 import type { Buffer as CoreBuffer, Device } from "@vgpu/core";
 import type { EntryPointInputInfo, WGSLType } from "@vgpu/wgsl/reflect-source";
 import type { GeometryLike } from "../draw.ts";
 import type { Gpu, Kernel } from "../kernel.ts";
+import type { GeometryRecipe } from "./geometry-recipe.ts";
 import { liveKernel, ownResource } from "../live-kernel.ts";
 import { meshAttributeAmbiguousError, meshAttributeUnmatchedError, meshDataMisalignedError, meshFormatMismatchError, meshInputMissingError, meshLayoutInvalidError, meshLimitExceededError, meshLocationConflictError, meshRangeInvalidError, meshWriteRangeError } from "../errors.ts";
 
@@ -305,19 +306,35 @@ class InternalGeometrySlice implements GeometrySlice {
 }
 
 /**
- * Builds a geometry from an explicit vertex/index descriptor: validated layout, owned buffers for
- * the streams that carry `data`, borrowed ones for the streams that carry a `buffer`.
+ * Builds a geometry, either from an explicit vertex/index descriptor — validated layout, owned
+ * buffers for the streams that carry `data`, borrowed ones for the streams that carry a `buffer` —
+ * or from a mesh recipe such as `box()`, which expands itself and lends the buffers its per-device
+ * primitive cache owns.
  *
- * This is the low-level path. It knows nothing about mesh recipes (`box()`, `sphere()`, ...): those
- * go through `geometryFromRecipe(gpu, recipe)`, which lives in another module precisely so this one
- * can be imported alone. Owned buffers are destroyed by `gpu.dispose()` or by `geometry.destroy()`.
+ * Both spellings land on the same object and the same lifetime: owned buffers are destroyed by
+ * `gpu.dispose()` or by an earlier `geometry.destroy()`.
  */
-export function geometry(gpu: Gpu, opts: GeometryOptions): Geometry {
+export function geometry(gpu: Gpu, descriptor: GeometryOptions): Geometry;
+export function geometry(gpu: Gpu, recipe: GeometryRecipe): Geometry;
+/** Union form, for a caller that only knows it holds one of the two. */
+export function geometry(gpu: Gpu, input: GeometryOptions | GeometryRecipe): Geometry;
+export function geometry(gpu: Gpu, input: GeometryOptions | GeometryRecipe): Geometry {
+  // The gpu is checked before anything is generated: a recipe on a dead gpu must not build a mesh.
   const kernel = liveKernel(gpu, "geometry");
+  const opts = isRecipe(input) ? input.build(kernel.device) : input;
   return ownGeometry(kernel, new Geometry(kernel.device, opts));
 }
 
-/** @internal Shared by the descriptor factory and the recipe bridge: gpu lifetime for owned buffers. */
+/**
+ * A recipe is the thing that can build itself; everything else is already a descriptor. Testing for
+ * `build` — instead of for a descriptor's `buffers` — also keeps buffer-less descriptors, like
+ * `{ topology, vertexCount }` for shader-generated vertices, on the low-level path.
+ */
+function isRecipe(value: GeometryOptions | GeometryRecipe): value is GeometryRecipe {
+  return "build" in value && typeof (value as GeometryRecipe).build === "function";
+}
+
+/** @internal Ties a geometry to the gpu lifetime; the registration is dropped if it is destroyed first. */
 export function ownGeometry(kernel: Kernel, value: Geometry): Geometry {
   return ownResource(kernel, value, (owned) => owned.destroy(), (cb) => { value.onDestroy(cb); });
 }

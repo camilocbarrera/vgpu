@@ -18,8 +18,7 @@ import { bundle, type Bundle, type BundleOptions, type BundleRecorder } from "./
 import { draw, type Draw, type DrawOptions } from "./draw.ts";
 import { frame, frameLoop, type Frame, type FrameLoopCallback, type FrameLoopHandle, type FrameLoopOptions } from "./frame.ts";
 import { effect, type Effect, type EffectOptions } from "./effect.ts";
-import { geometryFromRecipe } from "./scene/geometry-factory.ts";
-import { Geometry, type GeometryOptions } from "./scene/geometry-descriptor.ts";
+import { geometry as geometryFactory, Geometry, type GeometryOptions } from "./scene/geometry-descriptor.ts";
 import type { SceneGeometry } from "./scene/geometry.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 import { target as createTarget } from "./target-offscreen.ts";
@@ -103,7 +102,7 @@ function installLegacyBridge(core: CoreGpu): Gpu {
     draw(opts: DrawOptions): Draw { return draw(core, opts); },
     target(opts: TargetOptions): Target { return createTarget(core, opts); },
     sampler(desc?: GPUSamplerDescriptor): GPUSampler { return sampler(core, desc); },
-    geometry(input: SceneGeometry | GeometryOptions): Geometry { return geometryFromRecipe(core, input); },
+    geometry(input: SceneGeometry | GeometryOptions): Geometry { return geometryFactory(core, input); },
     compute(source: string | ShaderSource, opts: ComputeOptions = {}): Compute { return computeFactory(core, source, opts); },
     storage(bytes: number, access: StorageAccess | StorageOptions = "read-write"): StorageBuffer { return storageFactory(core, bytes, access); },
     timer(): Timer { return timerFactory(core); },

@@ -1,7 +1,7 @@
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { expect, test } from "vitest";
 import { init } from "../src/mock.ts";
-import { geometryFromRecipe } from "../src/scene/geometry-factory.ts";
+import { geometry as geometryOf } from "../src/scene/geometry-descriptor.ts";
 import {
   box,
   capsule,
@@ -898,14 +898,14 @@ function bufferUsageNames(usage: number): string[] {
   return flags.filter(([flag]) => (usage & flag) !== 0).map(([, name]) => name);
 }
 
-// --- gpu-first recipe bridge (T202-03) ---------------------------------------------------------
+// --- one symbol, self-building recipes (T202-03) -----------------------------------------------
 
-test("geometryFromRecipe(gpu, recipe) matches the facade upload for every primitive kind", async () => {
+test("geometry(gpu, recipe) matches the facade upload for every primitive kind", async () => {
   const gpu = await init();
   try {
     for (const [kind, recipe] of GEOMETRIES) {
       const viaFacade = gpu.geometry(recipe);
-      const viaFactory = geometryFromRecipe(gpu, recipe);
+      const viaFactory = geometryOf(gpu, recipe);
       expect({ kind, ...summarize(viaFactory) }).toEqual({ kind, ...summarize(viaFacade) });
     }
   } finally {
@@ -913,11 +913,11 @@ test("geometryFromRecipe(gpu, recipe) matches the facade upload for every primit
   }
 });
 
-test("the recipe bridge also forwards a plain descriptor, and both paths hand ownership to the gpu", async () => {
+test("the same symbol takes a descriptor, and both spellings hand ownership to the gpu", async () => {
   const gpu = await init();
-  const fromRecipe = geometryFromRecipe(gpu, GEOMETRIES[0]![1]);
-  // A buffer-less descriptor (shader-generated vertices) must stay on the descriptor path.
-  const fromDescriptor = geometryFromRecipe(gpu, { buffers: [], vertexCount: 3, topology: "triangle-list" });
+  const fromRecipe = geometryOf(gpu, GEOMETRIES[0]![1]);
+  // A buffer-less descriptor (shader-generated vertices) stays on the low-level path.
+  const fromDescriptor = geometryOf(gpu, { buffers: [], vertexCount: 3, topology: "triangle-list" });
 
   expect(fromDescriptor.vertexCount).toBe(3);
   expect(fromDescriptor.vertexBuffers).toEqual([]);
@@ -929,14 +929,41 @@ test("the recipe bridge also forwards a plain descriptor, and both paths hand ow
   expect(destroyed.sort()).toEqual(["descriptor", "recipe"]);
 });
 
-test("geometryFromRecipe(gpu, recipe) refuses a disposed gpu", async () => {
+test("a recipe is inert until something uploads it, and never builds on a disposed gpu", async () => {
   const gpu = await init();
+  const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+  const before = mock.createBufferDescriptors.length;
+  const parked = sphere({ segments: 8 });
+
+  // Holding a recipe costs nothing: kind and props are there, no mesh was generated.
+  expect(parked).toMatchObject({ kind: "sphere", props: { segments: 8 } });
+  expect(Object.isFrozen(parked) && Object.isFrozen(parked.props)).toBe(true);
+  expect(mock.createBufferDescriptors.length).toBe(before);
+
+  geometryOf(gpu, parked);
+  expect(mock.createBufferDescriptors.length).toBeGreaterThan(before);
+
   gpu.dispose();
-  try { geometryFromRecipe(gpu, GEOMETRIES[0]![1]); expect.unreachable("expected a throw"); }
-  catch (error) { expect(error).toMatchObject({ code: "VGPU-GPU-DISPOSED", where: "geometryFromRecipe" }); }
+  const after = mock.createBufferDescriptors.length;
+  try { geometryOf(gpu, parked); expect.unreachable("expected a throw"); }
+  catch (error) { expect(error).toMatchObject({ code: "VGPU-GPU-DISPOSED", where: "geometry" }); }
+  expect(mock.createBufferDescriptors.length).toBe(after);
 });
 
-function summarize(geometry: ReturnType<typeof geometryFromRecipe>): Record<string, unknown> {
+test("the same recipe value can be uploaded to two gpus", async () => {
+  const first = await init();
+  const second = await init();
+  const shared = GEOMETRIES[0]![1];
+
+  const a = geometryOf(first, shared);
+  const b = geometryOf(second, shared);
+  expect(summarize(a)).toEqual(summarize(b));
+  expect(a.vertexBuffers[0]).not.toBe(b.vertexBuffers[0]);
+  first.dispose();
+  second.dispose();
+});
+
+function summarize(geometry: ReturnType<typeof geometryOf>): Record<string, unknown> {
   return {
     vertexCount: geometry.vertexCount,
     indexCount: geometry.indexCount,
