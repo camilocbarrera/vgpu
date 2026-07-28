@@ -1,6 +1,7 @@
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { expect, test } from "vitest";
 import { init } from "../src/mock.ts";
+import { geometryFromRecipe } from "../src/scene/geometry-factory.ts";
 import {
   box,
   capsule,
@@ -895,4 +896,54 @@ function bufferUsageNames(usage: number): string[] {
     [512, "query_resolve"],
   ];
   return flags.filter(([flag]) => (usage & flag) !== 0).map(([, name]) => name);
+}
+
+// --- gpu-first recipe bridge (T202-03) ---------------------------------------------------------
+
+test("geometryFromRecipe(gpu, recipe) matches the facade upload for every primitive kind", async () => {
+  const gpu = await init();
+  try {
+    for (const [kind, recipe] of GEOMETRIES) {
+      const viaFacade = gpu.geometry(recipe);
+      const viaFactory = geometryFromRecipe(gpu, recipe);
+      expect({ kind, ...summarize(viaFactory) }).toEqual({ kind, ...summarize(viaFacade) });
+    }
+  } finally {
+    gpu.dispose();
+  }
+});
+
+test("the recipe bridge also forwards a plain descriptor, and both paths hand ownership to the gpu", async () => {
+  const gpu = await init();
+  const fromRecipe = geometryFromRecipe(gpu, GEOMETRIES[0]![1]);
+  // A buffer-less descriptor (shader-generated vertices) must stay on the descriptor path.
+  const fromDescriptor = geometryFromRecipe(gpu, { buffers: [], vertexCount: 3, topology: "triangle-list" });
+
+  expect(fromDescriptor.vertexCount).toBe(3);
+  expect(fromDescriptor.vertexBuffers).toEqual([]);
+  const destroyed: string[] = [];
+  fromRecipe.onDestroy(() => destroyed.push("recipe"));
+  fromDescriptor.onDestroy(() => destroyed.push("descriptor"));
+
+  gpu.dispose();
+  expect(destroyed.sort()).toEqual(["descriptor", "recipe"]);
+});
+
+test("geometryFromRecipe(gpu, recipe) refuses a disposed gpu", async () => {
+  const gpu = await init();
+  gpu.dispose();
+  try { geometryFromRecipe(gpu, GEOMETRIES[0]![1]); expect.unreachable("expected a throw"); }
+  catch (error) { expect(error).toMatchObject({ code: "VGPU-GPU-DISPOSED", where: "geometryFromRecipe" }); }
+});
+
+function summarize(geometry: ReturnType<typeof geometryFromRecipe>): Record<string, unknown> {
+  return {
+    vertexCount: geometry.vertexCount,
+    indexCount: geometry.indexCount,
+    indexFormat: geometry.indexFormat,
+    topology: geometry.topology,
+    vertexBufferLayouts: geometry.vertexBufferLayouts,
+    vertexBuffers: geometry.vertexBuffers.map(bufferSummary),
+    indexBuffer: geometry.indexBuffer ? bufferSummary(geometry.indexBuffer) : undefined,
+  };
 }

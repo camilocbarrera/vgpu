@@ -70,15 +70,21 @@ export function createGeometry(device: Device, geometry: SceneGeometry): Geometr
  */
 export function geometryFromRecipe(gpu: Gpu, recipe: SceneGeometry): Geometry;
 export function geometryFromRecipe(gpu: Gpu, descriptor: GeometryOptions): Geometry;
+/** Union form, for a caller that only knows it holds one of the two (the legacy `gpu.geometry`). */
+export function geometryFromRecipe(gpu: Gpu, input: SceneGeometry | GeometryOptions): Geometry;
 export function geometryFromRecipe(gpu: Gpu, input: SceneGeometry | GeometryOptions): Geometry {
-  if (isGeometryOptions(input)) return geometryFromDescriptor(gpu, input);
+  if (!isRecipe(input)) return geometryFromDescriptor(gpu, input);
   const kernel = liveKernel(gpu, "geometryFromRecipe");
   return ownGeometry(kernel, createGeometry(kernel.device, input));
 }
 
-/** Recipes are `{ kind, props }`; descriptors always declare their vertex `buffers`. */
-function isGeometryOptions(value: SceneGeometry | GeometryOptions): value is GeometryOptions {
-  return "buffers" in value;
+/**
+ * Recipes are exactly `{ kind, props }` (frozen by the `scene/geometry.ts` factories). Testing for
+ * the recipe shape — rather than for a descriptor's `buffers` — keeps buffer-less descriptors, e.g.
+ * `{ topology, vertexCount }` for a shader-generated triangle, on the descriptor path.
+ */
+function isRecipe(value: SceneGeometry | GeometryOptions): value is SceneGeometry {
+  return "kind" in value && "props" in value;
 }
 
 function primitiveFor(device: Device, geometry: SceneGeometry): MeshPrimitive {

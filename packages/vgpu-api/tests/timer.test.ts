@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { createMockAdapter, init } from "../src/mock.ts";
+import { timer } from "../src/timer.ts";
 
 function initWithTimestampQuery() {
   return init({ adapter: createMockAdapter({ features: ["timestamp-query"] }), requiredFeatures: ["timestamp-query"] });
@@ -544,4 +545,66 @@ function spyQuerySetDestroys(device: GPUDevice, destroyed: number[]): void {
     querySet.destroy = () => { destroyed.push(index); originalDestroy(); };
     return querySet;
   });
+}
+
+// --- gpu-first factory (T202-03) --------------------------------------------------------------
+
+test("timer(gpu) produces the same instrumented timer as the facade and reports through the gpu error channel", async () => {
+  const gpu = await initWithTimestampQuery();
+  const ops = spyFrameEncoders(gpu.device.gpu);
+  const gpuTimer = timer(gpu);
+  const target = gpu.target({ size: [4, 4] });
+  const results: Array<Readonly<Record<string, number>>> = [];
+  gpuTimer.onResults((spans) => { results.push(spans); });
+
+  gpu.frame((frame) => frame.pass({ target, timer: gpuTimer.span("main") }, () => undefined));
+  // The readback is tracked on the kernel, so it is covered by gpu.settled() without the facade.
+  await gpu.settled();
+
+  expect(ops.passDescriptors[0]?.timestampWrites).toMatchObject({ beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 });
+  expect(results).toEqual([{ main: 1 }]);
+  gpu.dispose();
+  vi.restoreAllMocks();
+});
+
+test("a timer(gpu) left open goes down with the gpu, and disposing it first drops its registration", async () => {
+  const gpu = await initWithTimestampQuery();
+  const destroyed: number[] = [];
+  spyQuerySetDestroys(gpu.device.gpu, destroyed);
+  const owned = timer(gpu);
+  const released = timer(gpu);
+  const target = gpu.target({ size: [4, 4] });
+  gpu.frame((frame) => frame.pass({ target, timer: owned.span("main") }, () => undefined));
+  await gpu.settled();
+
+  released.dispose();
+  expect(destroyed).toEqual([1]);
+
+  // No timer.dispose() for `owned`: the kernel owns it in the resource phase.
+  gpu.dispose();
+  expect(destroyed.sort()).toEqual([0, 1]);
+  // Idempotent: the disposer ran once, and the timer's own dispose() after teardown is still safe.
+  expect(() => owned.dispose()).not.toThrow();
+  vi.restoreAllMocks();
+});
+
+test("timer(gpu) after gpu.dispose() throws VGPU-GPU-DISPOSED instead of building on a dead device", async () => {
+  const gpu = await initWithTimestampQuery();
+  gpu.dispose();
+  expect(thrownBy(() => timer(gpu))).toMatchObject({
+    code: "VGPU-GPU-DISPOSED",
+    where: "timer",
+    message: expect.stringContaining("after gpu.dispose()"),
+  });
+});
+
+test("timer(gpu) rejects an object this library did not create", () => {
+  expect(thrownBy(() => timer({ disposed: false } as never))).toMatchObject({ code: "VGPU-GPU-FOREIGN" });
+});
+
+/** Returns what `run` threw, so an assertion can inspect the VGPUError's code instead of its message. */
+function thrownBy(run: () => unknown): unknown {
+  try { run(); }
+  catch (error) { return error; }
+  throw new Error("expected the call to throw");
 }

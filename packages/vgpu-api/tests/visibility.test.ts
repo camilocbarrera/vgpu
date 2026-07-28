@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init } from "../src/mock.ts";
+import { visibility } from "../src/visibility.ts";
 
 const SOLID = `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1.0); }`;
 
@@ -690,4 +691,68 @@ function spyQuerySetDestroys(device: GPUDevice, destroyed: number[]): void {
     querySet.destroy = () => { destroyed.push(index); originalDestroy(); };
     return querySet;
   });
+}
+
+// --- gpu-first factory (T202-03) --------------------------------------------------------------
+
+test("visibility(gpu) declares its capacity, latches results and ages through the kernel's frame clock", async () => {
+  const gpu = await init();
+  const vis = visibility(gpu, { capacity: 8 });
+  const scene = gpu.target({ size: [4, 4], depth: true });
+  const q = vis.query("statue");
+
+  expect(getMockGPUDeviceInstrumentation(gpu.device.gpu).createQuerySetDescriptors).toEqual([
+    { type: "occlusion", count: 8, label: "vgpu.visibility" },
+  ]);
+  expect(q.age).toBe(Infinity);
+
+  gpu.frame((frame) => frame.pass({ target: scene, visibility: vis }, (p) => p.occlusion(q, () => undefined)));
+  await gpu.settled();
+  // The mock resolves occlusion queries to 0 samples, so the latch confirms "hidden" — the point
+  // here is that a result landed at all: the handle left "unknown" and stamped the current frame.
+  expect(q.state).toBe("hidden");
+  expect(q.hidden).toBe(true);
+  expect(q.age).toBe(0);
+
+  // The clock the age reads is the kernel's frame state, the same one the frame runner advances.
+  gpu.frame((frame) => frame.pass(scene, () => undefined));
+  expect(q.age).toBe(1);
+  gpu.dispose();
+});
+
+test("a visibility(gpu) left open goes down with the gpu, and disposing it first drops its registration", async () => {
+  const gpu = await init();
+  const destroyed: number[] = [];
+  spyQuerySetDestroys(gpu.device.gpu, destroyed);
+  const owned = visibility(gpu);
+  const released = visibility(gpu);
+
+  released.dispose();
+  expect(destroyed).toEqual([1]);
+
+  gpu.dispose();
+  expect([...destroyed].sort()).toEqual([0, 1]);
+  expect(() => owned.dispose()).not.toThrow();
+  vi.restoreAllMocks();
+});
+
+test("visibility(gpu) validates the gpu before touching the device", async () => {
+  const gpu = await init();
+  gpu.dispose();
+  expect(thrownBy(() => visibility(gpu))).toMatchObject({ code: "VGPU-GPU-DISPOSED", where: "visibility" });
+  expect(thrownBy(() => visibility({ disposed: false } as never))).toMatchObject({ code: "VGPU-GPU-FOREIGN" });
+});
+
+test("visibility(gpu) still rejects a capacity outside the WebGPU query-set limit", async () => {
+  const gpu = await init();
+  expect(thrownBy(() => visibility(gpu, { capacity: 4097 }))).toMatchObject({ code: "VGPU-VIS-CAPACITY-LIMIT" });
+  expect(thrownBy(() => visibility(gpu, { capacity: 0 }))).toMatchObject({ code: "VGPU-VIS-CAPACITY-LIMIT" });
+  gpu.dispose();
+});
+
+/** Returns what `run` threw, so an assertion can inspect the VGPUError's code instead of its message. */
+function thrownBy(run: () => unknown): unknown {
+  try { run(); }
+  catch (error) { return error; }
+  throw new Error("expected the call to throw");
 }

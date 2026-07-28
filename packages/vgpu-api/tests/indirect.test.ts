@@ -2,6 +2,8 @@ import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init } from "../src/mock.ts";
 import type { StorageBuffer } from "../src/mock.ts";
+import { storage } from "../src/storage.ts";
+import { pingPong } from "../src/ping-pong.ts";
 
 const DRAW_SHADER = `
 @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
@@ -300,3 +302,57 @@ function spyComputePassOps(device: GPUDevice): PassOp[] {
   });
   return ops;
 }
+
+// --- gpu-first factories (T202-03) -------------------------------------------------------------
+
+test("storage(gpu, bytes, opts) reproduces the facade's usage flags and access semantics", async () => {
+  const gpu = await init();
+  const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+
+  const plain = storage(gpu, 16);
+  const plainUsage = mock.createBufferDescriptors.at(-1)!.usage;
+  const args = storage(gpu, 16, { indirect: true });
+  const argsUsage = mock.createBufferDescriptors.at(-1)!.usage;
+
+  expect(plainUsage & GPU_BUFFER_USAGE_INDIRECT).toBe(0);
+  expect(argsUsage & GPU_BUFFER_USAGE_INDIRECT).toBe(GPU_BUFFER_USAGE_INDIRECT);
+  expect(argsUsage & plainUsage).toBe(plainUsage);
+  expect(plain.access).toBe("read-write");
+  expect(storage(gpu, 16, "read").access).toBe("read");
+  expect(storage(gpu, 16, { access: "read", indirect: true }).access).toBe("read");
+  gpu.dispose();
+});
+
+test("a storage(gpu) buffer drives an indirect draw and keeps the missing-usage diagnostic", async () => {
+  const gpu = await init();
+  const ops = spyRenderPassOps(gpu.device.gpu);
+  const target = gpu.target({ size: [2, 2] });
+  const args = storage(gpu, 16, { indirect: true });
+  args.write(new Uint32Array([3, 1, 0, 0]));
+
+  gpu.draw({ shader: DRAW_SHADER, label: "gpu-driven" }).draw({ target, indirect: args });
+  expect(ops).toEqual([["setPipeline"], ["drawIndirect", gpuBufferOf(args), 0]]);
+
+  const plain = storage(gpu, 16);
+  expect(() => gpu.draw({ shader: DRAW_SHADER }).draw({ target, indirect: plain }))
+    .toThrowError(/VGPU-INDIRECT-INVALID|gpu\.storage\(16, \{ indirect: true \}\)/);
+  gpu.dispose();
+});
+
+test("pingPong(gpu, w, h) swaps two owned targets and destroys both with the gpu", async () => {
+  const gpu = await init();
+  const targets = pingPong(gpu, 8, 4, { label: "blur" });
+  const first = targets.read;
+  const second = targets.write;
+
+  expect(first).not.toBe(second);
+  targets.swap();
+  expect(targets.read).toBe(second);
+  expect(targets.write).toBe(first);
+
+  const destroyed: string[] = [];
+  first.onDestroy(() => destroyed.push("read"));
+  second.onDestroy(() => destroyed.push("write"));
+  gpu.dispose();
+  expect(destroyed.sort()).toEqual(["read", "write"]);
+});

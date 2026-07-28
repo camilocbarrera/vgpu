@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation, init, VGPUError } from "../../src/mock.ts";
+import { geometry as geometryOf } from "../../src/scene/geometry-descriptor.ts";
 
 function meshErrorOf(fn: () => unknown): VGPUError {
   try { fn(); } catch (error) { if (error instanceof VGPUError) return error; throw error; }
@@ -193,4 +194,58 @@ test("geometry writes are range checked and slices validate indexed/non-indexed 
   } finally {
     gpu.dispose();
   }
+});
+
+// --- gpu-first factory (T202-03) --------------------------------------------------------------
+
+test("geometry(gpu, descriptor) builds the same layout as the facade and owns its buffers for the gpu's lifetime", async () => {
+  const gpu = await init();
+  const vertices = new Float32Array([0, 0, 1, 0, 0, 1]);
+  const mesh = geometryOf(gpu, { label: "triangle", buffers: [{ data: vertices, attributes: { position: { format: "float32x2", location: 0 } } }] });
+
+  expect(mesh.vertexCount).toBe(3);
+  expect(mesh.vertexBufferLayouts).toEqual([{ arrayStride: 8, attributes: [{ format: "float32x2", offset: 0, shaderLocation: 0 }] }]);
+  expect(() => mesh.write(vertices)).not.toThrow();
+
+  // No explicit destroy(): the kernel destroys owned geometry buffers in the resource phase.
+  gpu.dispose();
+  expect(meshErrorOf(() => mesh.write(vertices)).code).toBe("VGPU-MESH-WRITE-RANGE");
+});
+
+test("destroying a geometry by hand releases its kernel registration, so dispose() is a no-op for it", async () => {
+  const gpu = await init();
+  const mesh = geometryOf(gpu, { buffers: [{ data: new Float32Array([0, 0, 1, 0, 0, 1]), attributes: { position: { format: "float32x2", location: 0 } } }] });
+  const destroyed: string[] = [];
+  mesh.onDestroy(() => destroyed.push("geometry"));
+
+  mesh.destroy();
+  expect(destroyed).toEqual(["geometry"]);
+  // The registration was dropped at destroy(), so teardown does not run the disposer a second time.
+  gpu.dispose();
+  expect(destroyed).toEqual(["geometry"]);
+});
+
+test("geometry(gpu, descriptor) borrows caller-owned buffers instead of allocating or destroying them", async () => {
+  const gpu = await init();
+  const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+  const borrowed = gpu.device.gpu.createBuffer({ size: 24, usage: 32 | 8 });
+  const before = mock.createBufferDescriptors.length;
+  const mesh = geometryOf(gpu, { buffers: [{ buffer: borrowed, stride: 8, attributes: { position: { format: "float32x2", location: 0 } } }], vertexCount: 3 });
+
+  expect(mock.createBufferDescriptors.length).toBe(before);
+  expect(mesh.vertexBuffers).toEqual([borrowed]);
+  // Writing a borrowed stream is rejected: vgpu never owned those bytes, so it never frees them either.
+  expect(meshErrorOf(() => mesh.write(new Float32Array([1, 2]))).code).toBe("VGPU-MESH-WRITE-RANGE");
+  expect(() => gpu.dispose()).not.toThrow();
+});
+
+test("geometry(gpu, descriptor) validates the gpu and keeps the mesh error codes", async () => {
+  const gpu = await init();
+  // Same validation pipeline as the facade: 16 bytes of data cannot be split into 12-byte vertices.
+  expect(meshErrorOf(() => geometryOf(gpu, { buffers: [{ data: new Float32Array([1, 2, 3, 4]), attributes: { pos: { format: "float32x3", location: 0 } } }] })).code)
+    .toBe("VGPU-MESH-DATA-MISALIGNED");
+  expect(meshErrorOf(() => geometryOf(gpu, { topology: "bogus" as GPUPrimitiveTopology, buffers: [] })).code)
+    .toBe("VGPU-MESH-LAYOUT-INVALID");
+  gpu.dispose();
+  expect(meshErrorOf(() => geometryOf(gpu, { buffers: [] }))).toMatchObject({ code: "VGPU-GPU-DISPOSED", where: "geometry" });
 });

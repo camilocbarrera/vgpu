@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { init } from "../../src/mock.ts";
 import { drawBindingState } from "../../src/draw.ts";
 import { effectDraw } from "../../src/effect.ts";
+import { uniforms } from "../../src/uniforms.ts";
 
 const WAVE_WGSL = `
 struct Globals { time: f32, mouse: vec2f }
@@ -170,5 +171,54 @@ describe("gpu.uniforms() shared uniforms", () => {
     expect(drawBindingState(effectDraw(storage), "globals")?.ownership).toBe("user");
     expect(mock.createBufferDescriptors[0]?.usage).toBe(128 | 8);
     gpu.dispose();
+  });
+});
+
+// --- gpu-first factory (T202-03) ---------------------------------------------------------------
+
+describe("uniforms(gpu, values)", () => {
+  test("adopts the layout of the first shader that binds it and shares one buffer across effects", async () => {
+    const gpu = await init();
+    const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
+    const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+    const before = mock.createBufferDescriptors.length;
+
+    const wave = gpu.effect(WAVE_WGSL, { set: { globals } });
+    const blur = gpu.effect(BLUR_WGSL, { set: { globals } });
+    effectDraw(wave);
+    effectDraw(blur);
+
+    // One adoption, one buffer: the second shader validates the layout instead of allocating.
+    expect(mock.createBufferDescriptors.length - before).toBe(1);
+    const waveBuffer = drawBindingState(effectDraw(wave), "globals")!.resource as GPUBufferBinding;
+    const blurBuffer = drawBindingState(effectDraw(blur), "globals")!.resource as GPUBufferBinding;
+    expect(waveBuffer.buffer).toBe(blurBuffer.buffer);
+
+    globals.set({ time: 1 });
+    gpu.dispose();
+  });
+
+  test("the adopted buffer is destroyed by gpu.dispose(), and a disposed gpu is refused up front", async () => {
+    const gpu = await init();
+    const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
+    effectDraw(gpu.effect(WAVE_WGSL, { set: { globals } }));
+    expect(() => globals.set({ time: 1 })).not.toThrow();
+
+    gpu.dispose();
+    // The kernel destroyed the adopted buffer, so a late write fails loudly instead of writing to a dead handle.
+    expect(() => globals.set({ time: 2 })).toThrowError(/Buffer is destroyed/);
+    try { uniforms(gpu, { time: 0 }); expect.unreachable("expected a throw"); }
+    catch (error) { expect(error).toMatchObject({ code: "VGPU-GPU-DISPOSED", where: "uniforms" }); }
+  });
+
+  test("uniforms(gpu) never allocates for a value bag no shader binds", async () => {
+    const gpu = await init();
+    const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+    const before = mock.createBufferDescriptors.length;
+    const unused = uniforms(gpu, { time: 0, mouse: [0, 0] });
+    unused.set({ time: 3 });
+
+    expect(mock.createBufferDescriptors.length).toBe(before);
+    expect(() => gpu.dispose()).not.toThrow();
   });
 });
