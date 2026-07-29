@@ -131,13 +131,13 @@ async function runWorkerSurfaceScenario(): Promise<{ initial: number[]; resized:
   const code = `
     const { parentPort } = require("node:worker_threads");
     (async () => {
-      const { init } = await import(${JSON.stringify(new URL("../../dist/node.js", import.meta.url).href)});
+      const { init, surface: createSurface, target, effect: createEffect, frame } = await import(${JSON.stringify(new URL("../../dist/node.js", import.meta.url).href)});
       const gpu = await init();
       try {
         const canvas = (${workerCanvasSource()})(16, 8);
-        const surface = surface(gpu, canvas);
+        const surface = createSurface(gpu, canvas);
         const half = target(gpu, { size: [Math.max(1, surface.size[0] / 2), Math.max(1, surface.size[1] / 2)] });
-        const effect = effect(gpu, ${JSON.stringify(BLUE)});
+        const effect = createEffect(gpu, ${JSON.stringify(BLUE)});
         surface.onResize(({ width, height }) => half.resize([width / 2, height / 2]));
         const initial = [...surface.size];
         surface.resize([20, 10]);
