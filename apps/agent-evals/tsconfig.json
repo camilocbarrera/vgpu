@@ -4,13 +4,16 @@
     "module": "ES2022",
     "moduleResolution": "Bundler",
     "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
     // The verifier itself is plain `.mjs` (it must stay runnable with bare
     // `node`, with no build step); `allowJs` lets the TypeScript test file
     // import it and pick up its JSDoc types instead of erroring with TS7016.
     "allowJs": true,
     "checkJs": false,
-    "skipLibCheck": true,
-    "types": ["node"]
+    // eve authors import sibling modules with an explicit `.ts` extension.
+    "allowImportingTsExtensions": true,
+    "noEmit": true
   },
-  "include": ["verify/**/*.ts"]
+  "include": ["verify/**/*.ts", "agent/**/*.ts", "evals/**/*.ts"]
 }

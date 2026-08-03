@@ -6,10 +6,82 @@ package.
 
 The package has two layers:
 
-- **Layer 1 — `tasks/` + `verify/` (this PR).** Task fixtures plus a
-  deterministic, driver-agnostic grader. No knowledge of any agent framework.
-- **Layer 2 — `agent/` + `evals/` (next PR).** The `eve`-based driver that runs
-  an agent against a task and hands the resulting workspace to Layer 1.
+- **Layer 1 — `tasks/` + `verify/`.** Task fixtures plus a deterministic,
+  driver-agnostic grader. No knowledge of any agent framework.
+- **Layer 2 — `agent/` + `evals/`.** The `eve`-based driver that runs an agent
+  against a task and hands the resulting workspace to Layer 1.
+
+## Running the evals (Layer 2)
+
+```bash
+pnpm agent-evals                       # from the repo root (preflights Node >= 24)
+pnpm --filter @vgpu/agent-evals exec eve eval evals/h0-harness-export.eval.ts
+```
+
+Environment:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `AI_GATEWAY_API_KEY` / `VERCEL_OIDC_TOKEN` | — | required; without either, every eval **skips** (never fails) |
+| `VGPU_EVALS_MODEL` | `anthropic/claude-sonnet-5` | model under test |
+| `VGPU_EVALS_SANDBOX` | `docker` | `docker` or `vercel`; anything else throws at startup |
+| `VGPU_EVALS_WORK_DIR` | `<package>/.work` | where snapshots and evidence land |
+
+Run `h0-harness-export` first: it is the infra self-test for the workspace
+export. An `s1` result recorded while `h0` is red is not trustworthy.
+
+### Credentials
+
+Local development — one token covers both the sandbox and the model gateway:
+
+```bash
+npx vercel link --yes --scope vercel-labs --project vgpu
+npx vercel env pull                 # writes .env.local with VERCEL_OIDC_TOKEN
+node --env-file .env.local ../../scripts/agent-evals.mjs
+```
+
+`VERCEL_OIDC_TOKEN` authenticates `@vercel/sandbox` **and** the AI Gateway (eve
+accepts it in place of `AI_GATEWAY_API_KEY`). It expires after 12 hours; re-run
+`vercel env pull`.
+
+> **Footgun:** `vercel env pull` writes the value **wrapped in double quotes**.
+> Extracting it with `grep`/`cut` keeps the quotes and the gateway answers
+> `403 invalidToken`, which looks exactly like a permissions problem. Always
+> load the file with a real dotenv reader (`node --env-file .env.local`), never
+> with hand-rolled shell parsing.
+
+CI / non-interactive: a 12-hour OIDC token is useless for a scheduled run. Use
+`VERCEL_TOKEN` + `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` for the sandbox and a
+separate `AI_GATEWAY_API_KEY` for the gateway — a Vercel access token does
+**not** work as a Gateway bearer token.
+
+### Sandbox backend selection
+
+`agent/sandbox/backend.ts` is the only file in the repo allowed to construct a
+`SandboxBackend`, and nothing may call `defaultBackend()` (its cascade can
+silently degrade to `just-bash`, which has no real binaries — an infra problem
+would then look like an agent failure).
+
+The Vercel Sandbox backend is already selectable (`VGPU_EVALS_SANDBOX=vercel`);
+wiring its concrete `vercel({...})` options is pending the sandbox spike — see
+`backend.ts`. The spike verified the golden path: **x86_64 only**, runtime
+`node22`/`node24`, one `sudo dnf install -y mesa-vulkan-drivers vulkan-loader`,
+after which `vgpu doctor` reports healthy in ~22-30 s. That dnf step is already
+in `bootstrap` as a backend-agnostic, no-op-if-absent shell step, so only the
+runtime/resource options remain to be filled in.
+
+### How the workspace gets out of the sandbox
+
+`agent/hooks/export-workspace.ts` tars `/workspace` out of the sandbox on every
+`turn.completed` and writes it to `.work/snapshots/<sessionId>/workspace.tar` on
+the host. The evals grade that tar; nothing the agent *says* is ever evidence.
+
+This is a hook rather than the originally-planned `GET /export` channel route
+because a channel route handler's context (`RouteHandlerArgs`) has **no**
+`getSandbox()` — verified against `eve@0.29.2` (local checkout) and `eve@0.29.5`
+(the pinned build). `getSandbox()` lives on `SessionContext`, which
+`HookContext` extends. The hook stays backend-agnostic (plain `tar` over
+`sandbox.run`), so it is explicitly *not* the retired `docker cp` fallback.
 
 ## Intentionally outside the root test/typecheck configs
 
@@ -30,7 +102,7 @@ pnpm --filter @vgpu/agent-evals exec tsc --noEmit
 
 Layer 1 (`tasks/`, `verify/`) runs on this repo's own Node (22).
 
-Running the eve-driven evals (Layer 2, added in the next PR) requires
+Running the eve-driven evals (Layer 2) requires
 **Node.js >= 24** and an AI Gateway credential (`AI_GATEWAY_API_KEY` or
 `VERCEL_OIDC_TOKEN`). This repo pins Node 22 (`.nvmrc`, root `engines`) and that
 does not change — so this host may well have neither Node 24 nor a credential,

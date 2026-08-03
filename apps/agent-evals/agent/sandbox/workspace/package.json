@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": { "vgpu": "0.2.0", "pngjs": "7.0.0" }
+}
