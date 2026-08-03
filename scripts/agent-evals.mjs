@@ -72,6 +72,11 @@ if (requestedModel) {
         // 16 is the gateway's documented floor for this field; asking for 1
         // gets a 400 from some providers and would read as a fake failure.
         body: JSON.stringify({ model: requestedModel, max_tokens: 16, messages: [{ role: "user", content: "hi" }] }),
+        // A gateway that accepts the connection and then never answers would
+        // otherwise hang this command forever, which is worse than the failure
+        // the preflight exists to catch. The AbortError lands in the catch
+        // below and is treated like any other unreachable gateway.
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (error) {
       // Network trouble is not evidence about the provider. Say so and carry on
@@ -82,19 +87,25 @@ if (requestedModel) {
       const body = await response.text().catch(() => "");
       const restricted = response.status === 403 && /restricted|RestrictedProviders/i.test(body);
       const missing = response.status === 404;
-      if (restricted || missing) {
+      // A credential the gateway refuses is a verdict, not a blip: 401 always,
+      // and a 403 that is not about provider access — an expired OIDC token
+      // reads exactly like that. Continuing would spend bootstrap and turns to
+      // die on the same rejection, which is the cost this preflight exists to
+      // avoid.
+      const refused = response.status === 401 || (response.status === 403 && !restricted);
+      if (restricted || missing || refused) {
+        const headline = restricted
+          ? `pnpm agent-evals: provider "${provider}" is restricted for this team, so ${requestedModel} cannot run.`
+          : missing
+            ? `pnpm agent-evals: the gateway does not know the model "${requestedModel}".`
+            : `pnpm agent-evals: the gateway rejected the credential (HTTP ${response.status}).`;
+        const advice = restricted
+          ? "  An account owner has to allow the provider in the AI Gateway settings."
+          : missing
+            ? "  Check the slug against the gateway's model list."
+            : "  Check AI_GATEWAY_API_KEY / VERCEL_OIDC_TOKEN (expired?). An OIDC token\n  lasts 12 hours; re-run `vercel env pull` to refresh it.";
         process.stderr.write(
-          [
-            restricted
-              ? `pnpm agent-evals: provider "${provider}" is restricted for this team, so ${requestedModel} cannot run.`
-              : `pnpm agent-evals: the gateway does not know the model "${requestedModel}".`,
-            "",
-            restricted
-              ? "  An account owner has to allow the provider in the AI Gateway settings."
-              : "  Check the slug against the gateway's model list.",
-            "  Nothing was packed and no sandbox was started.",
-            "",
-          ].join("\n"),
+          [headline, "", advice, "  Nothing was packed and no sandbox was started.", ""].join("\n"),
         );
         process.exit(EXIT_ENVIRONMENT);
       }

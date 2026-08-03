@@ -280,7 +280,7 @@ export default defineEval({
       "Counters for this run:",
       `- documentation commands: ${docsCalls.length}`,
       `- total tool calls: ${turn.toolCalls.length}`,
-      `- tool calls before the first successful render: ${
+      `- tool calls up to and including the first successful render: ${
         firstGoodRender === -1 ? "never rendered successfully" : firstGoodRender + 1
       }`,
       "",

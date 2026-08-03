@@ -32,7 +32,11 @@ export function turnFailure(events) {
     const line = [data.code, status === undefined ? null : `HTTP ${status}`, message]
       .filter((part) => part !== null && part !== undefined && part !== "")
       .join(" ");
-    if (line !== "") return line;
+    // The contract above says "one line", so honour it here rather than hoping
+    // upstream messages cooperate: gateway errors arrive multi-line and can run
+    // to thousands of characters, and this string goes straight onto a reporter
+    // summary line.
+    if (line !== "") return line.replace(/\s+/g, " ").trim().slice(0, 300);
   }
   return "no failure event in the transcript";
 }
