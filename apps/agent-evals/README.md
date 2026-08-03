@@ -102,10 +102,23 @@ means "you have no token" teaches people to ignore red results.
 | `VGPU_EVALS_DOCKER_IMAGE` | `ghcr.io/vercel/eve:latest` | pin it when you need reproducibility |
 | `VGPU_EVALS_WORK_DIR` | `<package>/.work` | tarballs and per-session snapshots |
 
-For CI later, note that the 12-hour OIDC token is useless for a scheduled run:
-that needs `VERCEL_TOKEN` + `VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` for the
-sandbox and a separate `AI_GATEWAY_API_KEY` for the gateway — a Vercel access
-token does **not** work as a Gateway bearer token.
+This suite has no CI job: it is run by hand, because every run spends model
+tokens and observes discovery behaviour, which says nothing about the commit
+under review. Should that ever change, a non-interactive run cannot use the
+12-hour OIDC token — it would need `AI_GATEWAY_API_KEY`, since a Vercel access
+token does **not** work as a Gateway bearer token. `VERCEL_TOKEN` +
+`VERCEL_TEAM_ID` + `VERCEL_PROJECT_ID` matter only if you switch to
+`VGPU_EVALS_SANDBOX=vercel`; the default docker backend needs no Vercel
+credentials at all.
+
+### Naming a different model
+
+`VGPU_EVALS_MODEL=<slug> pnpm agent-evals` sends one 16-token request to the
+gateway before packing anything. If the provider is restricted for your team the
+command stops with exit 2 and says so, instead of packing tarballs, booting a
+sandbox and then dying mid-turn — which is what a restricted provider used to
+cost. A gateway that is merely unreachable or rate-limited is reported and the
+run continues, because that is not a verdict about the model.
 
 ### A green run can still print template errors
 

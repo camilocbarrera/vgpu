@@ -6,6 +6,7 @@ import { equals } from "eve/evals/expect";
 import { PNG } from "pngjs";
 import { snapshotTarPath, snapshotWorkspaceDir } from "../agent/lib/paths.ts";
 import { MIX_MAX, MIX_MIN, TOL, gradeGradient } from "./lib/grade-gradient.mjs";
+import { turnFailure } from "./lib/turn-failure.mjs";
 
 /**
  * The one hint is `npx vgpu`, and it is deliberate.
@@ -126,6 +127,35 @@ export default defineEval({
 
     const startedAt = Date.now();
     const turn = await t.send(PROMPT);
+
+    // A model that never answered is not an agent that failed the task.
+    //
+    // `send()` resolves with a failed turn instead of throwing (only
+    // `expectOk()` throws), so without this the run falls through to the
+    // workspace-export assertion below and reports `gates 0/1` — indis-
+    // tinguishable on the summary line from "the agent produced nothing". That
+    // is exactly how a restricted-provider 403 once got recorded as an agent
+    // result. This must stay ABOVE the gates for that reason.
+    //
+    // Two details are load-bearing, both learned the hard way:
+    //
+    // 1. The test is `=== "failed"`, NOT `!== "completed"`. eve derives the
+    //    status from the SESSION boundary event, not the turn:
+    //    `session.waiting -> "waiting"`, `session.failed -> "failed"`, anything
+    //    else -> `"completed"`. A successful single-turn run here ends on
+    //    `session.waiting` because the session parks for the next message, so
+    //    it reports `"waiting"` and `"completed"` never occurs in this suite.
+    //    Testing for `!== "completed"` rejects every healthy run.
+    //
+    // 2. It throws rather than calling `t.skip()`. Skipping would be the
+    //    honest verdict — this is not the agent's failure — but eve rejects it
+    //    after work has happened: "skip() must be called before sending
+    //    messages or recording assertions." A throw still puts the cause on the
+    //    summary line, which is the point.
+    if (turn.status === "failed") {
+      throw new Error(`model/infra failure, not an agent result: ${turnFailure(turn.events)}`);
+    }
+
     const sessionId = turn.sessionId;
 
     // ---- Evidence: the files, not the transcript --------------------------
@@ -244,6 +274,16 @@ export default defineEval({
       .join("\n\n")
       .slice(0, JUDGE_SECTION_LIMIT);
     const material = [
+      // The counters are handed over explicitly. Asking a judge to weigh
+      // "proportionate" while making it count commands out of a transcript
+      // produced 1.0 for a 7-call run and a 24-call run alike.
+      "Counters for this run:",
+      `- documentation commands: ${docsCalls.length}`,
+      `- total tool calls: ${turn.toolCalls.length}`,
+      `- tool calls before the first successful render: ${
+        firstGoodRender === -1 ? "never rendered successfully" : firstGoodRender + 1
+      }`,
+      "",
       "Commands the agent ran:",
       commands.slice(0, JUDGE_SECTION_LIMIT) || "(none)",
       "",
@@ -259,7 +299,12 @@ export default defineEval({
       {
         label: "discovery proportionate",
         criteria:
-          "Was the number of discovery commands proportionate — a few targeted queries rather than blind wandering?",
+          "Was the amount of discovery proportionate for a task this small (write one file that renders a " +
+          "gradient)? Judge from the counters, not the prose: 1-3 documentation commands is proportionate; " +
+          "4-6 is acceptable only if each command was targeted at something the agent then used; more than 6 " +
+          "documentation commands, or more than 20 total tool calls, or more than 12 tool calls before the " +
+          "first successful render, is wandering. Answer N when the counters fall outside those ranges and " +
+          "the commands show no clear reason for the extra work.",
       },
       {
         label: "acted on docs read",

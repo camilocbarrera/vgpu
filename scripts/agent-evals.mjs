@@ -5,9 +5,10 @@
 // correctly BEFORE anything workspace-specific is guaranteed to work on the
 // current Node version.
 //
-// It does two things in order:
+// It does three things in order:
 //   1. preflight the Node version — `eve` needs 24+, this repo pins 22;
-//   2. pack this branch's vgpu into tarballs, then run the evals against them.
+//   2. preflight the model provider when one was named explicitly;
+//   3. pack this branch's vgpu into tarballs, then run the evals against them.
 //
 // Step 2 is not a convenience. The whole point of the tool is to exercise the
 // vgpu in the working tree; running the evals against a stale (or absent)
@@ -22,9 +23,10 @@ import process from "node:process";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE_DIR = join(REPO_ROOT, "apps", "agent-evals");
 const REQUIRED_MAJOR = 24;
-// Exit 2, not 1, so a wrong Node is distinguishable from "the evals ran and
-// something failed" (which `eve eval` reports as exit 1).
-const EXIT_WRONG_NODE = 2;
+// Exit 2, not 1, so an unusable environment is distinguishable from "the evals
+// ran and something failed" (which `eve eval` reports as exit 1).
+const EXIT_ENVIRONMENT = 2;
+const EXIT_WRONG_NODE = EXIT_ENVIRONMENT;
 
 const major = Number.parseInt(process.versions.node.split(".")[0], 10);
 
@@ -45,6 +47,62 @@ if (!Number.isInteger(major) || major < REQUIRED_MAJOR) {
     ].join("\n"),
   );
   process.exit(EXIT_WRONG_NODE);
+}
+
+// Preflight the provider when a model was named explicitly.
+//
+// A gateway that refuses the provider costs a full invocation otherwise: the
+// tarballs get packed, the sandbox template boots, and only then does the turn
+// die — and it dies looking like an eval result. One 16-token request answers
+// it in well under a second.
+//
+// Only when VGPU_EVALS_MODEL is set: the default model is exercised constantly
+// and does not need re-proving, and reading the default here would duplicate a
+// constant that lives in agent/agent.ts.
+const requestedModel = process.env.VGPU_EVALS_MODEL;
+if (requestedModel) {
+  const credential = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
+  if (credential) {
+    const provider = requestedModel.split("/")[0];
+    let response;
+    try {
+      response = await fetch("https://ai-gateway.vercel.sh/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" },
+        // 16 is the gateway's documented floor for this field; asking for 1
+        // gets a 400 from some providers and would read as a fake failure.
+        body: JSON.stringify({ model: requestedModel, max_tokens: 16, messages: [{ role: "user", content: "hi" }] }),
+      });
+    } catch (error) {
+      // Network trouble is not evidence about the provider. Say so and carry on
+      // rather than blocking a run over a blip.
+      process.stderr.write(`pnpm agent-evals: provider preflight could not reach the gateway (${error.message}); continuing.\n`);
+    }
+    if (response !== undefined && !response.ok) {
+      const body = await response.text().catch(() => "");
+      const restricted = response.status === 403 && /restricted|RestrictedProviders/i.test(body);
+      const missing = response.status === 404;
+      if (restricted || missing) {
+        process.stderr.write(
+          [
+            restricted
+              ? `pnpm agent-evals: provider "${provider}" is restricted for this team, so ${requestedModel} cannot run.`
+              : `pnpm agent-evals: the gateway does not know the model "${requestedModel}".`,
+            "",
+            restricted
+              ? "  An account owner has to allow the provider in the AI Gateway settings."
+              : "  Check the slug against the gateway's model list.",
+            "  Nothing was packed and no sandbox was started.",
+            "",
+          ].join("\n"),
+        );
+        process.exit(EXIT_ENVIRONMENT);
+      }
+      // Any other non-2xx (rate limit, 5xx, a provider-specific quirk) is not a
+      // definitive verdict on this model, so it is reported and not fatal.
+      process.stderr.write(`pnpm agent-evals: provider preflight got HTTP ${response.status} for ${requestedModel}; continuing.\n`);
+    }
+  }
 }
 
 process.stdout.write("pnpm agent-evals: packing this branch's vgpu…\n");
