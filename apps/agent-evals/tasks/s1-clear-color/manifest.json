@@ -1,0 +1,14 @@
+{
+  "taskId": "s1-clear-color",
+  "vgpu": "0.2.0",
+  "source": "registry",
+  "expected": { "width": 64, "height": 64, "color": [255, 0, 0, 255] },
+  "journeyMilestones": [
+    { "id": "ranVgpuCli", "tool": "bash", "commandPattern": "(^|[^a-z])vgpu\\b" },
+    { "id": "readDocs", "tool": "bash", "commandPattern": "vgpu\\s+docs\\b" },
+    { "id": "ranDoctor", "tool": "bash", "commandPattern": "vgpu\\s+doctor\\b" },
+    { "id": "ranCheck", "tool": "bash", "commandPattern": "vgpu\\s+check\\b" },
+    { "id": "ranRender", "tool": "bash", "commandPattern": "node\\s+\\S*render\\.mjs" },
+    { "id": "editedShader", "tool": "write_file", "pathPattern": "\\.(mjs|wgsl)$" }
+  ]
+}

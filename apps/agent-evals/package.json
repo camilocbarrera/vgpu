@@ -1,0 +1,16 @@
+{
+  "name": "@vgpu/agent-evals",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "verify": "node verify/run-verify.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.7"
+  }
+}
