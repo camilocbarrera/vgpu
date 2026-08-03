@@ -1,0 +1,36 @@
+name: Agent Evals (manual)
+
+# Manual dispatch only, on purpose. These evals need Node 24 (the rest of the
+# repo is Node 22), a model-gateway credential, and real model spend, so they
+# must never run on push/pull_request.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Override VGPU_EVALS_MODEL (optional)"
+        required: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm agent-evals
+        env:
+          # The Gateway needs its own key: a Vercel access token does NOT work
+          # as a Gateway bearer token, and the 12h OIDC token from
+          # `vercel env pull` is useless for a non-interactive run.
+          AI_GATEWAY_API_KEY: ${{ secrets.AGENT_EVALS_AI_GATEWAY_API_KEY }}
+          # Only used when VGPU_EVALS_SANDBOX=vercel (default is docker).
+          VERCEL_TOKEN: ${{ secrets.AGENT_EVALS_VERCEL_TOKEN }}
+          VERCEL_TEAM_ID: ${{ secrets.AGENT_EVALS_VERCEL_TEAM_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.AGENT_EVALS_VERCEL_PROJECT_ID }}
+          VGPU_EVALS_MODEL: ${{ inputs.model }}

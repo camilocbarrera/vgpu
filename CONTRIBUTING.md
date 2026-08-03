@@ -5,6 +5,22 @@
 - Node.js 22 (the workspace engine is `>=22 <23`)
 - pnpm
 
+## Agent evals
+
+`apps/agent-evals/` measures how well a coding agent uses the `vgpu` package,
+driven by [`eve`](https://eve.dev/). It requires Node.js >= 24 and an AI Gateway
+credential (`AI_GATEWAY_API_KEY` or `VERCEL_OIDC_TOKEN`), independent of this
+repo's own Node 22 requirement. Run it with:
+
+```bash
+pnpm agent-evals
+```
+
+The command preflights the Node version and exits with code `2` and an
+actionable message if it is too old. Without a credential the evals skip (exit
+0) rather than fail. See `apps/agent-evals/README.md` for details, the
+credential recipe and current limitations.
+
 ## Making changes
 
 If your PR changes published package behavior, add a changeset before opening it:
