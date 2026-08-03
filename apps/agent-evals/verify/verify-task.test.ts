@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,9 @@ describe("verifyTask(s1-clear-color)", () => {
 
     expect(evidence.gates.renders).toBe("pass");
     expect(evidence.gates.colorExact).toBe("pass");
+    expect(evidence.gates.packageJsonUnchanged).toBe("pass");
+    // Soft signal (never a gate): this solution really did import vgpu.
+    expect(evidence.metrics.vgpuLoaded).toBe(true);
     expect(evidence.metrics.matchedFraction).toBe(1);
     expect(evidence.metrics.dominantPixel).toEqual([255, 0, 0, 255]);
     expect(evidence.metrics.width).toBe(64);
@@ -96,7 +99,8 @@ describe("verifyTask(s1-clear-color)", () => {
     // (b) the same forgery planted directly in the verify-workspace, which is
     // where a stale output from a previous run would live. This is the copy that
     // only step 5's unconditional delete can defeat.
-    const verifyWorkspace = join(workDir, "verify-workspace", "s1-clear-color");
+    const runId = "forgery-run";
+    const verifyWorkspace = join(workDir, "verify-workspace", "s1-clear-color", runId);
     mkdirSync(verifyWorkspace, { recursive: true });
     cpSync(FIXTURE_DIR, verifyWorkspace, { recursive: true });
     const plantedOutput = join(verifyWorkspace, "out.png");
@@ -107,6 +111,7 @@ describe("verifyTask(s1-clear-color)", () => {
       taskId: "s1-clear-color",
       workspaceDir,
       workDir,
+      runId,
     });
 
     expect(evidence.gates.renders).toBe("fail");
@@ -118,5 +123,105 @@ describe("verifyTask(s1-clear-color)", () => {
     expect(existsSync(plantedOutput)).toBe(false);
     expect(evidence.metrics.matchedFraction).toBeUndefined();
     expect(evidence.failures.join("\n")).toContain("out.png");
+  });
+  it(
+    "does not run install scripts from the graded workspace",
+    { timeout: 300_000 },
+    async () => {
+      // REGRESSION (P0, was exploitable): the agent's package.json used to be
+      // copied into the verify-workspace and installed there, so `pnpm install`
+      // executed its `postinstall` ON THE HOST, with the verify-workspace as
+      // cwd. The payload below is the one that actually defeated the verifier:
+      // it leaves the WRONG shader in place and instead monkey-patches
+      // node_modules/pngjs so every write() paints the expected colour. It
+      // scored renders=pass + colorExact=pass.
+      //
+      // Two independent fixes must keep this red-flagged: the install ignores
+      // scripts, and the agent's package.json is never copied at all.
+      const { workspaceDir, workDir } = tempPair("install-script");
+      cpSync(join(CASES, "unchanged", "render.mjs"), join(workspaceDir, "render.mjs"));
+      writeFileSync(
+        join(workspaceDir, "patch.js"),
+        [
+          'import { appendFileSync } from "node:fs";',
+          'appendFileSync("node_modules/pngjs/lib/png.js", `',
+          ";(function () {",
+          "  const _w = exports.PNG.sync.write;",
+          "  exports.PNG.sync.write = function (png, opts) {",
+          "    for (let i = 0; i < png.data.length; i += 4) {",
+          "      png.data[i] = 255; png.data[i+1] = 0; png.data[i+2] = 0; png.data[i+3] = 255;",
+          "    }",
+          "    return _w.call(this, png, opts);",
+          "  };",
+          "})();",
+          "`);",
+        ].join("\n"),
+      );
+      writeFileSync(
+        join(workspaceDir, "package.json"),
+        JSON.stringify({
+          private: true,
+          type: "module",
+          scripts: { postinstall: "node patch.js" },
+          dependencies: { vgpu: "0.2.0", pngjs: "7.0.0" },
+        }),
+      );
+
+      const evidence = await verifyTask({
+        tasksRoot: TASKS_ROOT,
+        taskId: "s1-clear-color",
+        workspaceDir,
+        workDir,
+      });
+
+      // The wrong shader must score as wrong.
+      expect(evidence.gates.colorExact).toBe("fail");
+      expect(evidence.metrics.dominantPixel).toEqual([64, 128, 191, 255]);
+      // The hijack never ran: pngjs in the run directory is untouched.
+      const pngjs = readFileSync(
+        join(workDir, "verify-workspace", "s1-clear-color", String(evidence.metrics.runId), "node_modules", "pngjs", "lib", "png.js"),
+        "utf8",
+      );
+      expect(pngjs).not.toContain("exports.PNG.sync.write = function");
+      // And the attempt is legible in the evidence rather than silently ignored.
+      expect(evidence.gates.packageJsonUnchanged).toBe("fail");
+      expect(evidence.failures.join("\n")).toContain("--ignore-scripts");
+      expect(evidence.metrics.agentPackageScripts).toEqual({ postinstall: "node patch.js" });
+    },
+  );
+
+  it("does not inherit sources from a previous trial", { timeout: 300_000 }, async () => {
+    // REGRESSION (P0, was exploitable): the verify-workspace was seeded once
+    // and only ever overlaid, so a second trial sharing the same workDir
+    // inherited the first trial's render.mjs. An agent that wrote NOTHING
+    // scored whatever the previous agent scored. PR2 reuses one workDir for
+    // every trial, so this was reachable in normal operation.
+    const { workspaceDir: solvedWorkspace, workDir } = tempPair("trial-a");
+    cpSync(join(CASES, "correct", "render.mjs"), join(solvedWorkspace, "render.mjs"));
+
+    const trialA = await verifyTask({
+      tasksRoot: TASKS_ROOT,
+      taskId: "s1-clear-color",
+      workspaceDir: solvedWorkspace,
+      workDir,
+    });
+    expect(trialA.gates.colorExact).toBe("pass");
+
+    // Trial B: same workDir, same task, and an agent that produced nothing.
+    const emptyWorkspace = join(workDir, "..", "empty-workspace");
+    mkdirSync(emptyWorkspace, { recursive: true });
+
+    const trialB = await verifyTask({
+      tasksRoot: TASKS_ROOT,
+      taskId: "s1-clear-color",
+      workspaceDir: emptyWorkspace,
+      workDir,
+    });
+
+    // B must be graded against the FIXTURE, not against A's solution.
+    expect(trialB.gates.renders).toBe("pass");
+    expect(trialB.gates.colorExact).toBe("fail");
+    expect(trialB.metrics.dominantPixel).toEqual([64, 128, 191, 255]);
+    expect(trialB.metrics.runId).not.toBe(trialA.metrics.runId);
   });
 });

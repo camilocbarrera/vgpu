@@ -50,10 +50,51 @@ reverse direction is a boundary violation.
 node verify/run-verify.mjs --workspace <dir> --task s1-clear-color [--out evidence.json] [--work-dir <dir>]
 ```
 
-The verifier never trusts what it finds in `<dir>`: it copies the source files
-into a clean, separately-installed workspace, **deletes any pre-existing
-`out.png`**, re-runs `node render.mjs` in a fresh process, and grades the pixels
-of the PNG that run produced. A hand-forged output PNG therefore cannot pass.
+### What the verifier trusts
+
+The agent's workspace contributes **source text and nothing else**. Per call the
+verifier:
+
+1. seeds a run directory from `tasks/<id>/fixture/` and **wipes its source tree
+   first**, so no trial can inherit another trial's files (run directories are
+   keyed by `runId`, so concurrent trials cannot collide either);
+2. installs the **fixture's** dependencies with `--ignore-scripts`, so nothing
+   the agent wrote runs on the host at install time and `node_modules` cannot be
+   monkey-patched;
+3. never copies the agent's `package.json` or any lockfile — a changed manifest
+   is *reported* via the `packageJsonUnchanged` gate, never honoured;
+4. deletes any pre-existing `out.png` unconditionally and re-renders in a fresh
+   process with a `PATH`+`HOME`-only environment;
+5. grades only the PNG that run produced.
+
+So a hand-forged PNG cannot pass, a hijacked dependency cannot pass, and a
+stale trial cannot pass. Each of those is a named regression test in
+`verify/verify-task.test.ts`, and each of them **did** pass at some point during
+review — the claims above are the fixes, not the original design.
+
+### What the verifier does NOT give you
+
+It is **not a security boundary.** The graded render executes agent-authored
+code on the host, as your user. It defeats accidental and opportunistic cheating;
+it does not contain a determined attacker.
+
+It also grades **on the host**, not inside the pinned container the parent design
+calls for. That is a deliberate skeleton-stage tradeoff: it is what makes Layer 1
+runnable in any dev environment and in CI without Docker. The consequences you
+must know about:
+
+- `evidence.env` records `node`, `vgpu`, `gitSha` and the `vgpu doctor` adapter,
+  but **no `imageDigest`** — results are only as comparable as the hosts that
+  produced them. Fine for an exact-colour gate; **not** fine for the
+  pixel-ratio/tolerance tasks planned later. Tracked as follow-up: grade inside
+  a pinned image and stamp its digest into `evidence.env` before any task whose
+  verdict depends on a ratio.
+- `metrics.vgpuLoaded` is a **soft signal, never a gate**: `s1-clear-color` is
+  passable with `pngjs` alone (six lines, no vgpu). The evidence records whether
+  the graded render actually loaded the library under test so that a
+  library-free "solution" is visible to a reader instead of silently scoring
+  green. Making it a gate is a task-design decision for a later PR, not a
+  verifier change.
 
 ## Known friction (recorded on purpose, do not "fix")
 
