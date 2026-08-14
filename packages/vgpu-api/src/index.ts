@@ -35,7 +35,7 @@ export { surface } from "./surface.ts";
 export type { SurfaceCanvas } from "./surface.ts";
 export { target } from "./target-offscreen.ts";
 export { timer } from "./timer.ts";
-export { uniforms } from "./uniforms.ts";
+export { uniform, uniforms } from "./uniforms.ts";
 export { visibility } from "./visibility.ts";
 export { geometry } from "./scene/geometry-descriptor.ts";
 export type { GeometryRecipe, GeometryRecipeOf } from "./scene/geometry-recipe.ts";

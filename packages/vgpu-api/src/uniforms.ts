@@ -137,6 +137,18 @@ export function uniforms<T extends Record<string, unknown>>(gpu: Gpu, values: T)
   return ownResource(kernel, new SharedUniformsImpl(kernel.device, values), (shared) => shared.destroy());
 }
 
+/**
+ * One shared uniform/storage resource for this gpu, bindable from several pipelines at once
+ * (`bindings: { globals }`): one `set()` updates every consumer through a single buffer, and the
+ * storage is zero-initialized, so initial values are optional.
+ *
+ * Singular spelling of {@link uniforms} and exactly the same mechanism — the receiver *is* the
+ * binding, so its `set()` keeps the one-argument form. `uniforms()` (plural) stays until the cut.
+ */
+export function uniform<T extends Record<string, unknown>>(gpu: Gpu, values: T): SharedUniforms<T> {
+  return uniforms(gpu, values);
+}
+
 function ensureBufferBinding(binding: BindingInfo): void {
   if (binding.bindingLayout?.kind === "buffer") return;
   throw unsupportedError("uniforms", `Binding '${binding.name}' does not accept shared uniforms; the shader reflected ${binding.bindingLayout?.kind ?? "none"}.`);

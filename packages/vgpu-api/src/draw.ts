@@ -106,6 +106,16 @@ export interface DrawOptions {
   readonly shader: string | ShaderSource;
   readonly geometry?: GeometryLike;
   readonly set?: SetBag;
+  /**
+   * Initial values for instance-owned bindings, keyed by WGSL binding name. Declaring a binding here
+   * pins it value-owned at construction: its storage is created here and only `.set()` writes it.
+   */
+  readonly values?: Record<string, unknown>;
+  /**
+   * Externally-owned resources, keyed by WGSL binding name. A binding declared here is external from
+   * construction — `.set()` on it throws VGPU-R1-EXTERNAL-BINDING and `.bind()` swaps its identity.
+   */
+  readonly bindings?: Record<string, unknown>;
   readonly label?: string;
   readonly targets?: readonly Target[];
   /** Default instance count for every draw call. Overridden by per-call opts. Use 0 for a valid no-instance draw. */
@@ -264,7 +274,13 @@ const drawStates = new WeakMap<Draw, DrawState>();
 export interface Draw {
   readonly gpu: GPURenderPipeline | undefined;
   readonly targets: readonly Target[] | undefined;
+  /** Binding-scoped write: names a complete instance-owned binding and writes its bytes. */
+  set(binding: string, value: unknown): this;
+  // Overload order is public API surface: `Parameters<Draw["set"]>` resolves to the LAST overload,
+  // so the legacy flat bag stays last and every type derived from it keeps resolving to `[SetBag]`.
   set(values: SetBag): this;
+  /** Identity swap of an externally-owned binding. Dedupes by identity; rebuilds exactly that group. */
+  bind(binding: string, resource: unknown): this;
   group(n: number, bindGroup: GPUBindGroup): this;
   layout(n: number, opts?: DrawLayoutOptions): GPUBindGroupLayout;
   draw(target?: Target | DrawCallOptions): void;
@@ -326,6 +342,10 @@ export class InternalDraw implements Draw {
       bindGroupLayouts,
       cache,
       onIdentityChange: (change) => recordedIn.markStale({ kind: "binding-identity", drawLabel: this.label, ...change }),
+      // Ownership is fixed here, before any set(): the engine applies `bindings` (external) and
+      // `values` (instance-owned) while it builds the binding state machine.
+      values: opts.values,
+      bindings: opts.bindings,
     });
     drawStates.set(this, { id, device, opts, vertexBufferLayouts, cache, defaultTarget, reflection, visibility, vertexEntry: vertexEntry?.name ?? "vs_main", fragmentEntry: fragmentEntry?.name ?? "fs_main", entryKey, setCore, bindGroupLayouts, pipelineLayout, shaderModule, pipelineStore, pipelineLayouts, errorSink, trackSettled, resolvedPipelineKeys: new Set(), recordedIn, ...fragmentState, ...blendConstantOptions, ...primitiveOptions, ...depthOptions, ...stencilOptions, ...multisampleOptions, ...constantsOptions });
     if (opts.set) this.set(opts.set);
@@ -353,10 +373,21 @@ export class InternalDraw implements Draw {
   /** @internal Frame drawable protocol; see {@link drawStencilWritingOps}. */
   stencilWritingOps(): readonly string[] { return drawStencilWritingOps(this); }
 
-  set(values: SetBag): this {
+  set(binding: string, value: unknown): this;
+  set(values: SetBag): this;
+  set(bindingOrValues: string | SetBag, value?: unknown): this {
     const state = drawState(this);
     assertDeviceUsable(state.device, `${this.label}.set`);
-    for (const change of state.setCore.set(values)) state.recordedIn.markStale({ kind: "binding-identity", drawLabel: this.label, ...change });
+    const changes = typeof bindingOrValues === "string" ? state.setCore.setScoped(bindingOrValues, value) : state.setCore.set(bindingOrValues);
+    for (const change of changes) state.recordedIn.markStale({ kind: "binding-identity", drawLabel: this.label, ...change });
+    return this;
+  }
+
+  bind(binding: string, resource: unknown): this {
+    const state = drawState(this);
+    assertDeviceUsable(state.device, `${this.label}.bind`);
+    // A dedup hit returns no change, so a repeated rebind never marks a bundle stale either.
+    for (const change of state.setCore.bind(binding, resource)) state.recordedIn.markStale({ kind: "binding-identity", drawLabel: this.label, ...change });
     return this;
   }
 

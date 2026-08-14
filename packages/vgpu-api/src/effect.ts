@@ -55,6 +55,16 @@ export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, o
 
 export interface EffectOptions {
   readonly set?: SetBag;
+  /**
+   * Initial values for instance-owned bindings, keyed by WGSL binding name. Declaring a binding here
+   * pins it value-owned at construction: its storage is created here and only `.set()` writes it.
+   */
+  readonly values?: Record<string, unknown>;
+  /**
+   * Externally-owned resources, keyed by WGSL binding name. A binding declared here is external from
+   * construction — `.set()` on it throws VGPU-R1-EXTERNAL-BINDING and `.bind()` swaps its identity.
+   */
+  readonly bindings?: Record<string, unknown>;
   readonly label?: string;
   /** Blend state applied to every color target of this effect's pipelines. Preset or explicit components. Immutable after construction. */
   readonly blend?: BlendPreset | BlendOptions;
@@ -68,7 +78,13 @@ const effectImpls = new WeakMap<Effect, InternalDraw>();
 
 export interface Effect {
   readonly gpu: GPURenderPipeline | undefined;
+  /** Binding-scoped write: names a complete instance-owned binding and writes its bytes. */
+  set(binding: string, value: unknown): this;
+  // Overload order is public API surface: `Parameters<Effect["set"]>` resolves to the LAST overload,
+  // so the legacy flat bag stays last and every type derived from it keeps resolving to `[SetBag]`.
   set(values: SetBag): this;
+  /** Identity swap of an externally-owned binding. Dedupes by identity; rebuilds exactly that group. */
+  bind(binding: string, resource: unknown): this;
   draw(target?: Target | DrawCallOptions): void;
   /** @throws VGPU-SURFACE-NOT-IN-FRAME when passed a Surface outside frame(gpu). */
   compile(target?: CompileTarget): Promise<this>;
@@ -81,11 +97,19 @@ export class InternalEffect implements Effect {
 
   constructor(device: Device, source: string, opts: EffectOptions = {}, cache?: BindGroupCache, defaultTarget?: Target, pipelineStore?: PipelineStore, shaderModules?: ShaderModuleCache, pipelineLayouts?: PipelineLayoutCache, errorSink?: ValidationErrorSink, trackSettled?: (promise: Promise<unknown>) => void) {
     const shader = fullscreenSource(source);
-    const impl = new InternalDraw(device, shader, { shader, set: opts.set, label: opts.label ?? "effect", blend: opts.blend, writeMask: opts.writeMask }, cache, defaultTarget, pipelineStore, shaderModules, pipelineLayouts, errorSink, trackSettled);
+    const impl = new InternalDraw(device, shader, { shader, set: opts.set, values: opts.values, bindings: opts.bindings, label: opts.label ?? "effect", blend: opts.blend, writeMask: opts.writeMask }, cache, defaultTarget, pipelineStore, shaderModules, pipelineLayouts, errorSink, trackSettled);
     effectImpls.set(this, impl);
   }
 
-  set(values: SetBag): this { effectImpl(this).set(values); return this; }
+  set(binding: string, value: unknown): this;
+  set(values: SetBag): this;
+  set(bindingOrValues: string | SetBag, value?: unknown): this {
+    if (typeof bindingOrValues === "string") effectImpl(this).set(bindingOrValues, value);
+    else effectImpl(this).set(bindingOrValues);
+    return this;
+  }
+
+  bind(binding: string, resource: unknown): this { effectImpl(this).bind(binding, resource); return this; }
   draw(target: Target | DrawCallOptions = {}): void { effectImpl(this).draw(isTarget(target) ? { target } : target); }
   compile(target?: CompileTarget): Promise<this> { return effectImpl(this).compile(target).then(() => this); }
   compileSync(target?: CompileTarget): this { effectImpl(this).compileSync(target); return this; }
