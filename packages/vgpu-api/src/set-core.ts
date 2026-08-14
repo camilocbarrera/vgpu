@@ -2,7 +2,7 @@ import { bindGroupLayoutMetadata, bindGroupMetadataFor, type Buffer, type Device
 import type { BindingInfo, Reflection } from "@vgpu/wgsl/reflect-source";
 import { identityKey, type BindGroupCache, type BindGroupIdentityPart } from "./bind-cache.ts";
 import { entryMetadata } from "./entry-metadata.ts";
-import { claimedGroupIncompatibleError, claimedGroupSetError, neverSetError, ownershipFlipError, unsupportedError } from "./errors.ts";
+import { claimedGroupIncompatibleError, claimedGroupSetError, externalBindingError, neverSetError, ownershipFlipError, unsupportedError } from "./errors.ts";
 import { bindGroupLayoutEntriesForGroup, bindGroupLayoutsForReflection, pipelineLayoutFor } from "./set-layouts.ts";
 import { isPlainObject, isPlainValue, normalizeResource } from "./set-resources.ts";
 import { writeLayoutValue } from "./set-packing.ts";
@@ -18,6 +18,17 @@ export interface SetCoreOptions {
   readonly bindGroupLayouts: ReadonlyMap<number, GPUBindGroupLayout>;
   readonly cache: BindGroupCache;
   readonly onIdentityChange?: (change: BindingIdentityChange) => void;
+  /**
+   * Initial values for instance-owned (value-owned) bindings, keyed by WGSL binding name.
+   * Declaring a binding here pins it value-owned at construction — it never latches by call order.
+   */
+  readonly values?: Readonly<Record<string, unknown>>;
+  /**
+   * Externally-owned resources, keyed by WGSL binding name. A binding declared here is external
+   * from construction: `.set()` on it fails with VGPU-R1-EXTERNAL-BINDING, and only `.bind()`
+   * swaps its identity.
+   */
+  readonly bindings?: Readonly<Record<string, unknown>>;
 }
 
 export interface BindingIdentityChange {
@@ -33,6 +44,17 @@ export interface BindingIdentityChange {
 export interface SetCore {
   readonly groups: readonly number[];
   set(values: SetBag): readonly BindingIdentityChange[];
+  /**
+   * Binding-scoped write: `binding` names a complete WGSL binding (never a struct member) owned by
+   * this instance, `value` is a partial for a struct binding and the complete value otherwise.
+   * One call is one buffer write.
+   */
+  setScoped(binding: string, value: unknown): readonly BindingIdentityChange[];
+  /**
+   * Identity swap for an externally-owned binding. Dedupes by resource identity — rebinding the same
+   * resource is free and rebuilds nothing.
+   */
+  bind(binding: string, resource: unknown): readonly BindingIdentityChange[];
   claimGroup(group: number, bindGroup: GPUBindGroup, expectedLayout: GPUBindGroupLayout): string | undefined;
   layout(group: number): GPUBindGroupLayout;
   bindGroups(): readonly { readonly group: number; readonly bindGroup: GPUBindGroup; readonly offsets: readonly number[]; readonly claimValidation?: { readonly label: string; readonly group: number } }[];
@@ -49,6 +71,15 @@ export interface BindingState {
 type MutableBindingState = {
   readonly info: BindingInfo;
   ownership?: BindingOwnership;
+  /**
+   * Construction-time (or `.bind()`-time) declaration that the resource behind this binding belongs
+   * to someone else. Distinct from `ownership === "user"`, which the legacy flat bag latches by call
+   * order: `external` is never inferred from a value, so VGPU-R1-EXTERNAL-BINDING can only fire for
+   * the `{ bindings }` / `.bind()` forms.
+   */
+  external?: boolean;
+  /** Last resource passed to `.bind()`, kept for the free identity dedup of a repeated rebind. */
+  boundValue?: unknown;
   readonly memberOwnership: Map<string, BindingOwnership>;
   buffer?: Buffer;
   bytes?: ArrayBuffer;
@@ -71,6 +102,74 @@ export function createSetCore(options: SetCoreOptions): SetCore {
     return changes;
   }
 
+  /**
+   * Construction-time ownership. `bindings` entries become external immediately (no latch, so
+   * VGPU-R1-OWNERSHIP-FLIP is unreachable for them) and `values` entries become value-owned with
+   * their storage created and written right here.
+   */
+  function declareOwnership(): void {
+    const declaredValues = options.values ?? {};
+    for (const [name, resource] of Object.entries(options.bindings ?? {})) {
+      if (Object.hasOwn(declaredValues, name)) throw unsupportedError(options.label, `Binding '${name}' is declared in both values and bindings of '${options.label}'.`, "Ownership is fixed at construction: declare it in exactly one of them.");
+      bindExternal(requiredBindingByName(name, "bindings"), resource);
+    }
+    for (const [name, value] of Object.entries(declaredValues)) setScoped(name, value);
+  }
+
+  function bindExternal(state: MutableBindingState, resource: unknown): void {
+    state.external = true;
+    state.ownership = "user";
+    state.boundValue = resource;
+    setUserOwned(state, resource);
+  }
+
+  /**
+   * Binding-scoped write. Resolves `name` as a complete binding only — the member-name shortcut of
+   * the flat bag does not exist here (design §6: "no member-name shortcut"), and a member name gets
+   * an error that names the binding to use instead.
+   */
+  function setScoped(name: string, value: unknown): readonly BindingIdentityChange[] {
+    const state = requiredBindingByName(name, "set");
+    // The external check comes first: naming an externally-bound resource is the interesting
+    // mistake, and its fix-it is more useful than "this is not a JS value".
+    ensureNotExternal(state, name);
+    if (ownershipFor(state.info, value) !== "lib") {
+      throw unsupportedError(`${options.label}.set`, `Binding '${name}' in '${options.label}' received a resource; set() writes bytes.`, `Swap resource identity with ${options.label}.bind("${name}", resource).`);
+    }
+    // Same write path as the flat bag once the name is resolved: a struct merges the partial on the
+    // CPU and rewrites completely (one buffer write), a non-struct value replaces wholesale.
+    return setBinding(state, name, value);
+  }
+
+  /**
+   * Identity swap. Dedupes on the resource reference first (the per-frame rebind of the same object
+   * is free) and then on the normalized resource identity, so a rebind that resolves to the same
+   * GPU resource reports no change and the bind group cache keeps its entry.
+   */
+  function bind(name: string, resource: unknown): readonly BindingIdentityChange[] {
+    const state = requiredBindingByName(name, "bind");
+    ensureGroupSettable(state.info.group);
+    // Owned -> external transitions are not supported (design §6): recreate the instance instead.
+    if (!state.external && state.ownership === "lib") throw ownershipFlipError(name, "lib");
+    if (state.resource && Object.is(state.boundValue, resource)) return [];
+    const before = identityString(state.identity);
+    bindExternal(state, resource);
+    return bindingIsActive(state) ? identityChangeFor(state, before) : [];
+  }
+
+  /**
+   * Resolves a complete binding by name. A struct member name is not a binding here (design §6: no
+   * member-name shortcut), so it gets the fix-it that names the binding to use instead — reusing the
+   * flat bag's member lookup, which already reports an ambiguous member name.
+   */
+  function requiredBindingByName(name: string, verb: string): MutableBindingState {
+    const state = bindings.get(name);
+    if (state) return state;
+    const owner = findMemberBinding(name, bindings, options.label);
+    const fix = owner ? `'${name}' is a member of binding '${owner.info.name}': ${options.label}.set("${owner.info.name}", { ${name}: value }).` : undefined;
+    throw unsupportedError(`${options.label}.${verb}`, `Binding '${name}' does not exist in '${options.label}'.`, fix);
+  }
+
   function bindingIsActive(state: MutableBindingState): boolean {
     const layout = options.bindGroupLayouts.get(state.info.group);
     return !!layout && !!bindGroupLayoutMetadata(layout)?.entries.some((entry) => entry.binding === state.info.binding);
@@ -86,6 +185,7 @@ export function createSetCore(options: SetCoreOptions): SetCore {
 
   function setBinding(state: MutableBindingState, name: string, value: unknown): readonly BindingIdentityChange[] {
     ensureGroupSettable(state.info.group);
+    ensureNotExternal(state, name);
     const ownership = ownershipFor(state.info, value);
     latchBindingOwnership(state, name, ownership);
     const before = identityString(state.identity);
@@ -96,6 +196,7 @@ export function createSetCore(options: SetCoreOptions): SetCore {
 
   function setBindingMember(state: MutableBindingState, memberName: string, value: unknown): readonly BindingIdentityChange[] {
     ensureGroupSettable(state.info.group);
+    ensureNotExternal(state, state.info.name);
     const ownership = ownershipFor(state.info, value);
     latchBindingOwnership(state, memberName, ownership);
     latchMemberOwnership(state, memberName, ownership);
@@ -204,6 +305,10 @@ export function createSetCore(options: SetCoreOptions): SetCore {
     if (claimedGroups.has(group)) throw claimedGroupSetError(options.label, group);
   }
 
+  function ensureNotExternal(state: MutableBindingState, name: string): void {
+    if (state.external) throw externalBindingError(`${options.label}.set`, options.label, name);
+  }
+
   function createLibBuffer(state: MutableBindingState, size: number): void {
     state.buffer = options.device.createBuffer({ size, usage: ["uniform", "copy_dst"], label: `${options.label}.${state.info.name}` });
     state.resource = { buffer: state.buffer.gpu, offset: 0, size };
@@ -216,9 +321,13 @@ export function createSetCore(options: SetCoreOptions): SetCore {
     return state.info.layout as NonNullable<BindingInfo["layout"]> & { readonly size: number };
   }
 
+  declareOwnership();
+
   return {
     get groups() { return groups; },
     set,
+    setScoped,
+    bind,
     claimGroup,
     layout,
     bindGroups,
