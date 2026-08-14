@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
-import { init, compute, draw, geometry, target } from "../src/mock.ts";
+import { init, compute, draw, geometry, storage, target } from "../src/mock.ts";
 
 const TWO_FRAGMENT_WGSL = `
 @group(0) @binding(0) var<uniform> tintA: vec4f;
@@ -128,8 +128,15 @@ test("absent entry keeps descriptors byte-identical to first-of-stage selection"
 test("compute entry selects the named @compute entry point and its binding visibility", async () => {
   const gpu = await init();
 
-  compute(gpu, TWO_COMPUTE_WGSL, { label: "pick-cs-b", entry: "cs_b" });
-  compute(gpu, TWO_COMPUTE_WGSL, { label: "cs-default" });
+  const pickB = compute(gpu, TWO_COMPUTE_WGSL, { label: "pick-cs-b", entry: "cs_b" });
+  const csDefault = compute(gpu, TWO_COMPUTE_WGSL, { label: "cs-default" });
+  // compute() no longer compiles its pipeline at construction (contract #4) — dispatch(0) is a valid,
+  // no-op-workgroup call that satisfies each entry's active binding and triggers the lazy compile this
+  // assertion inspects, without running any shader logic.
+  pickB.set({ b: storage(gpu, 4) });
+  pickB.dispatch(0);
+  csDefault.set({ a: storage(gpu, 4) });
+  csDefault.dispatch(0);
 
   const descs = getMockGPUDeviceInstrumentation(gpu.device.gpu).createComputePipelineDescriptors;
   expect(descs.at(-2)?.compute.entryPoint).toBe("cs_b");

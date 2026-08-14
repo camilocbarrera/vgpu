@@ -13,6 +13,7 @@ export interface MockGPUDeviceInstrumentation {
     createRenderPipeline: number;
     createRenderPipelineAsync: number;
     createComputePipeline: number;
+    createComputePipelineAsync: number;
     createQuerySet: number;
   };
   readonly createBufferDescriptors: GPUBufferDescriptor[];
@@ -23,6 +24,7 @@ export interface MockGPUDeviceInstrumentation {
   readonly createRenderPipelineDescriptors: GPURenderPipelineDescriptor[];
   readonly createRenderPipelineAsyncDescriptors: GPURenderPipelineDescriptor[];
   readonly createComputePipelineDescriptors: GPUComputePipelineDescriptor[];
+  readonly createComputePipelineAsyncDescriptors: GPUComputePipelineDescriptor[];
   readonly createQuerySetDescriptors: GPUQuerySetDescriptor[];
   /** Render-pass occlusion scope ops in encode order: ["begin", queryIndex] / ["end"]. */
   readonly occlusionQueryOps: Array<readonly ["begin", number] | readonly ["end"]>;
@@ -98,6 +100,14 @@ export function createMockGPUDevice(options: MockGPUDeviceOptions = {}): GPUDevi
     createComputePipeline(desc: GPUComputePipelineDescriptor): GPUComputePipeline {
       instrumentation.calls.createComputePipeline += 1;
       instrumentation.createComputePipelineDescriptors.push(desc);
+      return {
+        label: desc.label ?? "",
+        getBindGroupLayout: (_groupIndex: number) => ({}) as GPUBindGroupLayout,
+      } as unknown as GPUComputePipeline;
+    },
+    async createComputePipelineAsync(desc: GPUComputePipelineDescriptor): Promise<GPUComputePipeline> {
+      instrumentation.calls.createComputePipelineAsync += 1;
+      instrumentation.createComputePipelineAsyncDescriptors.push(desc);
       return {
         label: desc.label ?? "",
         getBindGroupLayout: (_groupIndex: number) => ({}) as GPUBindGroupLayout,
@@ -230,6 +240,7 @@ function createMockGPUDeviceInstrumentation(): MockGPUDeviceInstrumentation {
       createRenderPipeline: 0,
       createRenderPipelineAsync: 0,
       createComputePipeline: 0,
+      createComputePipelineAsync: 0,
       createQuerySet: 0,
     },
     createBufferDescriptors: [],
@@ -240,6 +251,7 @@ function createMockGPUDeviceInstrumentation(): MockGPUDeviceInstrumentation {
     createRenderPipelineDescriptors: [],
     createRenderPipelineAsyncDescriptors: [],
     createComputePipelineDescriptors: [],
+    createComputePipelineAsyncDescriptors: [],
     createQuerySetDescriptors: [],
     occlusionQueryOps: [],
   };
