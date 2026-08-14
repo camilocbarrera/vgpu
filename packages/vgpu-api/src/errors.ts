@@ -49,6 +49,21 @@ export function ownershipFlipError(name: string, previous: "lib" | "user"): VGPU
   });
 }
 
+/**
+ * Ownership is fixed at construction: a binding listed in `bindings` (or swapped with `.bind()`)
+ * holds a resource the instance does not own, so `.set()` — which writes bytes — has nothing to
+ * write into. The fix names both alternatives: update the resource, or swap identity with `.bind()`.
+ */
+export function externalBindingError(where: string, label: string, binding: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-R1-EXTERNAL-BINDING",
+    message: `\`${binding}\` in '${label}' is bound to an external resource; set() writes bytes on instance-owned bindings only.`,
+    fix: `Update the resource itself (resource.set({ ... })), or swap its identity with ${label}.bind("${binding}", resource).`,
+    where,
+    detail: { bindingName: binding },
+  });
+}
+
 export function claimedGroupSetError(label: string, group: number): VGPUError {
   return new VGPUError({
     code: "VGPU-R4-GROUP-CLAIMED",
