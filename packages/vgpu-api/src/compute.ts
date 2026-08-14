@@ -141,14 +141,20 @@ export class ComputePipeline implements Compute {
   /**
    * Compiles the pipeline through `createComputePipelineAsync()` the first time it is needed, sharing one
    * in-flight promise across concurrent callers, and reuses whatever `#ensurePipeline()` already compiled.
+   *
+   * `#ensurePipeline()` (the sync path used by legacy `dispatch()`) does not know about an in-flight async
+   * compile, so a `dispatch()` call racing an un-awaited `dispatchOnce()` on the same instance can still
+   * compile a second `GPUComputePipeline` — `??=` below keeps whichever one lands first as the memoized
+   * pipeline instead of letting the async result silently clobber a sync one that already resolved (and
+   * that `dispatch()` may already have bound to a pass), which would otherwise churn pipeline identity.
    */
   #ensurePipelineAsync(): Promise<GPUComputePipeline> {
     if (this.#pipeline) return Promise.resolve(this.#pipeline);
     if (!this.#pipelinePending) {
       this.#pipelinePending = this.device.gpu.createComputePipelineAsync(this.#pipelineDescriptor).then((pipeline) => {
-        this.#pipeline = pipeline;
+        this.#pipeline ??= pipeline;
         this.#pipelinePending = undefined;
-        return pipeline;
+        return this.#pipeline;
       });
     }
     return this.#pipelinePending;

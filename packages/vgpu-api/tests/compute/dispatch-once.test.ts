@@ -101,6 +101,24 @@ describe("dispatchOnce() async pipeline readiness (contract #20)", () => {
     expect(mock.calls.createComputePipeline).toBe(1);
     expect(mock.calls.createComputePipelineAsync).toBe(0);
   });
+
+  test("dispatch() racing an un-awaited dispatchOnce() on the same instance settles on one memoized pipeline", async () => {
+    // #ensurePipeline() (sync) does not know about an in-flight #ensurePipelineAsync() compile, so this
+    // interleaving can still trigger both createComputePipeline and createComputePipelineAsync once each —
+    // but whichever result lands first must win (##= in the async .then()) and stay memoized: no further
+    // calls, sync or async, may compile again afterwards.
+    gpu = await init();
+    const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+    const sim = compute(gpu, SHADER, { label: "race-mixed" });
+    const pending = sim.dispatchOnce(1); // kicks off createComputePipelineAsync, not yet resolved
+    sim.dispatch(1); // synchronous dispatch races ahead and compiles via createComputePipeline
+    await pending;
+    const totalCompilesAfterRace = mock.calls.createComputePipeline + mock.calls.createComputePipelineAsync;
+    expect(totalCompilesAfterRace).toBeGreaterThanOrEqual(1);
+    sim.dispatch(1);
+    await sim.dispatchOnce(1);
+    expect(mock.calls.createComputePipeline + mock.calls.createComputePipelineAsync).toBe(totalCompilesAfterRace);
+  });
 });
 
 // --- Contract #17 — dispatch()/dispatchOnce() validate integer workgroup counts >= 0 -------------
