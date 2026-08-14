@@ -7,7 +7,7 @@ import { createSetCore, bindGroupLayoutsForReflection, pipelineLayoutFor, type S
 import { visibilityForEntries } from "./set-layouts.ts";
 import type { Compute, ComputeOptions, DispatchOptions } from "./api-types.ts";
 import { normalizeConstantsOptions, selectEntryPoint } from "./pipeline-store.ts";
-import { indirectInvalidError, unsupportedError, writableStorageAliasingError } from "./errors.ts";
+import { dispatchCountInvalidError, indirectInvalidError, unsupportedError, writableStorageAliasingError } from "./errors.ts";
 import { assertDeviceUsable } from "./lifecycle.ts";
 import type { Gpu } from "./kernel.ts";
 import { liveKernel } from "./live-kernel.ts";
@@ -43,8 +43,10 @@ export class ComputePipeline implements Compute {
   readonly bindGroupLayouts: ReadonlyMap<number, GPUBindGroupLayout>;
   readonly pipelineLayout: GPUPipelineLayout;
   readonly shaderModule: GPUShaderModule;
-  readonly pipeline: GPUComputePipeline;
   readonly #storageBindings: readonly BindingInfo[];
+  readonly #pipelineDescriptor: GPUComputePipelineDescriptor;
+  #pipeline?: GPUComputePipeline;
+  #pipelinePending?: Promise<GPUComputePipeline>;
 
   constructor(
     private readonly device: Device,
@@ -64,12 +66,14 @@ export class ComputePipeline implements Compute {
     this.pipelineLayout = pipelineLayoutFor(device, this.bindGroupLayouts);
     this.shaderModule = device.gpu.createShaderModule({ label: `${this.label}.shader`, code: source });
     // Each Compute owns its pipeline (no shared store), so constants join the descriptor directly; the record is
-    // omitted when the option is absent to keep the descriptor byte-identical to before.
-    this.pipeline = device.gpu.createComputePipeline({
+    // omitted when the option is absent to keep the descriptor byte-identical to before. The pipeline itself is
+    // NOT compiled here — construction stays free of createComputePipeline(Async) calls; #ensurePipeline()/
+    // #ensurePipelineAsync() compile it lazily the first time dispatch()/dispatchOnce() needs it.
+    this.#pipelineDescriptor = {
       label: `${this.label}.pipeline`,
       layout: this.pipelineLayout,
       compute: { module: this.shaderModule, entryPoint: this.entryPoint, ...(constants ? { constants } : {}) },
-    });
+    };
     this.setCore = createSetCore({ device, label: this.label, drawId: this.id, reflection: this.reflection, bindGroupLayouts: this.bindGroupLayouts, cache: this.cache });
     const active = new Set(entryMetadata(entry, "bindings", this.label).map((binding) => `${binding.group}:${binding.binding}`));
     this.#storageBindings = this.reflection.bindings.filter((binding) => binding.kind === "buffer" && binding.addressSpace === "storage" && active.has(`${binding.group}:${binding.binding}`));
@@ -85,12 +89,16 @@ export class ComputePipeline implements Compute {
   dispatch(x: number, y?: number, z?: number): void;
   dispatch(opts: DispatchOptions): void;
   dispatch(x: number | DispatchOptions, y?: number, z?: number): void {
-    assertDeviceUsable(this.device, `${this.label}.dispatch`);
-    const indirect = typeof x === "object" && x !== null ? this.#resolveIndirectDispatch(x, y, z) : undefined;
-    this.#preflightAliasing();
+    const where = `${this.label}.dispatch`;
+    assertDeviceUsable(this.device, where);
+    const indirect = typeof x === "object" && x !== null ? this.#resolveIndirectDispatch(x, y, z, where) : this.#validateCounts(x as number, y, z, where) && undefined;
+    this.#preflightAliasing(where);
+    // Legacy dispatch() stays lazy-sync: it compiles inline the first time it is called (not at construction),
+    // reusing the draws' pipelineFor/getSync pattern, but synchronously — createComputePipeline(), not Async.
+    const pipeline = this.#ensurePipeline();
     const encoder = this.device.gpu.createCommandEncoder({ label: `${this.label}.encoder` });
     const pass = encoder.beginComputePass({ label: `${this.label}.pass` });
-    pass.setPipeline(this.pipeline);
+    pass.setPipeline(pipeline);
     for (const binding of this.setCore.bindGroups()) pass.setBindGroup(binding.group, binding.bindGroup, binding.offsets);
     if (indirect) pass.dispatchWorkgroupsIndirect(indirect.buffer, indirect.offset);
     else pass.dispatchWorkgroups(x as number, y ?? 1, z ?? 1);
@@ -98,14 +106,69 @@ export class ComputePipeline implements Compute {
     this.device.gpu.queue.submit([encoder.finish()]);
   }
 
+  /**
+   * Async twin of `dispatch()`: compiles the pipeline through `createComputePipelineAsync()` when it is not
+   * ready yet (reusing it unchanged otherwise, whether a prior `dispatch()` or `dispatchOnce()` created it),
+   * then owns its own encoder and submits exactly once. Resolves right after the submit — it never awaits
+   * `onSubmittedWorkDone`.
+   */
+  dispatchOnce(x: number, y?: number, z?: number): Promise<void>;
+  dispatchOnce(opts: DispatchOptions): Promise<void>;
+  async dispatchOnce(x: number | DispatchOptions, y?: number, z?: number): Promise<void> {
+    const where = `${this.label}.dispatchOnce`;
+    assertDeviceUsable(this.device, where);
+    const indirect = typeof x === "object" && x !== null ? this.#resolveIndirectDispatch(x, y, z, where) : this.#validateCounts(x as number, y, z, where) && undefined;
+    this.#preflightAliasing(where);
+    const pipeline = await this.#ensurePipelineAsync();
+    // The device may have been disposed while the pipeline compile was in flight — re-check before touching it.
+    assertDeviceUsable(this.device, where);
+    const encoder = this.device.gpu.createCommandEncoder({ label: `${this.label}.encoder` });
+    const pass = encoder.beginComputePass({ label: `${this.label}.pass` });
+    pass.setPipeline(pipeline);
+    for (const binding of this.setCore.bindGroups()) pass.setBindGroup(binding.group, binding.bindGroup, binding.offsets);
+    if (indirect) pass.dispatchWorkgroupsIndirect(indirect.buffer, indirect.offset);
+    else pass.dispatchWorkgroups(x as number, y ?? 1, z ?? 1);
+    pass.end();
+    this.device.gpu.queue.submit([encoder.finish()]);
+  }
+
+  /** Compiles the pipeline synchronously the first time it is needed, then memoizes it for every later call. */
+  #ensurePipeline(): GPUComputePipeline {
+    if (!this.#pipeline) this.#pipeline = this.device.gpu.createComputePipeline(this.#pipelineDescriptor);
+    return this.#pipeline;
+  }
+
+  /**
+   * Compiles the pipeline through `createComputePipelineAsync()` the first time it is needed, sharing one
+   * in-flight promise across concurrent callers, and reuses whatever `#ensurePipeline()` already compiled.
+   */
+  #ensurePipelineAsync(): Promise<GPUComputePipeline> {
+    if (this.#pipeline) return Promise.resolve(this.#pipeline);
+    if (!this.#pipelinePending) {
+      this.#pipelinePending = this.device.gpu.createComputePipelineAsync(this.#pipelineDescriptor).then((pipeline) => {
+        this.#pipeline = pipeline;
+        this.#pipelinePending = undefined;
+        return pipeline;
+      });
+    }
+    return this.#pipelinePending;
+  }
+
   /** The GPU reads the workgroup counts from the buffer, so explicit counts alongside indirect are dead options and throw. */
-  #resolveIndirectDispatch(opts: DispatchOptions, y?: number, z?: number): { readonly buffer: GPUBuffer; readonly offset: number } {
-    const where = `${this.label}.dispatch`;
+  #resolveIndirectDispatch(opts: DispatchOptions, y?: number, z?: number, where = `${this.label}.dispatch`): { readonly buffer: GPUBuffer; readonly offset: number } {
     if (y !== undefined || z !== undefined) throw indirectInvalidError(this.label, `indirect cannot be combined with explicit workgroup counts in the same call; the GPU reads the counts from the buffer, so the CPU-side values would be ignored.`, where);
     return resolveIndirect(this.label, where, opts.indirect, "dispatchWorkgroupsIndirect");
   }
 
-  #preflightAliasing(): void {
+  /** Contract #17: dispatch()/dispatchOnce() workgroup counts must be integers >= 0 — no NaN/negative/fractional counts reach WebGPU. */
+  #validateCounts(x: number, y: number | undefined, z: number | undefined, where: string): true {
+    validateDispatchCount(this.label, "x", x, where);
+    if (y !== undefined) validateDispatchCount(this.label, "y", y, where);
+    if (z !== undefined) validateDispatchCount(this.label, "z", z, where);
+    return true;
+  }
+
+  #preflightAliasing(where = `${this.label}.dispatch`): void {
     if (!this.#storageBindings.length) return;
     const buckets = new Map<string, { identity: BindGroupIdentityPart; writable: boolean }[]>();
     for (const binding of this.#storageBindings) {
@@ -118,7 +181,7 @@ export class ComputePipeline implements Compute {
     for (const bucket of buckets.values()) {
       if (bucket.length < 2) continue;
       if (!bucket.some((entry) => entry.writable)) continue;
-      throw writableStorageAliasingError(`${this.label}.dispatch`);
+      throw writableStorageAliasingError(where);
     }
   }
 }
@@ -129,4 +192,10 @@ function computeEntryPoint(reflection: Reflection, label: string, name?: string)
   const entry = selectEntryPoint(label, reflection.entryPoints, "compute", name, "compute");
   if (!entry) throw unsupportedError(`${label}.compute`, "The compute shader requires a @compute entry point.");
   return entry;
+}
+
+/** Contract #17, shared by dispatch()/dispatchOnce(): workgroup counts must be integers >= 0. */
+function validateDispatchCount(label: string, field: string, value: number, where: string): void {
+  if (Number.isInteger(value) && value >= 0) return;
+  throw dispatchCountInvalidError(label, field, value, where);
 }
