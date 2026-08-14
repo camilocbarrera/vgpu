@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
+import { bundle } from "../src/bundle.ts";
 import { compute } from "../src/compute.ts";
 import { draw } from "../src/draw.ts";
 import { effect } from "../src/effect.ts";
@@ -64,7 +65,7 @@ struct Globals { time: f32 }
 
 function codeOf(fn: () => unknown): string {
   try { fn(); } catch (error) { return (error as { code?: string }).code ?? String(error); }
-  throw new Error("expected a VGPUError, none was thrown");
+  return "NO-THROW";
 }
 
 function messageOf(fn: () => unknown): string {
@@ -158,14 +159,67 @@ test("contract #9: .set() of an externally-bound name fails with VGPU-R1-EXTERNA
   gpu.dispose();
 });
 
-test("a binding promoted by .bind() also rejects .set() with VGPU-R1-EXTERNAL-BINDING", async () => {
+test("external ownership comes from the constructor, not from .bind(): a binding absent from bindings refuses .bind()", async () => {
   const gpu = await init();
   const source = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
+  // `src` is not declared anywhere, so it is value-owned by default — its storage is merely lazy.
   const fx = effect(gpu, { shader: OWNERSHIP_SHADER, label: "fx", values: { params: { intensity: 1 } }, bindings: { globals } });
 
-  fx.bind("src", source);
-  expect(codeOf(() => fx.set("src", source))).toBe("VGPU-R1-EXTERNAL-BINDING");
+  expect(codeOf(() => fx.bind("src", source))).toBe("VGPU-R1-OWNERSHIP-FLIP");
+  // Promotion to external is a construction-time decision, and then .bind() works and .set() does not.
+  const promoted = effect(gpu, { shader: OWNERSHIP_SHADER, label: "promoted", values: { params: { intensity: 1 } }, bindings: { src: source, globals } });
+  promoted.bind("src", target(gpu, { size: [4, 4] }));
+  expect(codeOf(() => promoted.set("src", source))).toBe("VGPU-R1-EXTERNAL-BINDING");
+  gpu.dispose();
+});
+
+test("ownership is fixed at construction: .bind() on a virgin binding never promotes it", async () => {
+  const gpu = await init();
+  const source = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, { shader: OWNERSHIP_SHADER, label: "fx" });
+
+  // Virgin: never set, absent from both values and bindings. Lazy storage must not read as "no
+  // owner yet" — that is exactly the order-dependent latch the design makes unrepresentable.
+  expect(codeOf(() => fx.bind("src", source))).toBe("VGPU-R1-OWNERSHIP-FLIP");
+  // ...and it stays refused after the binding has been written, so neither order promotes it.
+  fx.set("params", { intensity: 1 });
+  expect(codeOf(() => fx.bind("src", source))).toBe("VGPU-R1-OWNERSHIP-FLIP");
+  gpu.dispose();
+});
+
+test("ownership is order-independent: bind-then-set and set-then-bind give the same verdicts", async () => {
+  const gpu = await init();
+  const source = target(gpu, { size: [4, 4] });
+  const shader = GLOBALS_ONLY_SHADER;
+
+  const bindFirst = effect(gpu, { shader, label: "bindFirst" });
+  const bindThenSet = [codeOf(() => bindFirst.bind("globals", uniform(gpu, { time: 0 }))), codeOf(() => bindFirst.set("globals", { time: 1 }))];
+
+  const setFirst = effect(gpu, { shader, label: "setFirst" });
+  const setThenBind = [codeOf(() => setFirst.set("globals", { time: 1 })), codeOf(() => setFirst.bind("globals", uniform(gpu, { time: 0 })))];
+
+  // The pair of verdicts is the same set regardless of which call came first: the write succeeds,
+  // the bind is refused. Call order decides nothing.
+  expect(bindThenSet).toEqual(["VGPU-R1-OWNERSHIP-FLIP", "NO-THROW"]);
+  expect(setThenBind).toEqual(["NO-THROW", "VGPU-R1-OWNERSHIP-FLIP"]);
+  gpu.dispose();
+});
+
+test("a single .bind() never locks the legacy flat bag out of a binding it used to own", async () => {
+  const gpu = await init();
+  const screen = target(gpu, { size: [4, 4] });
+  const first = target(gpu, { size: [4, 4] });
+  const second = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, OWNERSHIP_SHADER, { label: "fx" });
+
+  // The flat bag latches `src` user-owned by call order (legacy behavior, alive until the cut).
+  fx.set({ src: first, params: { intensity: 1 }, globals: { time: 0 } });
+  // .bind() must not hijack it: the binding was never declared external.
+  expect(codeOf(() => fx.bind("src", second))).toBe("VGPU-R1-OWNERSHIP-FLIP");
+  // ...and the flat bag still owns it afterwards, exactly as on next/0.4.
+  fx.set({ src: second });
+  frame(gpu, (f) => f.pass({ target: screen }, (p) => p.draw(fx)));
   gpu.dispose();
 });
 
@@ -203,8 +257,22 @@ test("declaring the same binding in values and bindings fails at construction", 
   const gpu = await init();
   const globals = uniform(gpu, { time: 0 });
 
-  expect(messageOf(() => effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx", values: { globals: { time: 0 } }, bindings: { globals } })))
-    .toMatch(/globals/);
+  const construct = () => effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx", values: { globals: { time: 0 } }, bindings: { globals } });
+  // The code matters: a missing duplicate guard would still fail later with EXTERNAL-BINDING, and
+  // that failure would arrive at the first .set() instead of at the contradictory declaration.
+  expect(codeOf(construct)).toBe("VGPU-RING1-UNSUPPORTED");
+  expect(messageOf(construct)).toMatch(/globals/);
+  gpu.dispose();
+});
+
+test("the scoped set() refuses a resource on a value-owned binding and points at .bind()", async () => {
+  const gpu = await init();
+  const source = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, { shader: OWNERSHIP_SHADER, label: "fx" });
+
+  // Value-owned (not external), so this is the bytes-vs-identity mistake, not the ownership one.
+  expect(codeOf(() => fx.set("src", source))).toBe("VGPU-RING1-UNSUPPORTED");
+  expect(messageOf(() => fx.set("src", source))).toMatch(/bind\("src"/);
   gpu.dispose();
 });
 
@@ -268,14 +336,18 @@ test("contract #10: a struct binding merges partials on the CPU and rewrites the
   const gpu = await init();
   const fx = effect(gpu, { shader: CAMERA_SHADER, label: "cam" });
 
-  fx.set("camera", { viewProjection: new Array(16).fill(0), exposure: 2 });
+  fx.set("camera", { viewProjection: new Array(16).fill(7), exposure: 2 });
   const writeBuffer = vi.spyOn(gpu.device.gpu.queue, "writeBuffer");
   fx.set("camera", { exposure: 3 });
 
   expect(writeBuffer).toHaveBeenCalledTimes(1);
   const [, , data] = writeBuffer.mock.calls[0]!;
-  // 16 floats of viewProjection then exposure: the absent field kept its previous value.
-  expect(new Float32Array(data as ArrayBuffer)[16]).toBe(3);
+  const written = new Float32Array(data as ArrayBuffer);
+  // 16 floats of viewProjection then exposure: the named field moved...
+  expect(written[16]).toBe(3);
+  // ...and the field absent from this call kept the value of the previous one, which is what makes
+  // the single write a complete struct rewrite rather than a partial one.
+  expect([...written.slice(0, 16)]).toEqual(new Array(16).fill(7));
   writeBuffer.mockRestore();
   gpu.dispose();
 });
@@ -448,5 +520,43 @@ test(".set() and .bind() reject a name that is not a binding", async () => {
 
   expect(messageOf(() => fx.set("nope", 1))).toMatch(/'nope'/);
   expect(messageOf(() => fx.bind("nope", globals))).toMatch(/'nope'/);
+  gpu.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// .bind() and recorded bundles — the identity swap must reach replay
+// ---------------------------------------------------------------------------
+
+const TEXTURE_SHADER = `
+@group(0) @binding(0) var src: texture_2d<f32>;
+@fragment fn main(@location(0) uv: vec2f) -> @location(0) vec4f { return textureLoad(src, vec2u(0, 0), 0) + vec4f(uv, 0.0, 0.0); }
+`;
+
+test(".bind() to a different resource marks a recorded bundle stale", async () => {
+  const gpu = await init();
+  const screen = target(gpu, { size: [4, 4], format: "rgba8unorm" });
+  const first = target(gpu, { size: [4, 4] });
+  const second = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, { shader: TEXTURE_SHADER, label: "fx", bindings: { src: first } });
+  const recorded = bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "bnd" }, (r) => r.draw(fx));
+
+  fx.bind("src", second);
+
+  // Replaying a bundle whose binding identity moved must fail loudly instead of drawing `first`.
+  expect(codeOf(() => frame(gpu, (f) => f.pass({ target: screen }, (p) => p.bundles(recorded))))).toBe("VGPU-R3-BUNDLE-STALE");
+  gpu.dispose();
+});
+
+test(".bind() to the same resource leaves a recorded bundle replayable", async () => {
+  const gpu = await init();
+  const screen = target(gpu, { size: [4, 4], format: "rgba8unorm" });
+  const source = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, { shader: TEXTURE_SHADER, label: "fx", bindings: { src: source } });
+  const recorded = bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "bnd" }, (r) => r.draw(fx));
+
+  // The per-frame rebind of an unchanged resource is the ≥42-call-site case: it must stay free.
+  for (let i = 0; i < 5; i++) fx.bind("src", source);
+
+  expect(codeOf(() => frame(gpu, (f) => f.pass({ target: screen }, (p) => p.bundles(recorded))))).toBe("NO-THROW");
   gpu.dispose();
 });

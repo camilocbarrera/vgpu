@@ -149,8 +149,12 @@ export function createSetCore(options: SetCoreOptions): SetCore {
   function bind(name: string, resource: unknown): readonly BindingIdentityChange[] {
     const state = requiredBindingByName(name, "bind");
     ensureGroupSettable(state.info.group);
-    // Owned -> external transitions are not supported (design §6): recreate the instance instead.
-    if (!state.external && state.ownership === "lib") throw ownershipFlipError(name, "lib");
+    // Ownership is fixed at construction, never by call order (design §6). Only a binding declared
+    // in `bindings` is external, so `.bind()` on anything else flips ownership and is refused —
+    // including a binding nobody has touched yet, whose value-owned storage is merely lazy (A-3).
+    // Without this, `.bind()` on a virgin binding would silently promote it and resurrect exactly
+    // the order-dependent latch the design makes unrepresentable.
+    if (!state.external) throw ownershipFlipError(name, state.ownership === "user" ? "user" : "lib");
     if (state.resource && Object.is(state.boundValue, resource)) return [];
     const before = identityString(state.identity);
     bindExternal(state, resource);
