@@ -85,15 +85,26 @@ export class ComputePipeline implements Compute {
       layout: this.pipelineLayout,
       compute: { module: this.shaderModule, entryPoint: this.entryPoint, ...(constants ? { constants } : {}) },
     };
-    this.setCore = createSetCore({ device, label: this.label, drawId: this.id, reflection: this.reflection, bindGroupLayouts: this.bindGroupLayouts, cache: this.cache });
+    // Ownership is fixed here, before any set(): the engine applies `bindings` (external) and
+    // `values` (instance-owned) while it builds the binding state machine.
+    this.setCore = createSetCore({ device, label: this.label, drawId: this.id, reflection: this.reflection, bindGroupLayouts: this.bindGroupLayouts, cache: this.cache, values: opts.values, bindings: opts.bindings });
     const active = new Set(entryMetadata(entry, "bindings", this.label).map((binding) => `${binding.group}:${binding.binding}`));
     this.#storageBindings = this.reflection.bindings.filter((binding) => binding.kind === "buffer" && binding.addressSpace === "storage" && active.has(`${binding.group}:${binding.binding}`));
     if (opts.set) this.set(opts.set);
   }
 
-  set(values: SetBag): this {
+  set(binding: string, value: unknown): this;
+  set(values: SetBag): this;
+  set(bindingOrValues: string | SetBag, value?: unknown): this {
     assertDeviceUsable(this.device, `${this.label}.set`);
-    this.setCore.set(values);
+    if (typeof bindingOrValues === "string") this.setCore.setScoped(bindingOrValues, value);
+    else this.setCore.set(bindingOrValues);
+    return this;
+  }
+
+  bind(binding: string, resource: unknown): this {
+    assertDeviceUsable(this.device, `${this.label}.bind`);
+    this.setCore.bind(binding, resource);
     return this;
   }
 
