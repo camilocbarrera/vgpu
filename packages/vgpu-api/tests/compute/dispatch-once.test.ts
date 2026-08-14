@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
-import { init } from "../../src/mock.ts";
+import { init, storage } from "../../src/mock.ts";
 import { compute } from "../../src/compute.ts";
 
 const SHADER = `
 @compute @workgroup_size(1) fn main() {}
+`;
+
+const ALIAS_SHADER = `
+@group(0) @binding(0) var<storage, read_write> a: array<f32>;
+@group(0) @binding(1) var<storage, read_write> b: array<f32>;
+@compute @workgroup_size(1) fn main() { a[0] = 1.0; b[0] = 2.0; }
 `;
 
 let gpu: Awaited<ReturnType<typeof init>> | undefined;
@@ -177,6 +183,21 @@ describe("a failed createComputePipelineAsync does not poison the instance", () 
     const sim = compute(gpu, SHADER, { label: "poison-sync" });
     await expect(sim.dispatchOnce(1)).rejects.toThrow(/boom/);
     expect(() => sim.dispatch(1)).not.toThrow();
+  });
+});
+
+// --- H3: validation must not escape across the await boundary (aliasing introduced mid-flight) ----
+
+describe("dispatchOnce() re-validates writable-storage aliasing after the await", () => {
+  test("aliasing introduced by a set() while the compile is in flight is rejected before encoding", async () => {
+    gpu = await init();
+    const sim = compute(gpu, ALIAS_SHADER, { label: "alias-late" });
+    const bufA = storage(gpu, 16, "read-write");
+    const bufB = storage(gpu, 16, "read-write");
+    sim.set({ a: bufA, b: bufB }); // not aliasing at call time
+    const pending = sim.dispatchOnce(1);
+    sim.set({ a: bufA, b: bufA }); // aliasing introduced while the compile is in flight
+    await expect(pending).rejects.toMatchObject({ code: expect.stringContaining("ALIAS") });
   });
 });
 
