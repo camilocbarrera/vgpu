@@ -546,6 +546,15 @@ export function surfaceResizeReentrantError(label?: string): VGPUError {
   });
 }
 
+export function surfaceSampleCountError(sampleCount: unknown): VGPUError {
+  return new VGPUError({
+    code: "VGPU-SURFACE-SAMPLE-COUNT-INVALID",
+    message: `sampleCount received ${String(sampleCount)}; WebGPU render targets are 1 or 4.`,
+    fix: "Use sampleCount: 4 for MSAA, or omit it for a single-sampled surface.",
+    where: "surface",
+  });
+}
+
 export function clearColorInvalidError(where: string): VGPUError {
   return new VGPUError({
     code: "VGPU-CLEAR-COLOR-INVALID",

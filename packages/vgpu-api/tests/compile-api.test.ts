@@ -35,19 +35,21 @@ function expectOutsideFrame(fn: () => unknown): void {
   throw new Error("Expected VGPU-SURFACE-NOT-IN-FRAME");
 }
 
-test("surface pipeline creation is rejected outside frame(gpu) with an offscreen precompile hint", async () => {
+// Encoding against a surface needs its current texture and stays frame-only; compiling against one
+// does not — its signature comes from the surface's configuration (see surface-signature.test.ts).
+test("surface encoding is rejected outside frame(gpu) with an offscreen precompile hint, while compiling is not", async () => {
   const gpu = await init();
   const canvasSurface = surface(gpu, surfaceCanvas());
   const drawable = draw(gpu, { shader: WGSL });
   const shader1 = effect(gpu, FRAGMENT_ONLY);
 
-  expectOutsideFrame(() => drawable.compile(canvasSurface));
-  expectOutsideFrame(() => drawable.compileSync(canvasSurface));
   expectOutsideFrame(() => drawable.draw(canvasSurface));
-  expectOutsideFrame(() => shader1.compile(canvasSurface));
-  expectOutsideFrame(() => shader1.compileSync(canvasSurface));
   expectOutsideFrame(() => shader1.draw(canvasSurface));
   expectOutsideFrame(() => bundle(gpu, { target: canvasSurface }, () => undefined));
+  await expect(drawable.compile(canvasSurface)).resolves.toBe(drawable);
+  expect(() => drawable.compileSync(canvasSurface)).not.toThrow();
+  await expect(shader1.compile(canvasSurface)).resolves.toBe(shader1);
+  expect(() => shader1.compileSync(canvasSurface)).not.toThrow();
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass(canvasSurface, drawable))).not.toThrow();
   gpu.dispose();
 });
