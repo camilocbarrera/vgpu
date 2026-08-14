@@ -158,6 +158,20 @@ export class ComputePipeline implements Compute {
     this.device.gpu.queue.submit([encoder.finish()]);
   }
 
+  /**
+   * Async readiness for one compute kernel, for `prepare(gpu, [{ compute }])`.
+   *
+   * Deliberately the very same `#ensurePipelineAsync()` `dispatchOnce()` uses — same dedupe of
+   * concurrent callers, same reuse of a pipeline a previous `dispatch()` already compiled, same
+   * anti-poisoning on failure. `prepare()` is a second door to that door, never a second compile.
+   *
+   * @internal
+   */
+  prepareCombination(): Promise<GPUComputePipeline> {
+    assertDeviceUsable(this.device, `${this.label}.prepare`);
+    return this.#ensurePipelineAsync();
+  }
+
   /** Compiles the pipeline synchronously the first time it is needed, then memoizes it for every later call. */
   #ensurePipeline(): GPUComputePipeline {
     if (!this.#pipeline) this.#pipeline = this.device.gpu.createComputePipeline(this.#pipelineDescriptor);

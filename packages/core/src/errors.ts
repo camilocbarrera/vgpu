@@ -16,6 +16,12 @@ export interface VGPUErrorDetail {
   readonly samplerName?: string;
   readonly samplerGroup?: number;
   readonly samplerBinding?: number;
+  /**
+   * Every failed combination of a `prepare()` call — renderable label, resolved target signature
+   * (absent for a compute request, which has no target) and the underlying cause. A batch of
+   * combinations fails as a batch, so the whole list travels with the error.
+   */
+  readonly failures?: readonly { readonly label: string; readonly signature?: string; readonly cause?: unknown }[];
 }
 
 export interface VGPUErrorData {

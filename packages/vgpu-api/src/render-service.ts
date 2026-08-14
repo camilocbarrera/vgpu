@@ -33,6 +33,8 @@ function createRenderService(kernel: Kernel): RenderService {
   const pipelines = createPipelineStore(device, {
     errorSink: (error) => kernel.reportError(error),
     registerSettledSource: (source) => kernel.registerSettledSource(source),
+    // Last link of the pendingPipelines chain: the gpu-wide default from init().
+    pendingPipelines: kernel.pendingPipelinesDefault(),
   });
   const shaderModules = createShaderModuleCache(device);
   const pipelineLayouts = createPipelineLayoutCache(device);

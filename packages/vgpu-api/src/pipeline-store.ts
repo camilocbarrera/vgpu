@@ -2,11 +2,14 @@ import { bindGroupLayoutMetadata, type Device } from "@vgpu/core";
 import type { EntryPointInfo, OverrideInfo } from "@vgpu/wgsl/reflect-source";
 import type { Target, CompileTarget, TargetSignature } from "./target.ts";
 import { isTarget } from "./target-utils.ts";
-import { compileDisposedError, compileFailedError, compileSignatureInvalidError, constantsInvalidError, entryInvalidError, pipelineLayoutGapError, type VGPUError } from "./errors.ts";
+import { compileDisposedError, compileFailedError, compileSignatureInvalidError, constantsInvalidError, entryInvalidError, pipelineLayoutGapError, pipelinePendingError, type VGPUError } from "./errors.ts";
+import { DEFAULT_PENDING_PIPELINES, type PendingPipelines } from "./pending-pipelines.ts";
 
 export interface ErrorCtx {
   readonly where: string;
   readonly signature?: string;
+  /** Renderable label, used by the policy errors that name the combination to the caller. */
+  readonly label?: string;
 }
 
 export type ErrorSink = (error: VGPUError) => void | Promise<void>;
@@ -22,10 +25,29 @@ export type PipelineEntry = {
   };
 };
 
+/** The two ways one combination can be compiled, handed to {@link PipelineStore.getForPolicy} together. */
+export interface PipelineCreators {
+  readonly sync: () => GPURenderPipeline;
+  readonly async: () => Promise<GPURenderPipeline>;
+}
+
 export interface PipelineStore {
   getReady(key: string): GPURenderPipeline | undefined;
   getSync(key: string, create: () => GPURenderPipeline, ctx: ErrorCtx): GPURenderPipeline | undefined;
   getAsync(key: string, create: () => Promise<GPURenderPipeline>, ctx: ErrorCtx): Promise<GPURenderPipeline>;
+  /**
+   * Resolves one combination for a SYNCHRONOUS encode under the `pendingPipelines` policy.
+   *
+   * `policy` is the already-resolved call site → frame link of the chain; `undefined` means "nobody
+   * asked", and the store applies the gpu-wide default it was created with (the last link). A
+   * pipeline that is already ready is returned under every policy — the policy only decides what
+   * happens when it is NOT ready:
+   * - `"sync"`: compiles inline (exactly `getSync`, today's behavior).
+   * - `"throw"`: throws `VGPU-PIPELINE-PENDING` and starts nothing.
+   * - `"skip"`: starts (or continues) the async compile in the background and returns `undefined`,
+   *   which the caller reads as "omit this command this frame".
+   */
+  getForPolicy(key: string, policy: PendingPipelines | undefined, create: PipelineCreators, ctx: ErrorCtx): GPURenderPipeline | undefined;
   dispose(): void;
 }
 
@@ -42,6 +64,8 @@ export interface PipelineLayoutCache {
 export interface PipelineStoreOptions {
   readonly errorSink?: ErrorSink;
   readonly registerSettledSource?: RegisterSettledSource;
+  /** Gpu-wide `pendingPipelines` default (the last link of the chain). Defaults to {@link DEFAULT_PENDING_PIPELINES}. */
+  readonly pendingPipelines?: PendingPipelines;
 }
 
 let nextShaderModuleId = 1;
@@ -248,11 +272,22 @@ class DevicePipelineStore implements PipelineStore {
   readonly #entries = new Map<string, PipelineEntry>();
   readonly #tracked = new Set<Promise<unknown>>();
   readonly #errorSink: ErrorSink;
+  readonly #pendingPipelines: PendingPipelines;
+  /**
+   * Keys whose background ("skip") compile failed. A deterministic failure — an invalid shader —
+   * would otherwise be re-reported on every single frame that skips it, so the failure is delivered
+   * to `gpu.onError` exactly once and the key keeps being skipped silently afterwards.
+   *
+   * This set is consulted ONLY on the `"skip"` path: `prepare()` goes through `getAsync`, so it
+   * always retries a failed combination and can never be poisoned by a skip failure.
+   */
+  readonly #skipFailures = new Set<string>();
   readonly #unregisterSettledSource?: () => void;
   #disposed = false;
 
   constructor(private readonly device: Device, opts: PipelineStoreOptions) {
     this.#errorSink = opts.errorSink ?? (() => undefined);
+    this.#pendingPipelines = opts.pendingPipelines ?? DEFAULT_PENDING_PIPELINES;
     this.#unregisterSettledSource = opts.registerSettledSource?.(() => [...this.#tracked]);
   }
 
@@ -316,9 +351,36 @@ class DevicePipelineStore implements PipelineStore {
     return pending.promise;
   }
 
+  getForPolicy(key: string, policy: PendingPipelines | undefined, create: PipelineCreators, ctx: ErrorCtx): GPURenderPipeline | undefined {
+    this.#assertUsable(ctx.where);
+    const ready = this.#entries.get(key)?.pipeline;
+    if (ready) return ready;
+    const resolved = policy ?? this.#pendingPipelines;
+    if (resolved === "sync") return this.getSync(key, create.sync, ctx);
+    if (resolved === "throw") throw pipelinePendingError(ctx.label ? `${ctx.label}.draw` : ctx.where, ctx.label ?? ctx.where, ctx.signature);
+    this.#startBackgroundCompile(key, create.async, ctx);
+    return undefined;
+  }
+
+  /**
+   * Starts the `"skip"` compile, or lets an in-flight one continue: `getAsync` already dedupes by
+   * key, and a key that already failed once is not retried here (see {@link #skipFailures}). The
+   * whole chain — compile plus error delivery — joins `gpu.settled()`, so a test that awaits it sees
+   * the failure recorded, not a half-delivered one.
+   */
+  #startBackgroundCompile(key: string, create: () => Promise<GPURenderPipeline>, ctx: ErrorCtx): void {
+    if (this.#skipFailures.has(key) || this.#entries.get(key)?.pending) return;
+    const chain = this.getAsync(key, create, ctx).then(() => undefined, (error: unknown) => {
+      this.#skipFailures.add(key);
+      return this.#errorSink(error as VGPUError);
+    });
+    this.#track(chain);
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#skipFailures.clear();
     const error = compileDisposedError("gpu.dispose");
     for (const entry of this.#entries.values()) entry.pending?.reject(error);
     this.#entries.clear();
