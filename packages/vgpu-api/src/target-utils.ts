@@ -1,4 +1,4 @@
-import { clearColorInvalidError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
+import { clearColorInvalidError, surfaceSampleCountError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 
 export const DEFAULT_FORMAT: GPUTextureFormat = "rgba8unorm";
@@ -44,6 +44,31 @@ export function sampleCountFor(options: TargetTextureOptions): 1 | 4 {
   (e as { code: string }).code = "VGPU-TARGET-MSAA-INVALID";
   e.message = `msaa received ${msaa}; WebGPU 1|4; use true`;
   throw e;
+}
+
+/**
+ * Sample count of a surface, from its own `sampleCount` option — WebGPU platform vocabulary, so a
+ * surface spells the count itself (`1 | 4`) instead of `Target`'s boolean `msaa`. The two spellings
+ * meet again in `TargetSignature.sampleCount`, which is what pipelines are keyed by.
+ */
+export function surfaceSampleCountFor(options: { readonly sampleCount?: 1 | 4 }): 1 | 4 {
+  const sampleCount = options.sampleCount as unknown;
+  if (sampleCount === 4) return 4;
+  if (sampleCount === undefined || sampleCount === 1) return 1;
+  throw surfaceSampleCountError(sampleCount);
+}
+
+/**
+ * Attachment description of a surface derived from its configuration alone — the depth format the
+ * surface owns and the sample count it renders at. Shared by the surface itself and by anything that
+ * needs its pipeline signature without touching `getCurrentTexture()`.
+ */
+export function surfaceAttachmentsFor(options: { readonly depth?: boolean | GPUTextureFormat; readonly sampleCount?: 1 | 4 }): { readonly depth: GPUTextureFormat | undefined; readonly sampleCount: 1 | 4 } {
+  const depth = depthFormatFor({ depth: options.depth });
+  // Same rule as validateTargetOptions: the default depth state (depthWriteEnabled: true) cannot compile
+  // against a stencil-only format, which has no depth aspect.
+  if (depth === "stencil8") throw targetStencilOnlyDepthError(depth);
+  return { depth, sampleCount: surfaceSampleCountFor(options) };
 }
 
 export function validateTargetOptions(options: Partial<TargetOptions> | undefined, caps: TargetDeviceCaps): void {
