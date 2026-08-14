@@ -23,6 +23,34 @@ interface CanvasProbe {
   readonly view: object;
   readonly configure: ReturnType<typeof vi.fn>;
   currentTextures: number;
+  /** Resizes the canvas behind the surface's back, the way layout or app code does. */
+  setSize(width: number, height: number): void;
+}
+
+interface TextureLedger {
+  created: number;
+  destroyed: number;
+  readonly labels: string[];
+}
+
+/**
+ * Counts the textures a surface OWNS. The presentation texture is wrapped directly (`new Texture(…)`,
+ * "external"), never created through the device, so this ledger sees depth and MSAA attachments only.
+ */
+function textureLedger(gpu: { device: unknown }): TextureLedger {
+  const ledger: TextureLedger = { created: 0, destroyed: 0, labels: [] };
+  const device = gpu.device as { createTexture(opts: Record<string, unknown>): { destroy(): void } };
+  const original = device.createTexture.bind(device);
+  device.createTexture = (opts: Record<string, unknown>) => {
+    const texture = original(opts);
+    ledger.created += 1;
+    ledger.labels.push(String(opts.label ?? ""));
+    const destroy = texture.destroy.bind(texture);
+    let counted = false;
+    (texture as { destroy: () => void }).destroy = () => { if (!counted) { counted = true; ledger.destroyed += 1; } destroy(); };
+    return texture;
+  };
+  return ledger;
 }
 
 /** Canvas mock with STABLE presentation texture/view identity, so resolveTarget can be compared by reference. */
@@ -45,6 +73,10 @@ function canvasProbe(width = 8, height = 4): CanvasProbe {
     },
   };
   probe.canvas = canvas as unknown as HTMLCanvasElement;
+  (probe as unknown as { setSize(w: number, h: number): void }).setSize = (w: number, h: number) => {
+    canvas.width = w;
+    canvas.height = h;
+  };
   return probe as CanvasProbe;
 }
 
@@ -328,6 +360,72 @@ test("pass options that depend on depth and MSAA now apply to surfaces exactly a
     // clearStencil follows the stencil aspect of the surface's own depth format.
     expect(run({ target: stencil, clearStencil: 1 })).toBe("ok");
     expect(run({ target: plainDepth, clearStencil: 1 })).toBe("VGPU-PASS-CLEARSTENCIL-INVALID");
+  } finally {
+    gpu.dispose();
+  }
+});
+
+// Donated from the independent QA probe suite (M7): the DoD's dispose clause, previously uncaught by
+// any test in this branch — mutating #destroyAttachments to a no-op survived the whole suite.
+test("dispose destroys the attachments the surface owns exactly once, and stays idempotent", async () => {
+  const gpu = await init();
+  try {
+    const ledger = textureLedger(gpu);
+    const canvasSurface = surface(gpu, canvasProbe().canvas, { depth: true, sampleCount: 4 });
+    expect(ledger.created).toBe(2);
+
+    canvasSurface.dispose();
+    canvasSurface.dispose();
+    canvasSurface.dispose();
+
+    expect(ledger.destroyed).toBe(2);
+    expect(canvasSurface.disposed).toBe(true);
+  } finally {
+    gpu.dispose();
+  }
+});
+
+// Donated from the independent QA probe suite (A6): every recreate must destroy the pair it replaced,
+// through both resize paths, or a long-lived canvas leaks a texture per resize.
+test("repeated resizes and canvas drift never leak an attachment", async () => {
+  const gpu = await init();
+  try {
+    const ledger = textureLedger(gpu);
+    const probe = canvasProbe();
+    const canvasSurface = surface(gpu, probe.canvas, { depth: true, sampleCount: 4 });
+
+    for (let i = 1; i <= 25; i += 1) {
+      if (i % 2 === 0) canvasSurface.resize([8 + i, 4 + i]);
+      else { probe.setSize(8 + i, 4 + i); void canvasSurface.depth; }
+      // Exactly one live pair (depth + msaa) at every step, never a second one.
+      expect(ledger.created - ledger.destroyed).toBe(2);
+    }
+
+    canvasSurface.dispose();
+    expect(ledger.created).toBe(ledger.destroyed);
+    expect(ledger.labels.filter((label) => label.includes("msaa")).length).toBe(ledger.created / 2);
+  } finally {
+    gpu.dispose();
+  }
+});
+
+// Donated from the independent QA probe suite (M10): the duck-typed branch must hand out a fresh
+// signature, never the surface's own state, and must still normalize a plain TargetSignature.
+test("normalizeSignature returns a non-aliased signature a caller cannot use to poison the surface", async () => {
+  const gpu = await init();
+  try {
+    const canvasSurface = surface(gpu, canvasProbe().canvas, { depth: true, sampleCount: 4 });
+    const first = normalizeSignature(canvasSurface);
+    const second = normalizeSignature(canvasSurface);
+    expect(first).not.toBe(second);
+    expect(first.colors).not.toBe(second.colors);
+
+    (first.colors as GPUTextureFormat[])[0] = "r8unorm";
+    expect(normalizeSignature(canvasSurface).colors[0]).toBe(canvasSurface.format);
+
+    // A plain TargetSignature has no pipelineSignature to prefer, so it still takes the normal path.
+    const plain = normalizeSignature({ colors: ["rgba8unorm"], depth: "depth24plus", sampleCount: 4 } as never);
+    expect(plain).toEqual({ colors: ["rgba8unorm"], depth: "depth24plus", sampleCount: 4 });
   } finally {
     gpu.dispose();
   }
