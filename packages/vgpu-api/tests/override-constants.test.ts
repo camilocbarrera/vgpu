@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
-import { init, compute, draw, target } from "../src/mock.ts";
+import { init, compute, draw, storage, target } from "../src/mock.ts";
 
 const OVERRIDE_WGSL = `
 override SCALE: f32 = 1.0;
@@ -134,8 +134,15 @@ test("an override without a default must be provided", async () => {
 test("compute constants reach the compute stage; @id keys and omission behave like draws", async () => {
   const gpu = await init();
 
-  compute(gpu, COMPUTE_WGSL, { label: "sim", constants: { STEP: 0.5, "3": 4 } });
-  compute(gpu, COMPUTE_WGSL, { label: "sim-absent" });
+  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim", constants: { STEP: 0.5, "3": 4 } });
+  const simAbsent = compute(gpu, COMPUTE_WGSL, { label: "sim-absent" });
+  // compute() no longer compiles its pipeline at construction (contract #4) — dispatch(0) is a valid,
+  // no-op-workgroup call that satisfies the one active binding and triggers the lazy compile this
+  // assertion inspects, without running any shader logic.
+  sim.set({ data: storage(gpu, 4) });
+  sim.dispatch(0);
+  simAbsent.set({ data: storage(gpu, 4) });
+  simAbsent.dispatch(0);
 
   const descs = getMockGPUDeviceInstrumentation(gpu.device.gpu).createComputePipelineDescriptors;
   expect(descs.at(-2)?.compute.constants).toEqual({ STEP: 0.5, "3": 4 });

@@ -662,6 +662,15 @@ export function writableStorageAliasingError(where: string): VGPUError {
   });
 }
 
+/** Mirrors draw's VGPU-R1-DRAW-COUNT for the compute dispatch surface (dispatch()/dispatchOnce()). */
+export function dispatchCountInvalidError(label: string, field: string, value: unknown, where: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-R1-DISPATCH-COUNT",
+    message: `${field} of '${label}' must be an integer >= 0; received ${String(value)}.`,
+    where,
+  });
+}
+
 export function sharedUniformLayoutMismatchError(opts: {
   readonly bindingName: string;
   readonly adoptedLayout: string;
