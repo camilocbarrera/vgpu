@@ -10,7 +10,7 @@ import { isTarget } from "./target-utils.ts";
 import { FRAME_DRAWABLE, type FrameDrawableProtocol } from "./frame-protocols.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { renderService } from "./render-service.ts";
-import { toWgsl } from "./shader-source.ts";
+import { resolveShaderInput, toWgsl } from "./shader-source.ts";
 import { unsupportedError } from "./errors.ts";
 import type { ShaderSource } from "@vgpu/wgsl";
 import type { Gpu } from "./kernel.ts";
@@ -22,16 +22,27 @@ import type { Gpu } from "./kernel.ts";
  * An effect is a draw with a fixed vertex stage, so it shares the gpu's single render service with
  * `draw()`: same pipeline store, same bind group cache, same shader module and layout caches.
  */
-export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOptions = {}): Effect {
+// Overload order is public API surface: `Parameters<typeof effect>[1]` resolves to the LAST
+// declared overload, so the single-object form must come first — otherwise consumers that derive
+// types from `Parameters<>`/`ReturnType<>` (see apps/docs/examples/fft-ocean-surface/scene.ts) see
+// `EffectOptions & { shader }` instead of `string | ShaderSource` for that position. Call resolution
+// itself is unaffected by this order: the single-object form requires `shader`, which neither a
+// string nor a ShaderSource artifact has, so it never matches those calls.
+/** Single-object form: exactly two arguments. A third `opts` argument here is silently ignored — put every option in `input`. */
+export function effect(gpu: Gpu, input: EffectOptions & { readonly shader: string | ShaderSource }): Effect;
+export function effect(gpu: Gpu, input: string | ShaderSource): Effect;
+export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOptions): Effect;
+export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, opts: EffectOptions = {}): Effect {
+  const [source, resolvedOpts] = resolveShaderInput("effect", input, opts);
   // Vertex buffers belong to the generated fullscreen stage, so geometry here would silently do
   // nothing. Reject the option instead of ignoring it.
-  if ("geometry" in (opts as Record<string, unknown>)) throw unsupportedError("effect", "effect() never accepts vertex buffers; use draw(gpu, { shader, geometry: geometry(gpu, descriptor) }).");
+  if ("geometry" in (resolvedOpts as Record<string, unknown>)) throw unsupportedError("effect", "effect() never accepts vertex buffers; use draw(gpu, { shader, geometry: geometry(gpu, descriptor) }).");
   const kernel = liveKernel(gpu, "effect");
   const render = renderService(kernel);
   return new InternalEffect(
     kernel.device,
     toWgsl(source),
-    opts,
+    resolvedOpts,
     render.binds,
     undefined,
     render.pipelines,
@@ -49,6 +60,8 @@ export interface EffectOptions {
   readonly blend?: BlendPreset | BlendOptions;
   /** Channels written to color targets. Omit to write all (rgba). Empty array writes nothing. */
   readonly writeMask?: readonly ("r" | "g" | "b" | "a")[];
+  /** Shader source, only used by the single-argument `effect(gpu, { shader, ... })` form; the two-argument form passes it separately. */
+  readonly shader?: string | ShaderSource;
 }
 
 const effectImpls = new WeakMap<Effect, InternalDraw>();
