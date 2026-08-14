@@ -493,9 +493,14 @@ export class InternalDraw implements Draw {
     return this;
   }
 
+  /**
+   * `allowSurface` is kept for source compatibility and is now a no-op: a surface signature is
+   * frame-independent, so no path through this method needs an active frame.
+   */
   pipelineFor(target: Target | TargetSignature, allowSurface = false): GPURenderPipeline | undefined {
+    void allowSurface;
     assertDeviceUsable(drawState(this).device, `${this.label}.pipelineFor`);
-    const { key, signature, signatureKey } = this.#compileKey(target, `${this.label}.pipelineFor`, allowSurface);
+    const { key, signature, signatureKey } = this.#compileKey(target, `${this.label}.pipelineFor`);
     const pipeline = drawState(this).pipelineStore.getSync(key, () => this.#createPipeline(signature), { where: `${this.label}.pipelineFor`, signature: signatureKey });
     if (pipeline) drawState(this).resolvedPipelineKeys.add(key);
     return pipeline;
@@ -512,17 +517,22 @@ export class InternalDraw implements Draw {
     });
   }
 
-  #compileKey(target: CompileTarget | undefined, where: string, allowSurface = false): { readonly signature: TargetSignature; readonly signatureKey: string; readonly key: string } {
-    const signature = this.#signatureForKeyTarget(target, where, allowSurface);
+  #compileKey(target: CompileTarget | undefined, where: string): { readonly signature: TargetSignature; readonly signatureKey: string; readonly key: string } {
+    const signature = this.#signatureForKeyTarget(target, where);
     const signatureKey = signatureKeyOf(signature);
     return { signature, signatureKey, key: this.#pipelineKey(signature) };
   }
 
-  #signatureForKeyTarget(target: CompileTarget | undefined, where: string, allowSurface = false): TargetSignature {
+  /**
+   * Pipeline signature of a compile target — never needs an active frame. A surface answers from its
+   * configuration (`normalizeSignature` reads `pipelineSignature`, not the current texture), so
+   * compiling against one outside `frame()` is legal and resolves the very signature its encode path
+   * uses inside a frame. Encoding still needs the current texture: that guard lives on `draw()`.
+   */
+  #signatureForKeyTarget(target: CompileTarget | undefined, where: string): TargetSignature {
     const state = drawState(this);
     const resolvedTarget = target ?? state.defaultTarget;
     if (!resolvedTarget) throw targetRequiredError(where);
-    if (!allowSurface) assertSurfaceTargetInFrame(resolvedTarget, where);
     const signature = normalizeSignature(resolvedTarget);
     validateTargetSignature(signature, where);
     if (state.colorStates && state.colorStates.length !== signature.colors.length) {
