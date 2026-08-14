@@ -15,6 +15,7 @@ import { FRAME_PASS_ATTACHMENT, frameBundleOf, frameDrawableOf, framePassAttachm
 import { frameState } from "./frame-state.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
+import type { PendingPipelines } from "./pending-pipelines.ts";
 
 /**
  * Opens a frame on `gpu`: advances the frame clock, runs `cb` against a fresh command encoder and
@@ -25,8 +26,21 @@ import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
  * Frames are not reentrant: opening one from inside another (or from a surface resize callback)
  * throws `VGPU-FRAME-REENTRANT`.
  */
-export function frame(gpu: Gpu, cb?: (frame: Frame) => void): Frame {
-  return frameRunner(liveKernel(gpu, "frame")).frame(cb);
+export function frame(gpu: Gpu, cb?: (frame: Frame) => void, opts: FrameOptions = {}): Frame {
+  return frameRunner(liveKernel(gpu, "frame")).frame(cb, opts);
+}
+
+/** Per-frame options. Additive: `frame(gpu, cb)` keeps behaving exactly as before. */
+export interface FrameOptions {
+  /**
+   * Frame link of the `pendingPipelines` chain (call site → frame → gpu): the policy every encode
+   * in this frame uses unless it names its own. Omit it and the gpu-wide `init({ pendingPipelines })`
+   * default applies.
+   *
+   * This is the link the design expects most applications to use: set the policy once per frame
+   * (e.g. `"skip"` while streaming assets in, the default everywhere else).
+   */
+  readonly pendingPipelines?: PendingPipelines;
 }
 
 /**
@@ -48,9 +62,9 @@ function frameRunner(kernel: Kernel): FrameRunner {
   return kernel.service(frameRunnerToken, (self) => {
     const state = frameState(self);
     return new FrameRunner(
-      () => {
+      (opts) => {
         let release = () => {};
-        const frame = new Frame(self.device, undefined, (error) => self.reportError(error), (promise) => { void self.trackDelivery(promise); }, () => release());
+        const frame = new Frame(self.device, undefined, (error) => self.reportError(error), (promise) => { void self.trackDelivery(promise); }, () => release(), opts?.pendingPipelines);
         release = self.own("scheduler", () => frame.cancel());
         return frame;
       },
@@ -88,7 +102,7 @@ export interface FramePassOptions {
 }
 
 export interface FrameLoopHandle { stop(): void }
-export interface FrameLoopOptions { readonly fps?: number }
+export interface FrameLoopOptions extends FrameOptions { readonly fps?: number }
 export type FrameLoopCallback = (frame: Frame) => void;
 
 export class Frame {
@@ -124,6 +138,8 @@ export class Frame {
     private readonly errorSink?: ValidationErrorSink,
     private readonly trackSettled?: (promise: Promise<unknown>) => void,
     private readonly releaseLifecycle?: () => void,
+    /** Frame link of the pendingPipelines chain; every pass of this frame hands it to its draws. */
+    private readonly pendingPipelines?: PendingPipelines,
   ) {
     assertDeviceUsable(device, "Frame.constructor");
     this.#encoder = device.gpu.createCommandEncoder({ label: "vgpu.frame" });
@@ -212,7 +228,7 @@ export class Frame {
           // re-checks the device here instead of taking it as a separate constructor argument.
           assertDeviceUsable(this.device, where);
           if (this.#canceled) throw frameCanceledError(where);
-        }));
+        }, this.pendingPipelines));
       } finally {
         this.#passActive = false;
       }
@@ -388,12 +404,16 @@ export class Frame {
 
 export class FramePass {
   #occlusionActive = false;
-  constructor(private readonly encoder: GPURenderPassEncoder, readonly target: Target, private readonly validations: ClaimedGroupValidationResult[], private readonly depthReadOnly = false, private readonly occlusionSource?: FrameOcclusionSource, private readonly frame?: Frame, private readonly assertFrameOpen?: (where: string) => void) {}
+  constructor(private readonly encoder: GPURenderPassEncoder, readonly target: Target, private readonly validations: ClaimedGroupValidationResult[], private readonly depthReadOnly = false, private readonly occlusionSource?: FrameOcclusionSource, private readonly frame?: Frame, private readonly assertFrameOpen?: (where: string) => void, private readonly pendingPipelines?: PendingPipelines) {}
   draw(drawable: Draw | Effect, opts: DrawCallOptions = {}): void {
     this.assertFrameOpen?.("FramePass.draw");
     const encodable = frameDrawable(drawable);
     if (this.depthReadOnly) assertDrawableAllowedInReadOnlyPass(encodable, this.target);
-    encodable.encode(this.encoder, this.target, opts, (result) => this.validations.push(result));
+    // Two links of the pendingPipelines chain collapse here: the call site wins, and the frame's
+    // policy fills in for the calls that named none. The gpu-wide default is applied further down,
+    // by the pipeline store, so an encode that reaches it with `undefined` still resolves correctly.
+    const resolved = opts.pendingPipelines === undefined && this.pendingPipelines !== undefined ? { ...opts, pendingPipelines: this.pendingPipelines } : opts;
+    encodable.encode(this.encoder, this.target, resolved, (result) => this.validations.push(result));
   }
   /**
    * Wraps one or more draws in begin/endOcclusionQuery. The body ALWAYS executes; condition your
@@ -538,14 +558,14 @@ export class FrameRunner {
    * returns the untrack function the handle runs when it stops on its own, so `gpu.dispose()` can
    * stop the loops still running without holding on to the ones already stopped.
    */
-  constructor(private readonly createFrame: () => Frame, private readonly advance: () => void, private readonly trackLoop?: (handle: FrameLoopHandle) => () => void) {}
-  frame(cb?: (frame: Frame) => void): Frame {
+  constructor(private readonly createFrame: (opts?: FrameOptions) => Frame, private readonly advance: () => void, private readonly trackLoop?: (handle: FrameLoopHandle) => () => void) {}
+  frame(cb?: (frame: Frame) => void, opts?: FrameOptions): Frame {
     if (this.#running || isSurfaceResizeCallbackActive()) throw frameReentrantError();
     this.#running = true;
     enterFrame();
     try {
       this.advance();
-      const frame = this.createFrame();
+      const frame = this.createFrame(opts);
       if (cb) {
         try { cb(frame); }
         finally {
@@ -575,7 +595,7 @@ export class FrameRunner {
       if (stopped) return;
       if (shouldRunFrame(timestamp, lastFrameMs, minIntervalMs)) {
         lastFrameMs = timestamp;
-        this.frame(cb);
+        this.frame(cb, opts);
       }
       // The callback may dispose the owning gpu, which stops this loop while the current tick is
       // running. Do not enqueue one last (no-op) tick after stop() already canceled the old id.

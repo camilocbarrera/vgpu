@@ -9,6 +9,7 @@ import { createSetCore, type BindingIdentityChange, type BindingState, type SetB
 import { bindGroupLayoutEntriesForGroup, bindGroupLayoutsForReflection, cachedBindGroupLayout, visibilityForEntries, type BindingVisibilityFn } from "./set-layouts.ts";
 import type { CompileTarget, Target, TargetSignature } from "./target.ts";
 import { normalizeConstantsOptions, normalizeSignature, pipelineKeyOf, selectEntryPoint, signatureKeyOf, validateTargetSignature, createPipelineLayoutCache, createPipelineStore, createShaderModuleCache, type PipelineLayoutCache, type PipelineStore, type ShaderModuleCache } from "./pipeline-store.ts";
+import type { PendingPipelines } from "./pending-pipelines.ts";
 import { hasStencilAspect, isTarget } from "./target-utils.ts";
 import { blendConstantInvalidError, blendInvalidError, claimedGroupNativeValidationError, colorsInvalidError, cullInvalidError, depthInvalidError, entryInvalidError, frontFaceInvalidError, indirectInvalidError, meshRangeInvalidError, multisampleInvalidError, stencilInvalidError, storageStageLimitError, surfaceNotInFrameError, targetRequiredError, unclippedDepthInvalidError, VGPUError, writeMaskInvalidError } from "./errors.ts";
 import { isFrameActive, isSurface } from "./surface.ts";
@@ -166,6 +167,15 @@ export interface DrawCallOptions {
   readonly firstInstance?: number;
   /** GPU-driven draw: read draw arguments from a buffer instead of CPU-side counts. */
   readonly indirect?: StorageBuffer | { readonly buffer: StorageBuffer; readonly offset?: number };
+  /**
+   * Call-site link of the `pendingPipelines` chain (call site → frame → gpu): what this single
+   * encode does when its `(draw, target signature)` combination has no compiled pipeline yet.
+   * Omit it and the frame's policy applies, then the gpu's `init({ pendingPipelines })` default.
+   *
+   * The policy is normally set once, at `init()` or per frame; this per-call form exists for the
+   * exceptions (one streamed mesh that may be skipped, one draw that must never stall).
+   */
+  readonly pendingPipelines?: PendingPipelines;
 }
 
 export interface DrawLayoutOptions {
@@ -447,7 +457,7 @@ export class InternalDraw implements Draw {
 
   encode(pass: GPURenderPassEncoder, target: Target | TargetSignature, opts: DrawCallOptions = {}, claimValidation?: (result: ClaimedGroupValidationResult) => void): void {
     assertDeviceUsable(drawState(this).device, `${this.label}.encode`);
-    const pipeline = this.pipelineFor(target, true);
+    const pipeline = this.#pipelineForEncode(target, opts.pendingPipelines);
     if (!pipeline) return;
     pass.setPipeline(pipeline);
     const state = drawState(this);
@@ -472,6 +482,29 @@ export class InternalDraw implements Draw {
     }
     const result = popLastClaimedGroupValidationScope(drawState(this).device);
     if (result) claimValidation(result);
+  }
+
+  /**
+   * Pipeline this encode should bind, under the resolved `pendingPipelines` policy.
+   *
+   * `opts.pendingPipelines` is the call-site link and the frame's is already folded into it by
+   * `FramePass.draw`; `undefined` hands the decision to the store's gpu-wide default. `undefined`
+   * comes back for `"skip"` (omit this command) — the exact same "no pipeline, encode nothing"
+   * shape `pipelineFor()` already returned for a failed sync compile.
+   *
+   * `where` stays `${label}.pipelineFor`: the legacy spelling is no longer called from here, but a
+   * sync compile failure raised on this path must keep reporting the same `where` it always did.
+   */
+  #pipelineForEncode(target: Target | TargetSignature, policy: PendingPipelines | undefined): GPURenderPipeline | undefined {
+    const state = drawState(this);
+    const where = `${this.label}.pipelineFor`;
+    const { key, signature, signatureKey } = this.#compileKey(target, where);
+    const pipeline = state.pipelineStore.getForPolicy(key, policy, {
+      sync: () => this.#createPipeline(signature),
+      async: () => this.#createPipelineAsync(signature),
+    }, { where, signature: signatureKey, label: this.label });
+    if (pipeline) state.resolvedPipelineKeys.add(key);
+    return pipeline;
   }
 
   compile(target?: CompileTarget): Promise<this> {
@@ -500,10 +533,10 @@ export class InternalDraw implements Draw {
   pipelineFor(target: Target | TargetSignature, allowSurface = false): GPURenderPipeline | undefined {
     void allowSurface;
     assertDeviceUsable(drawState(this).device, `${this.label}.pipelineFor`);
-    const { key, signature, signatureKey } = this.#compileKey(target, `${this.label}.pipelineFor`);
-    const pipeline = drawState(this).pipelineStore.getSync(key, () => this.#createPipeline(signature), { where: `${this.label}.pipelineFor`, signature: signatureKey });
-    if (pipeline) drawState(this).resolvedPipelineKeys.add(key);
-    return pipeline;
+    // The legacy spelling IS the "sync" policy: compile inline, return undefined when the compile
+    // failed. Routing it through the same resolver keeps one implementation of "resolve this
+    // combination for a synchronous caller" instead of two that can drift.
+    return this.#pipelineForEncode(target, "sync");
   }
 
   pipelineForAsync(target: Target | TargetSignature): Promise<GPURenderPipeline> {
