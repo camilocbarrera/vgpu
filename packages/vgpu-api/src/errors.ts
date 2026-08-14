@@ -463,6 +463,51 @@ export function compileFailedError(where: string, cause: unknown, signature?: st
   });
 }
 
+/**
+ * A synchronous encode met a `(renderable, target signature)` combination whose pipeline is not
+ * ready, under `pendingPipelines: "throw"`. Nothing was compiled and nothing was encoded: the whole
+ * point of the policy is that a compilation stall is a choice, never an accident.
+ */
+export function pipelinePendingError(where: string, label: string, signature: string | undefined): VGPUError {
+  return new VGPUError({
+    code: "VGPU-PIPELINE-PENDING",
+    message: `'${label}' has no pipeline ready for target signature ${signature ?? "(unresolved)"}, and pendingPipelines is "throw", so this encode did not start compilation.`,
+    fix: "await prepare(gpu, [{draw, target}]) before drawing, or opt in to inline compilation with pendingPipelines: 'sync'",
+    where,
+    detail: signature ? { signature } : undefined,
+  });
+}
+
+/** One failed combination of a `prepare()` call: the renderable's label, its resolved signature and why it failed. */
+export interface PrepareFailure {
+  readonly label: string;
+  /** Resolved target signature key; absent for a `{compute}` request, which has no target. */
+  readonly signature?: string;
+  readonly cause: unknown;
+}
+
+/**
+ * `prepare()` rejects instead of resolving with broken handles, and it enumerates EVERY failed
+ * combination — not just the first — because a batch of combinations fails as a batch. Combinations
+ * that did compile stay cached, so re-preparing the succeeding subset is free.
+ */
+export function prepareFailedError(failures: readonly PrepareFailure[]): VGPUError {
+  const lines = failures.map((failure) => `  - '${failure.label}'${failure.signature ? ` @ ${failure.signature}` : ""}: ${failureReason(failure.cause)}`);
+  return new VGPUError({
+    code: "VGPU-PREPARE-FAILED",
+    message: `prepare() failed for ${failures.length} combination(s):\n${lines.join("\n")}`,
+    fix: "Fix the reported shaders/target signatures; prepare() always retries, and the combinations that did compile stay cached.",
+    where: "prepare",
+    cause: failures[0]?.cause,
+    detail: { failures: failures.map(({ label, signature, cause }) => ({ label, signature, cause })) },
+  });
+}
+
+function failureReason(cause: unknown): string {
+  if (cause instanceof Error) return `${(cause as VGPUError).code ? `${(cause as VGPUError).code}: ` : ""}${cause.message}`;
+  return String(cause);
+}
+
 export function compileDisposedError(where: string): VGPUError {
   return new VGPUError({
     code: "VGPU-COMPILE-DISPOSED",
