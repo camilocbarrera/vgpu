@@ -22,10 +22,16 @@ import type { Gpu } from "./kernel.ts";
  * An effect is a draw with a fixed vertex stage, so it shares the gpu's single render service with
  * `draw()`: same pipeline store, same bind group cache, same shader module and layout caches.
  */
-export function effect(gpu: Gpu, input: string | ShaderSource): Effect;
-export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOptions): Effect;
+// Overload order is public API surface: `Parameters<typeof effect>[1]` resolves to the LAST
+// declared overload, so the single-object form must come first — otherwise consumers that derive
+// types from `Parameters<>`/`ReturnType<>` (see apps/docs/examples/fft-ocean-surface/scene.ts) see
+// `EffectOptions & { shader }` instead of `string | ShaderSource` for that position. Call resolution
+// itself is unaffected by this order: the single-object form requires `shader`, which neither a
+// string nor a ShaderSource artifact has, so it never matches those calls.
 /** Single-object form: exactly two arguments. A third `opts` argument here is silently ignored — put every option in `input`. */
 export function effect(gpu: Gpu, input: EffectOptions & { readonly shader: string | ShaderSource }): Effect;
+export function effect(gpu: Gpu, input: string | ShaderSource): Effect;
+export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOptions): Effect;
 export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, opts: EffectOptions = {}): Effect {
   const [source, resolvedOpts] = resolveShaderInput("effect", input, opts);
   // Vertex buffers belong to the generated fullscreen stage, so geometry here would silently do

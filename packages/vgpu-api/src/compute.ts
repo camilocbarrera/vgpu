@@ -22,10 +22,16 @@ import { resolveIndirect } from "./indirect.ts";
  * lazy bind group cache through the kernel, so a bind group built for a draw and one built here are
  * the same object when the resources match — and the cache is torn down once, in the service phase.
  */
-export function compute(gpu: Gpu, input: string | ShaderSource): Compute;
-export function compute(gpu: Gpu, source: string | ShaderSource, opts: ComputeOptions): Compute;
+// Overload order is public API surface: `Parameters<typeof compute>[1]` resolves to the LAST
+// declared overload, so the single-object form must come first — otherwise consumers that derive
+// types from `Parameters<>`/`ReturnType<>` (see apps/docs/examples/fft-ocean-surface/scene.ts) see
+// `ComputeOptions & { shader }` instead of `string | ShaderSource` for that position. Call resolution
+// itself is unaffected by this order: the single-object form requires `shader`, which neither a
+// string nor a ShaderSource artifact has, so it never matches those calls.
 /** Single-object form: exactly two arguments. A third `opts` argument here is silently ignored — put every option in `input`. */
 export function compute(gpu: Gpu, input: ComputeOptions & { readonly shader: string | ShaderSource }): Compute;
+export function compute(gpu: Gpu, input: string | ShaderSource): Compute;
+export function compute(gpu: Gpu, source: string | ShaderSource, opts: ComputeOptions): Compute;
 export function compute(gpu: Gpu, input: string | ShaderSource | ComputeOptions, opts: ComputeOptions = {}): Compute {
   const [source, resolvedOpts] = resolveShaderInput("compute", input, opts);
   const kernel = liveKernel(gpu, "compute");
