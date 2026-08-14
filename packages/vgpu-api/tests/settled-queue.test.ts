@@ -1,5 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { init, target, draw, compute } from "../src/mock.ts";
+import { kernelOf } from "../src/kernel.ts";
 
 const SIMPLE_SHADER = `
 @fragment fn main(@location(0) uv: vec2f) -> @location(0) vec4f {
@@ -97,6 +98,29 @@ test("gpu.settled flushes pending onError deliveries before resolving", async ()
 
   expect(errors).toHaveLength(1);
   expect(errors[0]).toMatchObject({ code: "VGPU-COMPILE-FAILED", where: "settledFlush.pipelineFor", cause: nativeError });
+
+  // Pin the actual mechanism, not just its outcome: the compile-error delivery above resolves on
+  // its own microtask regardless of whether settled() waits for it, so a mutant that drops
+  // `#pendingDeliveries` from settled()'s snapshot would not be caught by the assertions above.
+  // A delivery that stays pending until we resolve it must hold settled() open.
+  const kernel = kernelOf(gpu);
+  let resolveDelivery!: () => void;
+  const controlledDelivery = new Promise<void>((resolve) => { resolveDelivery = resolve; });
+  let deliveryRan = false;
+  kernel.trackDelivery(controlledDelivery.then(() => { deliveryRan = true; }));
+
+  let secondSettledDone = false;
+  const secondSettled = gpu.settled().then(() => { secondSettledDone = true; });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(secondSettledDone).toBe(false);
+  expect(deliveryRan).toBe(false);
+
+  resolveDelivery();
+  await secondSettled;
+  expect(secondSettledDone).toBe(true);
+  expect(deliveryRan).toBe(true);
+
   gpu.dispose();
 });
 
@@ -149,6 +173,15 @@ test("regression: compute's synchronous dispatch never awaits queue.onSubmittedW
 
   expect(result).toBeUndefined();
   expect(onSubmittedWorkDone).not.toHaveBeenCalled();
+  gpu.dispose();
+});
+
+test("QA-A5: device without onSubmittedWorkDone (old adapter/mock) does not crash settled()", async () => {
+  const gpu = await init();
+  const queue = gpu.device.gpu.queue as unknown as Record<string, unknown>;
+  delete queue.onSubmittedWorkDone;
+  expect((gpu.device.gpu.queue as unknown as Record<string, unknown>).onSubmittedWorkDone).toBeUndefined();
+  await expect(gpu.settled()).resolves.toBeUndefined();
   gpu.dispose();
 });
 

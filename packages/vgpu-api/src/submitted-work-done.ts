@@ -11,5 +11,11 @@ import type { Device } from "@vgpu/core";
  * infra) depend on this single function without either depending on the other's surface.
  */
 export function submittedWorkDone(device: Device): Promise<void> {
-  return device.gpu.queue.onSubmittedWorkDone?.() ?? Promise.resolve();
+  try {
+    return device.gpu.queue.onSubmittedWorkDone?.() ?? Promise.resolve();
+  } catch {
+    // A synchronous throw (rather than a rejected promise) from a non-conformant queue must not
+    // propagate out of this hot path: it lives inside every gpu.settled() call, which never rejects.
+    return Promise.resolve();
+  }
 }
