@@ -560,3 +560,23 @@ test(".bind() to the same resource leaves a recorded bundle replayable", async (
   expect(codeOf(() => frame(gpu, (f) => f.pass({ target: screen }, (p) => p.bundles(recorded))))).toBe("NO-THROW");
   gpu.dispose();
 });
+
+test(".bind() of an unchanged resource does not re-normalize it", async () => {
+  const gpu = await init();
+  const source = target(gpu, { size: [4, 4] });
+  const other = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, { shader: TEXTURE_SHADER, label: "fx", bindings: { src: source } });
+
+  const sourceView = vi.spyOn(source.color, "createView");
+  const otherView = vi.spyOn(other.color, "createView");
+  for (let index = 0; index < 5; index += 1) fx.bind("src", source);
+
+  // Skipping the bind group rebuild is not enough: normalizing allocates a fresh texture view and
+  // re-subscribes the destroy callback, so a per-frame rebind of the same resource would churn both
+  // every frame across the >=42 call sites that do exactly that. The dedup happens BEFORE the work.
+  expect(sourceView).not.toHaveBeenCalled();
+  // A real swap still normalizes exactly once — the fast path skips work, never a change.
+  fx.bind("src", other);
+  expect(otherView).toHaveBeenCalledTimes(1);
+  gpu.dispose();
+});
