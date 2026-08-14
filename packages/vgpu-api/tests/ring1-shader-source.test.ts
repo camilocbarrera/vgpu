@@ -76,3 +76,33 @@ test("unsupported ShaderSource version throws VGPU-SHADER-SOURCE-INVALID", async
   );
   gpu.dispose();
 });
+
+// T04-01 (unified-signature): the generic malformed-shader-source branch (toWgsl on a non-string,
+// non-{version,wgsl} input) is still fully reachable — restoring coverage that the "bare object"
+// test above no longer exercises now that a bare `{ wgsl }` object is classified as the
+// options-form-missing-shader case instead.
+test("VGPU-SHADER-SOURCE-INVALID is still reachable: draw(gpu, { shader }) with a malformed shader field", async () => {
+  const gpu = await init();
+
+  expect(() => draw(gpu, { shader: { wgsl: DRAW } as never })).toThrowError(
+    /VGPU-SHADER-SOURCE-INVALID: expected WGSL or \{ version, wgsl \}, got .* Fix: configure @vgpu\/wgsl loader-vite or loader-webpack\./,
+  );
+  gpu.dispose();
+});
+
+test("VGPU-SHADER-SOURCE-INVALID is still reachable: effect(gpu, null | number) — not a string, not object-shaped", async () => {
+  const gpu = await init();
+
+  expect(() => effect(gpu, null as never)).toThrowError(/VGPU-SHADER-SOURCE-INVALID/);
+  expect(() => effect(gpu, 7 as never)).toThrowError(/VGPU-SHADER-SOURCE-INVALID/);
+  gpu.dispose();
+});
+
+test("VGPU-SHADER-SOURCE-INVALID is still reachable: a real ShaderSource shape with a malformed wgsl field", async () => {
+  const gpu = await init();
+
+  expect(() => effect(gpu, { version: 1, wgsl: 123 } as never)).toThrowError(
+    /VGPU-SHADER-SOURCE-INVALID: expected WGSL or \{ version, wgsl \}, got .* Fix: configure @vgpu\/wgsl loader-vite or loader-webpack\./,
+  );
+  gpu.dispose();
+});

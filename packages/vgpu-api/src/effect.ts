@@ -10,7 +10,7 @@ import { isTarget } from "./target-utils.ts";
 import { FRAME_DRAWABLE, type FrameDrawableProtocol } from "./frame-protocols.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { renderService } from "./render-service.ts";
-import { toWgsl } from "./shader-source.ts";
+import { resolveShaderInput, toWgsl } from "./shader-source.ts";
 import { unsupportedError } from "./errors.ts";
 import type { ShaderSource } from "@vgpu/wgsl";
 import type { Gpu } from "./kernel.ts";
@@ -24,9 +24,10 @@ import type { Gpu } from "./kernel.ts";
  */
 export function effect(gpu: Gpu, input: string | ShaderSource): Effect;
 export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOptions): Effect;
+/** Single-object form: exactly two arguments. A third `opts` argument here is silently ignored — put every option in `input`. */
 export function effect(gpu: Gpu, input: EffectOptions & { readonly shader: string | ShaderSource }): Effect;
 export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, opts: EffectOptions = {}): Effect {
-  const [source, resolvedOpts] = resolveEffectInput(input, opts);
+  const [source, resolvedOpts] = resolveShaderInput("effect", input, opts);
   // Vertex buffers belong to the generated fullscreen stage, so geometry here would silently do
   // nothing. Reject the option instead of ignoring it.
   if ("geometry" in (resolvedOpts as Record<string, unknown>)) throw unsupportedError("effect", "effect() never accepts vertex buffers; use draw(gpu, { shader, geometry: geometry(gpu, descriptor) }).");
@@ -46,24 +47,6 @@ export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, o
   );
 }
 
-/**
- * Splits the additive single-object form (`effect(gpu, { shader, ... })`) from the standing
- * two-argument form (`effect(gpu, source, opts)`) and the ShaderSource/string shorthand.
- *
- * Discriminated the same way `toWgsl` tells a `ShaderSource` from a string: by `"version" in x`.
- * A real `ShaderSource` artifact always has `version`; an `EffectOptions` object never does — so an
- * object WITH `version` takes the ShaderSource path even if a `shader` property was also spuriously
- * present on it (a `ShaderSource` artifact wins over any injected `shader` field). An object WITHOUT
- * `version` is only valid here as an options bag with `shader`, or it's rejected with an actionable
- * error instead of the generic malformed-shader-source message.
- */
-function resolveEffectInput(input: string | ShaderSource | EffectOptions, opts: EffectOptions): readonly [string | ShaderSource, EffectOptions] {
-  if (typeof input !== "object" || input === null) return [input as string | ShaderSource, opts];
-  if ("version" in input) return [input as ShaderSource, opts];
-  if (!("shader" in input)) throw unsupportedError("effect", "effect(gpu, options) requires options.shader; use effect(gpu, source, opts) for the two-argument form, or effect(gpu, { shader, ... }).");
-  return [(input as EffectOptions & { readonly shader: string | ShaderSource }).shader, input as EffectOptions];
-}
-
 export interface EffectOptions {
   readonly set?: SetBag;
   readonly label?: string;
@@ -71,6 +54,8 @@ export interface EffectOptions {
   readonly blend?: BlendPreset | BlendOptions;
   /** Channels written to color targets. Omit to write all (rgba). Empty array writes nothing. */
   readonly writeMask?: readonly ("r" | "g" | "b" | "a")[];
+  /** Shader source, only used by the single-argument `effect(gpu, { shader, ... })` form; the two-argument form passes it separately. */
+  readonly shader?: string | ShaderSource;
 }
 
 const effectImpls = new WeakMap<Effect, InternalDraw>();
