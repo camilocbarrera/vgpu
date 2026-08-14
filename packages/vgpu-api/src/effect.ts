@@ -10,7 +10,7 @@ import { isTarget } from "./target-utils.ts";
 import { FRAME_DRAWABLE, type FrameDrawableProtocol } from "./frame-protocols.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { renderService } from "./render-service.ts";
-import { toWgsl } from "./shader-source.ts";
+import { resolveShaderInput, toWgsl } from "./shader-source.ts";
 import { unsupportedError } from "./errors.ts";
 import type { ShaderSource } from "@vgpu/wgsl";
 import type { Gpu } from "./kernel.ts";
@@ -27,7 +27,7 @@ export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOpti
 /** Single-object form: exactly two arguments. A third `opts` argument here is silently ignored — put every option in `input`. */
 export function effect(gpu: Gpu, input: EffectOptions & { readonly shader: string | ShaderSource }): Effect;
 export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, opts: EffectOptions = {}): Effect {
-  const [source, resolvedOpts] = resolveEffectInput(input, opts);
+  const [source, resolvedOpts] = resolveShaderInput("effect", input, opts);
   // Vertex buffers belong to the generated fullscreen stage, so geometry here would silently do
   // nothing. Reject the option instead of ignoring it.
   if ("geometry" in (resolvedOpts as Record<string, unknown>)) throw unsupportedError("effect", "effect() never accepts vertex buffers; use draw(gpu, { shader, geometry: geometry(gpu, descriptor) }).");
@@ -45,25 +45,6 @@ export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, o
     (error) => kernel.reportError(error),
     (promise) => { void kernel.trackDelivery(promise); },
   );
-}
-
-/**
- * Splits the additive single-object form (`effect(gpu, { shader, ... })`) from the standing
- * two-argument form (`effect(gpu, source, opts)`) and the ShaderSource/string shorthand.
- *
- * `shader` wins over `version`: a real `ShaderSource` artifact is exactly `{ version, wgsl }` and can
- * never legitimately carry a `shader` property, while an options bag can carry a stray `version`
- * (directly, or via a spread like `{ ...artifact, shader, blend }`). Checking `"shader" in input`
- * first means that spread still honors `shader`/`blend` instead of silently reverting to the
- * artifact and dropping every other option. An object with neither `shader` nor `version` is
- * rejected with an actionable error instead of the generic malformed-shader-source message.
- */
-function resolveEffectInput(input: string | ShaderSource | EffectOptions, opts: EffectOptions): readonly [string | ShaderSource, EffectOptions] {
-  if (typeof input !== "object" || input === null) return [input as string | ShaderSource, opts];
-  if ("shader" in input) return [(input as EffectOptions & { readonly shader: string | ShaderSource }).shader, input as EffectOptions];
-  if ("version" in input) return [input as ShaderSource, opts];
-  if (!("shader" in input)) throw unsupportedError("effect", "effect(gpu, options) requires options.shader; use effect(gpu, source, opts) for the two-argument form, or effect(gpu, { shader, ... }).");
-  return [(input as EffectOptions & { readonly shader: string | ShaderSource }).shader, input as EffectOptions];
 }
 
 export interface EffectOptions {
