@@ -22,16 +22,20 @@ import type { Gpu } from "./kernel.ts";
  * An effect is a draw with a fixed vertex stage, so it shares the gpu's single render service with
  * `draw()`: same pipeline store, same bind group cache, same shader module and layout caches.
  */
-export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOptions = {}): Effect {
+export function effect(gpu: Gpu, input: string | ShaderSource): Effect;
+export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOptions): Effect;
+export function effect(gpu: Gpu, input: EffectOptions & { readonly shader: string | ShaderSource }): Effect;
+export function effect(gpu: Gpu, input: string | ShaderSource | EffectOptions, opts: EffectOptions = {}): Effect {
+  const [source, resolvedOpts] = resolveEffectInput(input, opts);
   // Vertex buffers belong to the generated fullscreen stage, so geometry here would silently do
   // nothing. Reject the option instead of ignoring it.
-  if ("geometry" in (opts as Record<string, unknown>)) throw unsupportedError("effect", "effect() never accepts vertex buffers; use draw(gpu, { shader, geometry: geometry(gpu, descriptor) }).");
+  if ("geometry" in (resolvedOpts as Record<string, unknown>)) throw unsupportedError("effect", "effect() never accepts vertex buffers; use draw(gpu, { shader, geometry: geometry(gpu, descriptor) }).");
   const kernel = liveKernel(gpu, "effect");
   const render = renderService(kernel);
   return new InternalEffect(
     kernel.device,
     toWgsl(source),
-    opts,
+    resolvedOpts,
     render.binds,
     undefined,
     render.pipelines,
@@ -40,6 +44,24 @@ export function effect(gpu: Gpu, source: string | ShaderSource, opts: EffectOpti
     (error) => kernel.reportError(error),
     (promise) => { void kernel.trackDelivery(promise); },
   );
+}
+
+/**
+ * Splits the additive single-object form (`effect(gpu, { shader, ... })`) from the standing
+ * two-argument form (`effect(gpu, source, opts)`) and the ShaderSource/string shorthand.
+ *
+ * Discriminated the same way `toWgsl` tells a `ShaderSource` from a string: by `"version" in x`.
+ * A real `ShaderSource` artifact always has `version`; an `EffectOptions` object never does — so an
+ * object WITH `version` takes the ShaderSource path even if a `shader` property was also spuriously
+ * present on it (a `ShaderSource` artifact wins over any injected `shader` field). An object WITHOUT
+ * `version` is only valid here as an options bag with `shader`, or it's rejected with an actionable
+ * error instead of the generic malformed-shader-source message.
+ */
+function resolveEffectInput(input: string | ShaderSource | EffectOptions, opts: EffectOptions): readonly [string | ShaderSource, EffectOptions] {
+  if (typeof input !== "object" || input === null) return [input as string | ShaderSource, opts];
+  if ("version" in input) return [input as ShaderSource, opts];
+  if (!("shader" in input)) throw unsupportedError("effect", "effect(gpu, options) requires options.shader; use effect(gpu, source, opts) for the two-argument form, or effect(gpu, { shader, ... }).");
+  return [(input as EffectOptions & { readonly shader: string | ShaderSource }).shader, input as EffectOptions];
 }
 
 export interface EffectOptions {

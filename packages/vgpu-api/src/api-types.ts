@@ -4,6 +4,7 @@
  * They live outside `gpu.ts` so feature modules (compute, storage, ping-pong, uniforms, ...)
  * can be imported — and tree-shaken — without pulling the object that owns every factory.
  */
+import type { ShaderSource } from "@vgpu/wgsl";
 import type { VGPUError } from "./errors.ts";
 import type { Target } from "./target.ts";
 
@@ -14,6 +15,8 @@ export interface ComputeOptions {
   readonly constants?: Readonly<Record<string, number | boolean>>;
   /** Compute entry point to use when the shader has several. Defaults to the first @compute entry point. */
   readonly entry?: string;
+  /** Shader source, only used by the single-argument `compute(gpu, { shader, ... })` form; the two-argument form passes it separately. */
+  readonly shader?: string | ShaderSource;
 }
 export interface DispatchOptions {
   /** GPU-driven dispatch: read the workgroup counts from a buffer instead of CPU-side counts. */

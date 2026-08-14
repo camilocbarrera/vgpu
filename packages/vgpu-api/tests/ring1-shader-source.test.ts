@@ -53,11 +53,17 @@ test("compute(gpu, ...) accepts ShaderSource", async () => {
   gpu.dispose();
 });
 
-test("malformed ShaderSource without version throws VGPU-SHADER-SOURCE-INVALID", async () => {
+// T04-01 (unified-signature): a bare object without "version" is now dispatched as the additive
+// single-argument options form (`effect(gpu, { shader, ... })`), not as a malformed ShaderSource —
+// so a shape like `{ wgsl }` (no `version`, no `shader`) surfaces the actionable "requires
+// options.shader" error instead of VGPU-SHADER-SOURCE-INVALID. An object WITH "version" still goes
+// through the ShaderSource path and can still raise VGPU-SHADER-SOURCE-INVALID (see the "unsupported
+// ShaderSource version" case below), so that error code is still reachable, just not from this shape.
+test("a bare object without version or shader throws the options-form actionable error, not VGPU-SHADER-SOURCE-INVALID", async () => {
   const gpu = await init();
 
   expect(() => effect(gpu, { wgsl: FRAGMENT } as never)).toThrowError(
-    /VGPU-SHADER-SOURCE-INVALID: expected WGSL or \{ version, wgsl \}, got .* Fix: configure @vgpu\/wgsl loader-vite or loader-webpack\./,
+    "effect(gpu, options) requires options.shader; use effect(gpu, source, opts) for the two-argument form, or effect(gpu, { shader, ... }).",
   );
   gpu.dispose();
 });

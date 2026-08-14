@@ -22,9 +22,28 @@ import { resolveIndirect } from "./indirect.ts";
  * lazy bind group cache through the kernel, so a bind group built for a draw and one built here are
  * the same object when the resources match — and the cache is torn down once, in the service phase.
  */
-export function compute(gpu: Gpu, source: string | ShaderSource, opts: ComputeOptions = {}): Compute {
+export function compute(gpu: Gpu, input: string | ShaderSource): Compute;
+export function compute(gpu: Gpu, source: string | ShaderSource, opts: ComputeOptions): Compute;
+export function compute(gpu: Gpu, input: ComputeOptions & { readonly shader: string | ShaderSource }): Compute;
+export function compute(gpu: Gpu, input: string | ShaderSource | ComputeOptions, opts: ComputeOptions = {}): Compute {
+  const [source, resolvedOpts] = resolveComputeInput(input, opts);
   const kernel = liveKernel(gpu, "compute");
-  return new ComputePipeline(kernel.device, toWgsl(source), opts, renderService(kernel).binds);
+  return new ComputePipeline(kernel.device, toWgsl(source), resolvedOpts, renderService(kernel).binds);
+}
+
+/**
+ * Splits the additive single-object form (`compute(gpu, { shader, ... })`) from the standing
+ * two-argument form (`compute(gpu, source, opts)`) and the ShaderSource/string shorthand.
+ *
+ * Same discriminator as `effect()` (see `resolveEffectInput` in `effect.ts`): an object WITH
+ * `version` is a `ShaderSource` artifact and wins even if it also carries a spurious `shader`
+ * field; an object WITHOUT `version` is only valid here as an options bag with `shader`.
+ */
+function resolveComputeInput(input: string | ShaderSource | ComputeOptions, opts: ComputeOptions): readonly [string | ShaderSource, ComputeOptions] {
+  if (typeof input !== "object" || input === null) return [input as string | ShaderSource, opts];
+  if ("version" in input) return [input as ShaderSource, opts];
+  if (!("shader" in input)) throw unsupportedError("compute", "compute(gpu, options) requires options.shader; use compute(gpu, source, opts) for the two-argument form, or compute(gpu, { shader, ... }).");
+  return [(input as ComputeOptions & { readonly shader: string | ShaderSource }).shader, input as ComputeOptions];
 }
 
 let nextComputeId = 1;

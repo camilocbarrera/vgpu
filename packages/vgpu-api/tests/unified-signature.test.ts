@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
-import { compute, effect, init, target } from "../src/mock.ts";
+import { compute, effect, init, storage, target } from "../src/mock.ts";
 
 const EFFECT_SHADER = `
 @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f { return vec4f(uv, 0.0, 1.0); }
@@ -45,6 +45,8 @@ test("compute(gpu, { shader, entry }) produces a Compute equivalent to compute(g
 
   // Both must dispatch without throwing — proves the options-object form built a working pipeline
   // with the same entry point / bindings as the two-argument form.
+  fromTwoArgs.set({ data: storage(gpu, 16) });
+  fromOptionsObject.set({ data: storage(gpu, 16) });
   expect(() => fromTwoArgs.dispatch(1)).not.toThrow();
   expect(() => fromOptionsObject.dispatch(1)).not.toThrow();
   gpu.dispose();
