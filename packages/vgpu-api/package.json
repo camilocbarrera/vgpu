@@ -102,7 +102,7 @@
     "vgpu": "./bin/vgpu.js"
   },
   "vgpuExperienceBundleBudgetsGzipBytes": {
-    "init-only": 1024,
+    "init-only": 1536,
     "effect-only": 25600,
     "triangle-low-level": 28672,
     "draw-recipe-box": 30208,

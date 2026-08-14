@@ -10,6 +10,7 @@
  */
 import { Device, validateRequiredFeatures, type RequiredDeviceLimits, type VGPUAdapter } from "@vgpu/core";
 import type { GpuErrorListener } from "./api-types.ts";
+import { submittedWorkDone } from "./submitted-work-done.ts";
 import { unsupportedError, VGPUError } from "./errors.ts";
 
 /**
@@ -186,6 +187,7 @@ class KernelImpl implements Kernel {
 
   async settled(): Promise<void> {
     const snapshot = [
+      submittedWorkDone(this.device),
       ...this.#pendingDeliveries,
       ...[...this.#settledSources].flatMap((source) => source()),
     ];
