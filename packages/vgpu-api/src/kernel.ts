@@ -10,6 +10,7 @@
  */
 import { Device, validateRequiredFeatures, type RequiredDeviceLimits, type VGPUAdapter } from "@vgpu/core";
 import type { GpuErrorListener } from "./api-types.ts";
+import { DEFAULT_PENDING_PIPELINES, type PendingPipelines } from "./pending-pipelines.ts";
 import { submittedWorkDone } from "./submitted-work-done.ts";
 import { unsupportedError, VGPUError } from "./errors.ts";
 
@@ -32,6 +33,16 @@ export interface InitOptions {
   readonly requiredFeatures?: readonly GPUFeatureName[];
   readonly requiredLimits?: RequiredDeviceLimits;
   readonly label?: string;
+  /**
+   * Gpu-wide default of the `pendingPipelines` policy: what a synchronous encode does when it meets
+   * a `(renderable, target signature)` combination whose pipeline is not ready yet. The policy is
+   * resolved call site → frame → here.
+   *
+   * Omitted, it resolves to {@link DEFAULT_PENDING_PIPELINES} — `"sync"` during the 0.4 train
+   * (T04-05, index invariant 2), which is the eager-compile behavior every existing program already
+   * relies on. The frozen design's `"throw"` default lands in the cut wave, with the codemods.
+   */
+  readonly pendingPipelines?: PendingPipelines;
 }
 
 export type AdapterFactory = () => VGPUAdapter;
@@ -88,6 +99,11 @@ export interface Kernel {
   readonly device: Device;
   readonly disposed: boolean;
   /**
+   * Gpu-wide `pendingPipelines` default resolved at `init()`; the last link of the
+   * call site → frame → gpu chain. `"sync"` unless `init({ pendingPipelines })` said otherwise.
+   */
+  pendingPipelinesDefault(): PendingPipelines;
+  /**
    * Lazily creates (and memoizes) the service behind `token`. The factory lives in the calling
    * feature module, so the kernel never references it statically.
    */
@@ -130,9 +146,11 @@ class KernelImpl implements Kernel {
   readonly #settledSources = new Set<SettledSource>();
   #disposed = false;
 
-  constructor(readonly device: Device) {}
+  constructor(readonly device: Device, private readonly pendingPipelines: PendingPipelines = DEFAULT_PENDING_PIPELINES) {}
 
   get disposed(): boolean { return this.#disposed; }
+
+  pendingPipelinesDefault(): PendingPipelines { return this.pendingPipelines; }
 
   service<T>(token: ServiceToken<T>, factory: (kernel: Kernel) => T): T {
     const existing = this.#services.get(token as ServiceToken<unknown>);
@@ -211,8 +229,8 @@ class KernelImpl implements Kernel {
 }
 
 /** Builds the minimal `Gpu` for an already-created device and registers its kernel. */
-export function attachKernel(device: Device): Gpu {
-  const kernel = new KernelImpl(device);
+export function attachKernel(device: Device, opts: Pick<InitOptions, "pendingPipelines"> = {}): Gpu {
+  const kernel = new KernelImpl(device, opts.pendingPipelines ?? DEFAULT_PENDING_PIPELINES);
   const gpu: Gpu = {
     device,
     gpu: device.gpu,
@@ -227,7 +245,7 @@ export function attachKernel(device: Device): Gpu {
 
 /** Entry-agnostic core constructor: resolve a device, wrap it in the minimal `Gpu`. */
 export async function createCoreGpu(entry: EntryKind, opts: InitOptions = {}, adapterFactory?: AdapterFactory): Promise<Gpu> {
-  return attachKernel(await createDevice(entry, opts, adapterFactory));
+  return attachKernel(await createDevice(entry, opts, adapterFactory), opts);
 }
 
 export async function createDevice(entry: EntryKind, opts: InitOptions, adapterFactory?: AdapterFactory): Promise<Device> {
