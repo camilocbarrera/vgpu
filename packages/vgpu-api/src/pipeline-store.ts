@@ -51,6 +51,11 @@ const shaderModuleIds = new WeakMap<GPUShaderModule, number>();
 const pipelineLayoutIds = new WeakMap<GPUPipelineLayout, number>();
 
 export function normalizeSignature(arg: CompileTarget): TargetSignature {
+  // A target that derives its pipeline signature from its own configuration publishes it here, and it
+  // wins: `Surface` does exactly that, because reading its `.colors`/`.depth` would fetch the current
+  // presentation texture, which only exists inside a frame — and a signature must not depend on one.
+  const configured = (arg as { readonly pipelineSignature?: TargetSignature }).pipelineSignature;
+  if (configured) return configured;
   if (isTarget(arg)) {
     return {
       colors: arg.colors.map((color) => color.format),
