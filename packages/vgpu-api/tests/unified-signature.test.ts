@@ -38,24 +38,24 @@ test("compute(gpu, { shader, entry }) produces a Compute equivalent to compute(g
   const gpu = await init();
   const instrumentation = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
+  // compute() no longer compiles a pipeline at construction (contract #4, next/0.4 compute-async);
+  // dispatch() compiles it lazily-sync the first time it runs. Bind data and dispatch before
+  // inspecting the descriptor.
   const fromTwoArgs = compute(gpu, COMPUTE_SHADER, { entry: "main", label: "job" });
+  fromTwoArgs.set({ data: storage(gpu, 16) });
+  expect(() => fromTwoArgs.dispatch(1)).not.toThrow();
   const twoArgsDesc = instrumentation.createComputePipelineDescriptors.at(-1);
   expect(twoArgsDesc?.label).toBe("job.pipeline");
   expect(twoArgsDesc?.compute.entryPoint).toBe("main");
 
   const fromOptionsObject = compute(gpu, { shader: COMPUTE_SHADER, entry: "main", label: "job" });
+  fromOptionsObject.set({ data: storage(gpu, 16) });
+  expect(() => fromOptionsObject.dispatch(1)).not.toThrow();
   // Assert directly on the descriptor the options-object form itself produced, not just on parity
   // with the two-argument form's descriptor (kills a mutant that drops opts on the object-form path).
   const objectFormDesc = instrumentation.createComputePipelineDescriptors.at(-1);
   expect(objectFormDesc?.label).toBe("job.pipeline");
   expect(objectFormDesc?.compute.entryPoint).toBe("main");
-
-  // Both must dispatch without throwing — proves the options-object form built a working pipeline
-  // with the same entry point / bindings as the two-argument form.
-  fromTwoArgs.set({ data: storage(gpu, 16) });
-  fromOptionsObject.set({ data: storage(gpu, 16) });
-  expect(() => fromTwoArgs.dispatch(1)).not.toThrow();
-  expect(() => fromOptionsObject.dispatch(1)).not.toThrow();
   gpu.dispose();
 });
 
@@ -96,12 +96,15 @@ test("compute(gpu, { shader, version, wgsl, entry, label }) picks shader over a 
 
   const job = compute(gpu, { shader: COMPUTE_SHADER, version: 1, wgsl: decoyWithoutMainEntry, entry: "main", label: "amb" } as never);
   const instrumentation = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+
+  // compute() no longer compiles a pipeline at construction (contract #4, next/0.4 compute-async);
+  // dispatch() compiles it lazily-sync the first time it runs.
+  job.set({ data: storage(gpu, 16) });
+  expect(() => job.dispatch(1)).not.toThrow();
+
   const desc = instrumentation.createComputePipelineDescriptors.at(-1);
   expect(desc?.label).toBe("amb.pipeline");
   expect(desc?.compute.entryPoint).toBe("main");
-
-  job.set({ data: storage(gpu, 16) });
-  expect(() => job.dispatch(1)).not.toThrow();
   gpu.dispose();
 });
 
