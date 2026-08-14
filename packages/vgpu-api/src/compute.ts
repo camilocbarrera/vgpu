@@ -122,6 +122,10 @@ export class ComputePipeline implements Compute {
     const pipeline = await this.#ensurePipelineAsync();
     // The device may have been disposed while the pipeline compile was in flight — re-check before touching it.
     assertDeviceUsable(this.device, where);
+    // Bindings are not snapshotted at call time either (consistent with `set()` never snapshotting — the
+    // last `set()` wins): a `set()` that introduces writable-storage aliasing while the compile was in
+    // flight must still be caught here, before any encoding happens, exactly like the sync dispatch() path.
+    this.#preflightAliasing(where);
     const encoder = this.device.gpu.createCommandEncoder({ label: `${this.label}.encoder` });
     const pass = encoder.beginComputePass({ label: `${this.label}.pass` });
     pass.setPipeline(pipeline);
@@ -147,15 +151,28 @@ export class ComputePipeline implements Compute {
    * compile a second `GPUComputePipeline` — `??=` below keeps whichever one lands first as the memoized
    * pipeline instead of letting the async result silently clobber a sync one that already resolved (and
    * that `dispatch()` may already have bound to a pass), which would otherwise churn pipeline identity.
+   *
+   * A rejected compile must not poison the instance forever: both branches clear `#pipelinePending` once
+   * settled, but only if it is still *this* attempt's promise (an in-flight retry started after a prior
+   * settle must not have its own pending slot yanked out from under it), so a later `dispatchOnce()` call
+   * starts a fresh `createComputePipelineAsync()` instead of re-awaiting (or being poisoned by) a stale
+   * rejection.
    */
   #ensurePipelineAsync(): Promise<GPUComputePipeline> {
     if (this.#pipeline) return Promise.resolve(this.#pipeline);
     if (!this.#pipelinePending) {
-      this.#pipelinePending = this.device.gpu.createComputePipelineAsync(this.#pipelineDescriptor).then((pipeline) => {
-        this.#pipeline ??= pipeline;
-        this.#pipelinePending = undefined;
-        return this.#pipeline;
-      });
+      const attempt: Promise<GPUComputePipeline> = this.device.gpu.createComputePipelineAsync(this.#pipelineDescriptor).then(
+        (pipeline) => {
+          this.#pipeline ??= pipeline;
+          if (this.#pipelinePending === attempt) this.#pipelinePending = undefined;
+          return this.#pipeline;
+        },
+        (error: unknown) => {
+          if (this.#pipelinePending === attempt) this.#pipelinePending = undefined;
+          throw error;
+        },
+      );
+      this.#pipelinePending = attempt;
     }
     return this.#pipelinePending;
   }
