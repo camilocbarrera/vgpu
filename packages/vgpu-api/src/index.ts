@@ -5,7 +5,7 @@ export type { Bundle, BundleOptions, BundleRecorder, Compute, ComputeOptions, Di
 export type { BlendComponentOptions, BlendOptions, BlendPreset, DepthOptions, Draw, DrawOptions, DrawCallOptions, DrawLayoutOptions, GeometryLike, StencilFaceOptions, StencilOptions } from "./draw.ts";
 export { Geometry } from "./scene/geometry-descriptor.ts";
 export type { GeometryAttributeOverride, GeometryAttributes, GeometryBuffer, GeometryBufferOptions, GeometryData, GeometryOptions, GeometrySlice, GeometrySliceOptions } from "./scene/geometry-descriptor.ts";
-export type { Frame, FramePass, FramePassOptions, FrameLoopHandle, FrameLoopOptions, FrameRunner } from "./frame.ts";
+export type { Frame, FrameOptions, FramePass, FramePassOptions, FrameLoopHandle, FrameLoopOptions, FrameRunner } from "./frame.ts";
 export type { Effect, EffectOptions } from "./effect.ts";
 export type { CompileTarget, Target, TargetOptions, TargetSignature, TargetTextureOptions } from "./target.ts";
 export { VGPUError } from "./errors.ts";
@@ -26,6 +26,9 @@ export { effect } from "./effect.ts";
 export { frame, frameLoop } from "./frame.ts";
 export type { FrameLoopCallback } from "./frame.ts";
 export { pingPong, pingPongStorage } from "./ping-pong.ts";
+export { prepare } from "./prepare.ts";
+export type { PrepareRequest, PreparedBundle, PreparedCompute, PreparedDraw, PreparedFor } from "./prepare.ts";
+export type { PendingPipelines } from "./pending-pipelines.ts";
 export { sampler } from "./sampler.ts";
 export { storage } from "./storage.ts";
 export { surface } from "./surface.ts";

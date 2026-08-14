@@ -52,6 +52,12 @@ export function createBundle(device: { readonly gpu: GPUDevice }, opts: BundleOp
 class RecordedBundle implements Bundle, BundleBackReference {
   gpu!: GPURenderBundle;
   #staleEvent?: BundleStaleEvent;
+  /**
+   * The logical recording, retained. `record()` used to take the closure and forget it, which made
+   * re-encoding structurally impossible; keeping it is what lets `prepare(gpu, [{ bundle }])`
+   * rebuild the native bundle from the same commands with the current resources.
+   */
+  #record?: (recorder: BundleRecorder) => void;
   readonly #signatureKey: string;
   readonly #draws = new Set<InternalDraw>();
 
@@ -60,6 +66,8 @@ class RecordedBundle implements Bundle, BundleBackReference {
   }
 
   record(record: (recorder: BundleRecorder) => void): void {
+    this.#record = record;
+    this.#staleEvent = undefined;
     this.gpu = createRenderBundle(this.device, {
       label: this.id,
       colorFormats: this.signature.colors,
@@ -75,6 +83,24 @@ class RecordedBundle implements Bundle, BundleBackReference {
    * bundle.ts. The recorded bundle is its own protocol object — `gpu` and the staleness check.
    */
   get [FRAME_BUNDLE](): FrameBundleProtocol { return this; }
+
+  /**
+   * Async readiness for `prepare(gpu, [{ bundle }])`, in the trimmed scope of T04-05: a bundle made
+   * stale by an identity change is re-encoded here from the retained recording, and a bundle that is
+   * not stale is left exactly as it is (no work, same native bundle).
+   *
+   * The pipelines its draws need are compiled by the recording itself, through the ordinary encode
+   * path. What this does NOT do is the rest of contract #15 — there is no public `status`, `error`,
+   * `rebuild()` or `dispose()` yet, and a signature mismatch still throws `VGPU-R3-BUNDLE-STALE` at
+   * replay instead of auto-healing: re-recording against a different target is a different target's
+   * recording, which belongs to the bundle state machine of wave 2+.
+   *
+   * @internal
+   */
+  prepareCombination(): void {
+    if (!this.#staleEvent || !this.#record) return;
+    this.record(this.#record);
+  }
 
   markStale(event: BundleStaleEvent): void {
     if (recordingDepth > 0) return;
@@ -113,6 +139,22 @@ class ExplicitBundleRecorder implements BundleRecorder {
     this.bundle.remember(draw);
     encodeDraw(draw, this.encoder, this.bundle.signature, opts);
   }
+}
+
+/**
+ * Re-encodes `bundle` if it is stale and reports the handle `prepare()` hands back.
+ *
+ * @internal
+ */
+export function prepareBundle(bundle: Bundle): { readonly signature: TargetSignature; readonly gpu: GPURenderBundle } {
+  if (!(bundle instanceof RecordedBundle)) throw new VGPUError({
+    code: "VGPU-BUNDLE-FOREIGN",
+    message: "prepare({ bundle }) received an object this library did not record.",
+    fix: "Pass the bundle returned by bundle(gpu, { target }, record).",
+    where: "prepare",
+  });
+  bundle.prepareCombination();
+  return { signature: bundle.signature, gpu: bundle.gpu };
 }
 
 function normalizeBundleSignature(target: CompileTarget): TargetSignature {
