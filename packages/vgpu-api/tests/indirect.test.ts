@@ -122,11 +122,14 @@ test("bundles record and replay indirect draws end-to-end", async () => {
     b.draw(indexed, { indirect: { buffer: indexedArgs, offset: 0 } });
   });
 
+  // Contract #15, row 1: construction records the LOGICAL command list, so no native bundle encoder
+  // is opened yet. The first replay is what encodes it — inline, under the train's "sync" default.
+  expect(bundleOps).toEqual([]);
+  expect(() => frame(gpu, (f) => f.pass(colorTarget, (p) => p.bundles(recorded)))).not.toThrow();
   expect(bundleOps).toEqual([
     ["setPipeline"], ["drawIndirect", gpuBufferOf(drawArgs), 0],
     ["setPipeline"], ["setVertexBuffer", 0], ["setIndexBuffer", geo.indexBuffer, "uint16"], ["drawIndexedIndirect", gpuBufferOf(indexedArgs), 0],
   ]);
-  expect(() => frame(gpu, (f) => f.pass(colorTarget, (p) => p.bundles(recorded)))).not.toThrow();
   gpu.dispose();
   vi.restoreAllMocks();
 });

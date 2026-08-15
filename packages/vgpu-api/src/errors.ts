@@ -194,6 +194,19 @@ export function bundleStencilReferenceError(bundleId: string, drawLabel: string)
   });
 }
 
+/**
+ * `dispose()` is terminal for a bundle: it released the native bundle and the retained recording, so
+ * there is nothing left to replay, prepare or rebuild — under **every** `pendingPipelines` policy.
+ */
+export function bundleDisposedError(bundleId: string, where: "replay" | "prepare" | "rebuild"): VGPUError {
+  return new VGPUError({
+    code: "VGPU-BUNDLE-DISPOSED",
+    message: `bundle '${bundleId}' was disposed: dispose() is terminal and released its native bundle and recording.`,
+    fix: `Record a new bundle with bundle(gpu, { target }, record); this throws under every pendingPipelines policy.`,
+    where: `bundle '${bundleId}' ${where}`,
+  });
+}
+
 export function multisampleInvalidError(label: string, reason: string, where = "draw"): VGPUError {
   return new VGPUError({
     code: "VGPU-MULTISAMPLE-INVALID",

@@ -107,7 +107,9 @@ async function prepareOne(request: PrepareRequest): Promise<PreparedDraw | Prepa
     return { compute: request.compute, gpu: await asComputePipeline(request.compute).prepareCombination() };
   }
   if ("bundle" in request) {
-    const { signature, gpu } = prepareBundle(request.bundle);
+    // Genuinely awaited: preparing a bundle pre-warms the pipelines of every draw it recorded
+    // through the async path, and only then encodes the native bundle.
+    const { signature, gpu } = await prepareBundle(request.bundle);
     return { bundle: request.bundle, signature, gpu };
   }
   throw unsupportedError("prepare", "a prepare() request must be { draw, target }, { compute } or { bundle }.");

@@ -570,6 +570,20 @@ export class InternalDraw implements Draw {
     return this.#pipelineForEncode(target, "sync");
   }
 
+  /**
+   * Is the pipeline of THIS combination already compiled? Asks the store for the very key
+   * `pipelineForAsync`/`#compileKey` would use and never starts a compilation, so a caller can
+   * classify readiness without paying for it.
+   *
+   * `gpu` cannot answer this: it reports the first resolved key of any signature, while a bundle
+   * needs the answer for the one signature it recorded.
+   *
+   * @internal
+   */
+  readyForSignature(signature: TargetSignature): boolean {
+    return !!drawState(this).pipelineStore.getReady(this.#pipelineKey(signature));
+  }
+
   pipelineForAsync(target: Target | TargetSignature): Promise<GPURenderPipeline> {
     assertDeviceUsable(drawState(this).device, `${this.label}.pipelineForAsync`);
     const { key, signature, signatureKey } = this.#compileKey(target, `${this.label}.pipelineForAsync`);
@@ -1135,6 +1149,13 @@ export function drawReflection(draw: Draw): Reflection { return drawState(draw).
 export function drawBindingState(draw: Draw, name: string): BindingState | undefined { return drawState(draw).setCore.bindingState(name); }
 
 export function registerDrawBundle(draw: Draw, bundle: BundleBackReference): void { drawState(draw).recordedIn.add(bundle); }
+/**
+ * The other half of `registerDrawBundle`: a bundle that stops replaying a draw (because `rebuild()`
+ * dropped it, or because the bundle was disposed) must leave that draw's back-reference registry.
+ * Without this the registration is one-way, so an identity change on a draw the bundle no longer
+ * encodes keeps staling it forever, and the registry keeps a disposed bundle alive.
+ */
+export function unregisterDrawBundle(draw: Draw, bundle: BundleBackReference): void { drawState(draw).recordedIn.delete(bundle); }
 
 /** Render bundle encoders cannot set the pass blend constant; bundle uses this to reject such draws at recording. */
 export function drawUsesBlendConstant(draw: Draw): boolean { return drawState(draw).blendConstant !== undefined; }
