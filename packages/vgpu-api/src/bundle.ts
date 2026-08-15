@@ -1,5 +1,5 @@
 import { createRenderBundle } from "./core/render-bundle.ts";
-import { InternalDraw, drawUsesBlendConstant, drawUsesStencilReference, encodeDraw, registerDrawBundle, type BundleBackReference, type BundleStaleEvent, type Draw, type DrawCallOptions } from "./draw.ts";
+import { InternalDraw, drawUsesBlendConstant, drawUsesStencilReference, encodeDraw, registerDrawBundle, unregisterDrawBundle, type BundleBackReference, type BundleStaleEvent, type Draw, type DrawCallOptions } from "./draw.ts";
 import { InternalEffect, effectDraw, type Effect } from "./effect.ts";
 import type { CompileTarget, Target, TargetSignature } from "./target.ts";
 import { normalizeSignature, signatureKeyOf, validateTargetSignature } from "./pipeline-store.ts";
@@ -184,11 +184,16 @@ class RecordedBundle implements Bundle, BundleBackReference {
    */
   track(record: (recorder: BundleRecorder) => void): void {
     this.#record = record;
-    // A brand new recording starts from an empty draw set: a draw the previous recording named and
-    // this one does not must be dropped, or its identity changes would keep staling this bundle.
+    // A brand new recording starts from an empty draw set, and a draw the previous recording named
+    // and this one does not is unregistered from its back-reference registry: forgetting it here is
+    // not enough, because the registration is what makes the draw call markStale() on this bundle.
+    // Leaving it in place stales this bundle forever from a draw it no longer encodes (and keeps a
+    // dropped draw holding the bundle alive).
+    const previous = this.#draws;
     this.#draws = new Set();
     this.#recordCommands(record);
     for (const draw of this.#draws) registerDrawBundle(draw, this);
+    for (const draw of previous) if (!this.#draws.has(draw)) unregisterDrawBundle(draw, this);
   }
 
   /**
@@ -281,9 +286,9 @@ class RecordedBundle implements Bundle, BundleBackReference {
     this.#record = undefined;
     this.#error = undefined;
     this.#staleEvent = undefined;
-    // The draws keep their back-reference to this bundle (dropping it needs a draw.ts registry API
-    // this branch may not add); markStale() below is a no-op on a disposed bundle, so a disposed
-    // bundle can never come back to life through one.
+    // Every draw drops its back-reference to this bundle: a disposed bundle must not be reachable
+    // from a live draw (that was a leak, and markStale() traffic for nothing).
+    for (const draw of this.#draws) unregisterDrawBundle(draw, this);
     this.#draws = new Set();
   }
 

@@ -93,7 +93,7 @@
   "vgpuExportBundleBudgetsGzipBytes": {
     ".": 41984,
     "./node": 42496,
-    "./mock": 41984,
+    "./mock": 42496,
     "./scene": 12800,
     "./client": 512,
     "./core": 3584

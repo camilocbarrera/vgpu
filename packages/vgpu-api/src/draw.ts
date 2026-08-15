@@ -1149,6 +1149,13 @@ export function drawReflection(draw: Draw): Reflection { return drawState(draw).
 export function drawBindingState(draw: Draw, name: string): BindingState | undefined { return drawState(draw).setCore.bindingState(name); }
 
 export function registerDrawBundle(draw: Draw, bundle: BundleBackReference): void { drawState(draw).recordedIn.add(bundle); }
+/**
+ * The other half of `registerDrawBundle`: a bundle that stops replaying a draw (because `rebuild()`
+ * dropped it, or because the bundle was disposed) must leave that draw's back-reference registry.
+ * Without this the registration is one-way, so an identity change on a draw the bundle no longer
+ * encodes keeps staling it forever, and the registry keeps a disposed bundle alive.
+ */
+export function unregisterDrawBundle(draw: Draw, bundle: BundleBackReference): void { drawState(draw).recordedIn.delete(bundle); }
 
 /** Render bundle encoders cannot set the pass blend constant; bundle uses this to reject such draws at recording. */
 export function drawUsesBlendConstant(draw: Draw): boolean { return drawState(draw).blendConstant !== undefined; }

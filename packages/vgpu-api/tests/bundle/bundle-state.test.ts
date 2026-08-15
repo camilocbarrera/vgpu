@@ -32,6 +32,15 @@ const TEXTURED = `
 }
 `;
 
+const TEXTURED_FOG = `
+struct Fog { fogDensity: f32 }
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> fog: Fog;
+@fragment fn main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  return textureLoad(src, vec2u(0, 0), 0) * fog.fogDensity + vec4f(uv, 0.0, 0.0);
+}
+`;
+
 function caught(run: () => unknown): VGPUError | undefined {
   try { run(); return undefined; }
   catch (error) { return error as VGPUError; }
@@ -167,11 +176,19 @@ test(".set() byte updates keep a ready bundle ready, .bind() identity updates ma
   const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const first = target(gpu, { size: [4, 4] });
   const second = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, { shader: TEXTURED, label: "identityFx", bindings: { src: first } });
+  const fx = effect(gpu, { shader: TEXTURED_FOG, label: "identityFx", bindings: { src: first }, set: { fogDensity: 0.1 } });
   const recorded = bundle(gpu, { target: scene, label: "identityBundle" }, (b) => b.draw(fx));
   await prepare(gpu, { bundle: recorded });
   const native = recorded.gpu;
 
+  // Row 4, the real thing: .set() writes bytes into the buffer the bundle already captured, so every
+  // recorded command and bind group stays valid — the bundle must NOT move, and must keep the very
+  // same native bundle (that is the whole point of R3: value updates are free for bundles).
+  fx.set({ fogDensity: 0.9 });
+  expect(recorded.status).toBe("ready");
+  expect(recorded.gpu).toBe(native);
+
+  // Re-binding the SAME identity is not an identity change either.
   fx.bind("src", first);
   expect(recorded.status).toBe("ready");
 
@@ -527,8 +544,12 @@ test("rebuild() during an in-flight prepare() makes that prepare finish on the n
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
   const before = effect(gpu, SOLID, { label: "beforeRebuildFx" });
-  const after = effect(gpu, SOLID, { label: "afterRebuildFx" });
+  // A DIFFERENT shader on purpose: the new recording needs a pipeline the in-flight prepare never
+  // warmed, which is exactly what the #generation re-check has to notice.
+  const after = effect(gpu, OTHER_SOLID, { label: "afterRebuildFx" });
   const recorded = bundle(gpu, { target: scene, label: "rebuildRaceBundle" }, (b) => b.draw(before));
+  const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+  const syncCompiles = mock.calls.createRenderPipeline;
   const original = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -545,7 +566,58 @@ test("rebuild() during an in-flight prepare() makes that prepare finish on the n
   expect(recorded.status).toBe("ready");
   // The pipeline of the draw the NEW recording names is the one that had to be compiled.
   expect(after.gpu).toBeDefined();
+  // Load-bearing assert for the re-check: without it, prepare() encodes the new command list with
+  // only the old recording warmed, so `after`'s pipeline is created SYNCHRONOUSLY inside the encode —
+  // the stall prepare() exists to avoid. Zero synchronous creations is the proof it re-warmed.
+  expect(mock.calls.createRenderPipeline).toBe(syncCompiles);
   expect(() => frame(gpu, (f) => f.pass(scene, (p) => p.bundles(recorded)), { pendingPipelines: "throw" })).not.toThrow();
+  gpu.dispose();
+});
+
+test("rebuild() unregisters the draws it dropped, so their later identity changes no longer stale the bundle", async () => {
+  const gpu = await init();
+  const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
+  const first = target(gpu, { size: [4, 4] });
+  const second = target(gpu, { size: [4, 4] });
+  const dropped = effect(gpu, { shader: TEXTURED, label: "droppedFx", bindings: { src: first } });
+  const kept = effect(gpu, { shader: TEXTURED, label: "keptFx", bindings: { src: first } });
+  const recorded = bundle(gpu, { target: scene, label: "dropBundle" }, (b) => b.draw(dropped));
+  await prepare(gpu, { bundle: recorded });
+
+  recorded.rebuild((b) => b.draw(kept));
+  await prepare(gpu, { bundle: recorded });
+  expect(recorded.status).toBe("ready");
+
+  // The dropped draw is not part of the recording any more, so its identity changes are none of this
+  // bundle's business. Registration is one-way in draw.ts, so getting this wrong is not a cosmetic
+  // detail: the bundle would be stale FOREVER from a draw it no longer encodes, and no prepare()
+  // could fix it because the re-encode does not name that draw.
+  dropped.bind("src", second);
+  expect(recorded.status).toBe("ready");
+  expect(() => frame(gpu, (f) => f.pass(scene, (p) => p.bundles(recorded)), { pendingPipelines: "throw" })).not.toThrow();
+
+  // ...while the draw the new recording DOES name still stales it.
+  kept.bind("src", second);
+  expect(recorded.status).toBe("stale");
+  gpu.dispose();
+});
+
+test("dispose() unregisters the bundle from its draws: a later identity change reaches nothing", async () => {
+  const gpu = await init();
+  const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
+  const first = target(gpu, { size: [4, 4] });
+  const second = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, { shader: TEXTURED, label: "disposedFx", bindings: { src: first } });
+  const recorded = bundle(gpu, { target: scene, label: "disposedDropBundle" }, (b) => b.draw(fx));
+  await prepare(gpu, { bundle: recorded });
+
+  recorded.dispose();
+  // A live draw must not keep a disposed bundle reachable (that is a leak, and markStale() traffic
+  // for a bundle that can never replay again). The observable half: the update lands without
+  // throwing and the bundle stays terminal.
+  expect(() => fx.bind("src", second)).not.toThrow();
+  expect(recorded.status).toBe("disposed");
+  expect(recorded.gpu).toBeUndefined();
   gpu.dispose();
 });
 
