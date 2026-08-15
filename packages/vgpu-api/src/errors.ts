@@ -686,6 +686,68 @@ export function frameAlreadySubmittedError(where: string): VGPUError {
   });
 }
 
+/**
+ * `f.raw()` while the frame's command encoder is not free: a managed render/compute pass is open, or
+ * another `f.raw()` callback is still borrowing it.
+ *
+ * Design §2, normative clause: `f.raw()` "is legal only while the frame's command encoder is open and
+ * no managed render/compute pass and no other `f.raw()` callback is active. [...] throws
+ * VGPU-FRAME-ENCODER-LOCKED before the callback is invoked — no borrowed encoder is handed out and
+ * nothing is encoded."
+ */
+export function frameEncoderLockedError(where: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-FRAME-ENCODER-LOCKED",
+    message: "the frame's command encoder is already lent out: this call is legal only between managed passes. Nothing was encoded.",
+    fix: "Return from the frame.pass(...) / f.raw(...) callback first, then make this call between passes.",
+    where,
+  });
+}
+
+/**
+ * Runtime contract for JavaScript / `any` (design §2a): "if the callback returns a thenable, vgpu
+ * closes the borrowed `Frame`, discards that frame's command encoder without submitting it, and
+ * throws `VGPU-ASYNC-FRAME-CALLBACK`. Any later call through an escaped `Frame` reference throws
+ * `VGPU-FRAME-CLOSED`. No partial frame is submitted."
+ *
+ * This discard is the one explicit exception to the rule that a managed frame submits itself when its
+ * callback returns: the "one frame, one ordered command list, exactly one `queue.submit()`" guarantee
+ * is kept by submitting nothing at all rather than a prefix of the intended work.
+ */
+export function asyncFrameCallbackError(where: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-ASYNC-FRAME-CALLBACK",
+    message: "the callback returned a thenable, but a frame callback is synchronous. The frame was closed and its command encoder discarded: no partial frame was submitted.",
+    fix: "Do the async work (await prepare(gpu, [...])) before entering the frame, then record synchronously inside it.",
+    where,
+  });
+}
+
+/** Using a `Frame` that escaped its own callback: the frame was closed and its encoder discarded. */
+export function frameClosedError(where: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-FRAME-CLOSED",
+    message: "the frame is closed: its callback returned a thenable, so the frame was aborted without submitting.",
+    fix: "Do not retain the Frame past its callback: open one frame(gpu, cb) per tick and keep the callback synchronous.",
+    where,
+  });
+}
+
+/**
+ * A `f.copyBuffer()` call that WebGPU's own `copyBufferToBuffer` validation would reject. One code
+ * covers the four violation shapes of contract #18 (4-byte alignment, source range, destination
+ * range, `source === destination`), with the offending values in the message — the same shape
+ * `passViewportInvalidError`/`passScissorInvalidError` already use for their families.
+ */
+export function copyBufferInvalidError(where: string, detail: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-COPY-BUFFER-INVALID",
+    message: `f.copyBuffer() ${detail}`,
+    fix: "WebGPU's copyBufferToBuffer rules apply verbatim: size and both offsets are multiples of 4, each offset + size fits its buffer, and source and destination differ. An omitted size is the source remainder, never a truncated copy.",
+    where,
+  });
+}
+
 export function incompatibleResourceError(binding: BindingInfo, expected: string, fix?: string): VGPUError {
   return new VGPUError({
     code: "VGPU-R1-BINDING-INCOMPATIBLE-RESOURCE",
