@@ -7,8 +7,10 @@ import { createSetCore, bindGroupLayoutsForReflection, pipelineLayoutFor, type S
 import { visibilityForEntries } from "./set-layouts.ts";
 import type { Compute, ComputeOptions, DispatchOptions } from "./api-types.ts";
 import { normalizeConstantsOptions, selectEntryPoint } from "./pipeline-store.ts";
-import { dispatchCountInvalidError, indirectInvalidError, unsupportedError, writableStorageAliasingError } from "./errors.ts";
+import { dispatchCountInvalidError, indirectInvalidError, pipelinePendingError, unsupportedError, writableStorageAliasingError, type VGPUError } from "./errors.ts";
+import { FRAME_COMPUTABLE, type FrameComputableProtocol } from "./frame-protocols.ts";
 import { assertDeviceUsable } from "./lifecycle.ts";
+import { DEFAULT_PENDING_PIPELINES, type PendingPipelines } from "./pending-pipelines.ts";
 import type { Gpu } from "./kernel.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { renderService } from "./render-service.ts";
@@ -35,7 +37,9 @@ export function compute(gpu: Gpu, source: string | ShaderSource, opts: ComputeOp
 export function compute(gpu: Gpu, input: string | ShaderSource | ComputeOptions, opts: ComputeOptions = {}): Compute {
   const [source, resolvedOpts] = resolveShaderInput("compute", input, opts);
   const kernel = liveKernel(gpu, "compute");
-  return new ComputePipeline(kernel.device, toWgsl(source), resolvedOpts, renderService(kernel).binds);
+  // Same wiring render-service.ts gives createPipelineStore: the gpu-wide pendingPipelines default
+  // (last link of the call site → frame → gpu chain) and the gpu's error sink.
+  return new ComputePipeline(kernel.device, toWgsl(source), resolvedOpts, renderService(kernel).binds, kernel.pendingPipelinesDefault(), (error) => { void kernel.reportError(error); });
 }
 
 let nextComputeId = 1;
@@ -58,12 +62,26 @@ export class ComputePipeline implements Compute {
   readonly #pipelineDescriptor: GPUComputePipelineDescriptor;
   #pipeline?: GPUComputePipeline;
   #pipelinePending?: Promise<GPUComputePipeline>;
+  /**
+   * `"skip"` never throws per frame, so a background compile failure has exactly one channel:
+   * `gpu.onError`. Reported once per instance — a frame loop would otherwise flood the sink with the
+   * same rejection every tick.
+   */
+  #skipFailureReported = false;
 
   constructor(
     private readonly device: Device,
     readonly source: string,
     readonly opts: ComputeOptions = {},
     private readonly cache: BindGroupCache = createBindGroupCache(),
+    /**
+     * Last link of the pendingPipelines chain (call site → frame → gpu) for `f.compute()`: the
+     * gpu-wide default from `init()`. Defaults to the train-wide default so the legacy
+     * `new ComputePipeline(device, source)` shape keeps working unchanged.
+     */
+    private readonly pendingPipelinesDefault: PendingPipelines = DEFAULT_PENDING_PIPELINES,
+    /** Error sink of the owning gpu, for the one channel a `"skip"` background compile can report on. */
+    private readonly reportError: (error: VGPUError) => void = () => undefined,
   ) {
     assertDeviceUsable(device, "Compute.constructor");
     this.label = opts.label ?? "compute";
@@ -156,6 +174,60 @@ export class ComputePipeline implements Compute {
     else pass.dispatchWorkgroups(x as number, y ?? 1, z ?? 1);
     pass.end();
     this.device.gpu.queue.submit([encoder.finish()]);
+  }
+
+  /**
+   * Nominal `FrameComputable` protocol, so `frame.ts` never imports this module: a program that only
+   * uses `frame()` / `f.pass()` must not pay for the whole compute package (pay-for-what-you-import).
+   *
+   * @internal
+   */
+  get [FRAME_COMPUTABLE](): FrameComputableProtocol {
+    return this;
+  }
+
+  /**
+   * Third encoding path of this class, for `f.compute()`: it records one compute pass into an encoder
+   * it does **not** own — the frame's — so it never calls `encoder.finish()` nor `queue.submit()`.
+   * That is what puts the dispatch inside the frame's single submit, in program order (contract #1),
+   * which `dispatch()`/`dispatchOnce()` structurally cannot do: both open their own encoder.
+   *
+   * Validation is the very same private code the legacy paths use — `#validateCounts` (contract #17)
+   * and `#preflightAliasing` (writable-storage double-bind guard) — never a reimplementation.
+   *
+   * @internal
+   */
+  encodeForFrame(encoder: GPUCommandEncoder, x: number, y: number | undefined, z: number | undefined, policy: PendingPipelines | undefined): void {
+    const where = `${this.label}.compute`;
+    assertDeviceUsable(this.device, where);
+    this.#validateCounts(x, y, z, where);
+    this.#preflightAliasing(where);
+    const resolved = policy ?? this.pendingPipelinesDefault;
+    let pipeline = this.#pipeline;
+    if (!pipeline) {
+      // "throw": does not start compilation and throws immediately. `signature` is undefined because a
+      // compute pipeline has no target signature — the same asymmetry prepare()'s signatureKeyFor has.
+      if (resolved === "throw") throw pipelinePendingError(where, this.label, undefined);
+      // "skip": start (or continue) the async compile in the background, omit the dispatch this frame,
+      // and never throw per frame. Deliberately the same #ensurePipelineAsync() dispatchOnce()/
+      // prepare() use — same dedupe, same anti-poisoning — so the compile it starts is the one a later
+      // dispatchOnce()/prepare() awaits, never a second one.
+      if (resolved === "skip") {
+        void this.#ensurePipelineAsync().catch((error: unknown) => {
+          if (this.#skipFailureReported) return;
+          this.#skipFailureReported = true;
+          this.reportError(error as VGPUError);
+        });
+        return;
+      }
+      // "sync": immediate createComputePipeline(), exactly like legacy dispatch().
+      pipeline = this.#ensurePipeline();
+    }
+    const pass = encoder.beginComputePass({ label: `${this.label}.pass` });
+    pass.setPipeline(pipeline);
+    for (const binding of this.setCore.bindGroups()) pass.setBindGroup(binding.group, binding.bindGroup, binding.offsets);
+    pass.dispatchWorkgroups(x, y ?? 1, z ?? 1);
+    pass.end();
   }
 
   /**

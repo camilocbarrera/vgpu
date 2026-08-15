@@ -18,6 +18,7 @@
 import type { Device } from "@vgpu/core";
 import type { ClaimedGroupValidationResult } from "./claim-validation.ts";
 import type { DrawCallOptions } from "./draw.ts";
+import type { PendingPipelines } from "./pending-pipelines.ts";
 import type { Target } from "./target.ts";
 
 /**
@@ -68,6 +69,32 @@ export interface FrameBundleLike {
 
 export function frameBundleOf(value: unknown): FrameBundleProtocol | undefined {
   return (value as Partial<FrameBundleLike> | null | undefined)?.[FRAME_BUNDLE];
+}
+
+// ---------------------------------------------------------------------------
+// Computable: what `Frame.compute()` encodes (compute.ts).
+// ---------------------------------------------------------------------------
+
+export const FRAME_COMPUTABLE: unique symbol = Symbol("vgpu.frame.computable");
+
+export interface FrameComputableProtocol {
+  /**
+   * Encodes one compute pass into the frame's **borrowed** encoder: it opens and ends its own
+   * `GPUComputePass`, and never calls `encoder.finish()` nor `queue.submit()` — the frame owns both,
+   * which is what keeps `f.compute()` inside the frame's single submit (contract #1).
+   *
+   * `policy` is the already-resolved link of the `pendingPipelines` chain (call site → frame);
+   * `undefined` means "no link named one", so the implementation applies its own gpu-wide default.
+   */
+  encodeForFrame(encoder: GPUCommandEncoder, x: number, y: number | undefined, z: number | undefined, policy: PendingPipelines | undefined): void;
+}
+
+export interface FrameComputable {
+  readonly [FRAME_COMPUTABLE]: FrameComputableProtocol;
+}
+
+export function frameComputableOf(value: unknown): FrameComputableProtocol | undefined {
+  return (value as Partial<FrameComputable> | null | undefined)?.[FRAME_COMPUTABLE];
 }
 
 // ---------------------------------------------------------------------------
