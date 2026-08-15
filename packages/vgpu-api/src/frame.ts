@@ -6,12 +6,13 @@ import type { Draw, DrawCallOptions } from "./draw.ts";
 import type { Effect } from "./effect.ts";
 import type { Target } from "./target.ts";
 import { assertDeviceUsable } from "./lifecycle.ts";
-import { claimedGroupNativeValidationError, frameAlreadySubmittedError, frameCanceledError, framePassActiveError, frameReentrantError, passClearDepthInvalidError, passClearStencilInvalidError, passDepthReadOnlyError, passDepthReadOnlyMsaaError, passPreserveClearDepthError, passPreserveClearStencilError, passPreserveMsaaError, passScissorInvalidError, passViewportInvalidError, queryNestedError, queryNoVisibilityError, surfaceNotInFrameError, targetRequiredError, timerInvalidError, VGPUError, visibilityInvalidError } from "./errors.ts";
+import { asyncFrameCallbackError, claimedGroupNativeValidationError, copyBufferInvalidError, frameAlreadySubmittedError, frameCanceledError, frameClosedError, frameEncoderLockedError, framePassActiveError, frameReentrantError, passClearDepthInvalidError, passClearStencilInvalidError, passDepthReadOnlyError, passDepthReadOnlyMsaaError, passPreserveClearDepthError, passPreserveClearStencilError, passPreserveMsaaError, passScissorInvalidError, passViewportInvalidError, queryNestedError, queryNoVisibilityError, surfaceNotInFrameError, targetRequiredError, timerInvalidError, VGPUError, visibilityInvalidError } from "./errors.ts";
 import { enterFrame, isSurface, isSurfaceResizeCallbackActive, leaveFrame } from "./surface.ts";
 import { BUILT_IN_CLEAR_COLOR, hasStencilAspect, isTarget, type ClearColor } from "./target-utils.ts";
 import type { TimerSpan } from "./timer.ts";
 import type { Visibility, VisibilityQuery } from "./visibility.ts";
-import { FRAME_PASS_ATTACHMENT, frameBundleOf, frameDrawableOf, framePassAttachmentOf, type FrameDrawableProtocol, type FrameOcclusionSource, type FrameOwner, type FramePassAttachResult } from "./frame-protocols.ts";
+import { FRAME_PASS_ATTACHMENT, frameBundleOf, frameComputableOf, frameDrawableOf, framePassAttachmentOf, type FrameComputableProtocol, type FrameDrawableProtocol, type FrameOcclusionSource, type FrameOwner, type FramePassAttachResult } from "./frame-protocols.ts";
+import type { Compute } from "./api-types.ts";
 import { frameState } from "./frame-state.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
@@ -26,8 +27,62 @@ import type { PendingPipelines } from "./pending-pipelines.ts";
  * Frames are not reentrant: opening one from inside another (or from a surface resize callback)
  * throws `VGPU-FRAME-REENTRANT`.
  */
-export function frame(gpu: Gpu, cb?: (frame: Frame) => void, opts: FrameOptions = {}): Frame {
+export function frame<R>(gpu: Gpu, cb?: FrameCallback<R>, opts: FrameOptions = {}): Frame {
   return frameRunner(liveKernel(gpu, "frame")).frame(cb, opts);
+}
+
+/**
+ * A `Frame` borrows one command encoder for exactly the dynamic extent of its callback, so `frame()`
+ * and `frameLoop()` accept **synchronous functions only**: the callback must finish recording before
+ * it returns, and a borrowed `Frame` is closed immediately afterwards.
+ *
+ * A plain `(frame) => void` type is deliberately insufficient, because TypeScript permits an `async`
+ * function returning `Promise<void>` wherever a `void` return is expected. This type rejects every
+ * `PromiseLike` return while preserving ordinary block-bodied and expression-bodied synchronous
+ * callbacks: `R` is inferred from the callback's return type, and the intersection collapses to
+ * `never` — assignable from nothing — as soon as that type extends `PromiseLike<unknown>`.
+ */
+export type SyncReturn<R> =
+  R extends PromiseLike<unknown> ? never : unknown;
+
+export type FrameCallback<R> =
+  (frame: Frame) => R & SyncReturn<R>;
+
+/**
+ * The frame's own `GPUCommandEncoder`, lent to an `f.raw()` callback with `finish()` removed:
+ * submission stays the frame's job, so `finish()` is **unrepresentable**, not merely forbidden.
+ */
+export type BorrowedCommandEncoder = Omit<GPUCommandEncoder, "finish">;
+
+/** Per-call options of `f.compute()`. Additive: `f.compute(kernel, n)` needs none of them. */
+export interface FrameComputeOptions {
+  /**
+   * Call-site link of the `pendingPipelines` chain (call site → frame → gpu): wins over the frame's
+   * policy and over the gpu-wide `init({ pendingPipelines })` default for this dispatch only.
+   */
+  readonly pendingPipelines?: PendingPipelines;
+  // @internal Extension point for `slots` (uniformArray dynamic offsets): contract #13 requires
+  // `slots` to be accepted identically by `p.draw(inst, { slots })` and `f.compute(inst, n, { slots })`.
+  // `uniformArray` does not exist yet, so no field is declared here — it lands with that feature.
+}
+
+/** Anything with a `GPUBuffer` and a byte size: the `.gpu` accessor spelling every vgpu object ships. */
+export interface CopyableBuffer {
+  readonly gpu: GPUBuffer;
+  readonly size: number;
+}
+
+/**
+ * Mirrors `copyBufferToBuffer`: offsets default to `0`, and an omitted `size` defaults to
+ * **`source.size − sourceOffset`** (the source remainder), exactly as WebGPU defines it.
+ */
+export interface CopyBufferOptions {
+  readonly source: CopyableBuffer;
+  readonly destination: CopyableBuffer;
+  /** Bytes to copy. Omitted means the source remainder, `source.size - sourceOffset` — never a truncated copy. */
+  readonly size?: number;
+  readonly sourceOffset?: number;
+  readonly destinationOffset?: number;
 }
 
 /** Per-frame options. Additive: `frame(gpu, cb)` keeps behaving exactly as before. */
@@ -49,7 +104,7 @@ export interface FrameOptions {
  * The loop belongs to the gpu's `scheduler` phase, so `gpu.dispose()` stops it before anything it
  * could encode against is torn down; a loop that stops on its own drops that registration.
  */
-export function frameLoop(gpu: Gpu, cb: FrameLoopCallback, opts: FrameLoopOptions = {}): FrameLoopHandle {
+export function frameLoop<R>(gpu: Gpu, cb: FrameCallback<R>, opts: FrameLoopOptions = {}): FrameLoopHandle {
   return frameRunner(liveKernel(gpu, "frameLoop")).loop(cb, opts);
 }
 
@@ -132,6 +187,18 @@ export class Frame {
   #submitted = false;
   #canceled = false;
   #passActive = false;
+  /**
+   * An `f.raw()` callback is borrowing the encoder right now. Kept apart from `#passActive` so the
+   * `VGPU-FRAME-ENCODER-LOCKED` guard covers both shapes of borrow with one check.
+   */
+  #rawActive = false;
+  /**
+   * The frame was aborted because a callback returned a thenable (contract #24). Independent of
+   * `#canceled`/`#submitted` on purpose: those two are legitimate ends of a frame's life with their
+   * own errors (`VGPU-FRAME-CANCELED`, `VGPU-FRAME-SUBMITTED`), while this one means the reference
+   * escaped a frame that was closed under it — `VGPU-FRAME-CLOSED`.
+   */
+  #asyncAborted = false;
   constructor(
     private readonly device: Device,
     private readonly defaultTarget?: Target,
@@ -152,6 +219,9 @@ export class Frame {
     // re-take the telemetry retains cancel() just released), so reject the call instead. Checked
     // before the device: `gpu.dispose()` cancels outstanding frames and *then* drops the device, so
     // cancellation is the proximate cause there and names it better than a generic disposed device.
+    // Checked before everything else: a frame whose callback returned a thenable was closed under
+    // this reference, which is a different lifecycle bug than cancel()/submit() and names itself.
+    if (this.#asyncAborted) throw frameClosedError("Frame.pass");
     if (this.#canceled) throw frameCanceledError("Frame.pass");
     assertDeviceUsable(this.device, "Frame.pass");
     const targetOnly = isTarget(target);
@@ -245,7 +315,105 @@ export class Frame {
     endRenderPassWithClaimValidation(this.device, encoder, this.#validations);
   }
 
+  /**
+   * Records one compute dispatch into **this frame's** command encoder, so it lands in the frame's
+   * single `queue.submit()`, in program order relative to every `f.pass()` around it (contract #1).
+   * That is the whole point of the method: `compute.dispatch()` / `compute.dispatchOnce()` open their
+   * own encoder and submit on their own, which is exactly the extra submit `f.compute()` removes.
+   *
+   * Workgroup counts are validated as integers >= 0 with the same stable code `dispatchOnce()` uses
+   * (contract #17), and the writable-storage aliasing guard runs unchanged. Nothing is encoded when
+   * either rejects.
+   *
+   * `pendingPipelines` resolves call site → frame → gpu: under `"throw"` an uncompiled kernel raises
+   * `VGPU-PIPELINE-PENDING` and compiles nothing; under `"skip"` the dispatch is omitted this frame
+   * while compilation continues in the background; under `"sync"` (today's effective default) the
+   * pipeline is created inline.
+   */
+  compute(compute: Compute, x: number, y?: number, z?: number, opts: FrameComputeOptions = {}): void {
+    if (this.#asyncAborted) throw frameClosedError("Frame.compute");
+    if (this.#canceled) throw frameCanceledError("Frame.compute");
+    assertDeviceUsable(this.device, "Frame.compute");
+    // A compute pass cannot be opened on an encoder whose render pass is still open, and an f.raw()
+    // callback owns the encoder while it runs: reject up front with the same "the encoder is lent
+    // out" error f.raw() uses, instead of letting native validation fail the whole command buffer.
+    if (this.#passActive || this.#rawActive) throw frameEncoderLockedError("Frame.compute");
+    const protocol = frameComputable(compute);
+    // Two links of the pendingPipelines chain collapse here, exactly like FramePass.draw: the call
+    // site wins, the frame's policy fills in, and `undefined` still resolves to the gpu-wide default
+    // further down (in the compute instance itself, which owns its pipeline).
+    protocol.encodeForFrame(this.#encoder, x, y, z, opts.pendingPipelines ?? this.pendingPipelines);
+  }
+
+  /**
+   * Buffer-to-buffer copy in this frame's encoder, mirroring `copyBufferToBuffer`: offsets default to
+   * `0`, and an omitted `size` defaults to **`source.size − sourceOffset`** (the source remainder).
+   *
+   * WebGPU's validation is preserved verbatim, not softened: `size`, `sourceOffset` and
+   * `destinationOffset` must be multiples of 4, `sourceOffset + size <= source.size`,
+   * `destinationOffset + size <= destination.size`, and `source` and `destination` must be different
+   * buffers. A destination too small for the source remainder is an error, never a truncated copy
+   * (contract #18). Texture copies go through `f.raw()`.
+   */
+  copyBuffer(opts: CopyBufferOptions): void {
+    if (this.#asyncAborted) throw frameClosedError("Frame.copyBuffer");
+    if (this.#canceled) throw frameCanceledError("Frame.copyBuffer");
+    assertDeviceUsable(this.device, "Frame.copyBuffer");
+    // Same reason as f.compute(): copyBufferToBuffer is a top-level encoder command, illegal while a
+    // managed pass is open, and the encoder is not ours to touch inside an f.raw() callback.
+    if (this.#passActive || this.#rawActive) throw frameEncoderLockedError("Frame.copyBuffer");
+    const copy = validatedBufferCopy(opts);
+    // Validated in full above: no partial encode is possible past this point.
+    this.#encoder.copyBufferToBuffer(copy.source, copy.sourceOffset, copy.destination, copy.destinationOffset, copy.size);
+  }
+
+  /**
+   * Lends this frame's open `GPUCommandEncoder` to `cb` — the escape hatch for anything that must land
+   * in **this** command buffer and submission: texture copies, `clearBuffer()`, `resolveQuerySet()`,
+   * debug markers, external encoders, and future WebGPU commands vgpu does not wrap yet.
+   *
+   * Normative clause (design §2), encoder ownership, lifetime and legal boundary:
+   * - it encodes into the frame's existing `GPUCommandEncoder`, preserving program order and the
+   *   frame's single submit;
+   * - it is legal **only while the frame's command encoder is open and no managed render/compute pass
+   *   and no other `f.raw()` callback is active**. Calling it from inside `f.pass(…)` / `f.compute(…)`,
+   *   or reentrantly from another `f.raw()` callback, throws `VGPU-FRAME-ENCODER-LOCKED` before the
+   *   callback is invoked — no borrowed encoder is handed out and nothing is encoded;
+   * - the callback is **synchronous**: it must not return a promise, and it must not retain the encoder
+   *   past its own return — the borrow ends when it returns;
+   * - `finish()` is **unrepresentable**, not merely forbidden: the parameter type is
+   *   `Omit<GPUCommandEncoder, "finish">`, so submission stays the frame's job;
+   * - any native render or compute pass begun inside the callback must also be **ended** inside it,
+   *   before returning;
+   * - **no render-state cache invalidation or "state re-establishment" is implied.** Render state
+   *   belongs to a `GPURenderPassEncoder`, not to the top-level `GPUCommandEncoder`, so a `raw` block
+   *   cannot perturb the state of vgpu's managed passes.
+   *
+   * A `Surface`'s current texture is deliberately not reachable through the borrowed encoder: it is
+   * frame-scoped and never exposed, so surface readback stays `surface.read()` / `surface.readFloats()`.
+   * Persistent `Texture` / `Target` handles are copyable here through their own `.gpu`.
+   */
+  raw(cb: (encoder: BorrowedCommandEncoder) => void): void {
+    if (this.#asyncAborted) throw frameClosedError("Frame.raw");
+    if (this.#canceled) throw frameCanceledError("Frame.raw");
+    assertDeviceUsable(this.device, "Frame.raw");
+    // Before the callback: the contract is that no borrowed encoder is ever handed out here.
+    if (this.#passActive || this.#rawActive) throw frameEncoderLockedError("Frame.raw");
+    this.#rawActive = true;
+    let result: unknown;
+    try {
+      result = cb(this.#encoder);
+    } finally {
+      this.#rawActive = false;
+      // A thenable return means the callback kept encoding after its own return: same runtime contract
+      // as an async frame callback (contract 25 defers to contract 24), so the whole frame aborts.
+      if (isThenableValue(result)) this.abortAsync();
+    }
+    if (isThenableValue(result)) throw asyncFrameCallbackError("Frame.raw");
+  }
+
   submit(): void {
+    if (this.#asyncAborted) throw frameClosedError("Frame.submit");
     // Closed either way: a re-submit has nothing left to flush, and a canceled frame dropped its
     // encoder. Both are silent no-ops so `frame(gpu, cb)`'s submit-in-finally never masks a cancel()
     // (or an exception) from inside the callback. Checked before the device so that submitting an
@@ -316,6 +484,7 @@ export class Frame {
    * lifecycle bug.
    */
   cancel(): void {
+    if (this.#asyncAborted) throw frameClosedError("Frame.cancel");
     if (this.#canceled) return;
     if (this.#submitted) throw frameAlreadySubmittedError("Frame.cancel");
     // An active pass descriptor still references telemetry query sets. Releasing their retains here
@@ -332,6 +501,38 @@ export class Frame {
     // this frame ran, so any native error they carry is about work that was thrown away.
     discardClaimedGroupValidationResults(this.#validations);
     this.#validations.length = 0;
+  }
+
+  /**
+   * Aborts the frame because a callback returned a thenable (contract #24, the runtime contract for
+   * JavaScript / `any`): closes the borrowed frame and discards its command encoder **without**
+   * submitting it, so the "one frame, one ordered command list, exactly one `queue.submit()`"
+   * guarantee is kept by submitting nothing at all rather than a prefix of the intended work.
+   *
+   * Same body as `cancel()` minus its `#submitted`/`#passActive` rejections: this path always runs
+   * after the callback returned, never with a pass open, and its whole purpose is to close a frame the
+   * caller no longer controls — so it never throws.
+   *
+   * @internal Called by `FrameRunner.frame()` and by `Frame.raw()`; not part of the public API.
+   */
+  abortAsync(): void {
+    if (this.#asyncAborted) return;
+    // A callback that already ended the frame by hand settled its owners exactly once (cancel()
+    // abandoned them; submit() read them back). Re-abandoning here would deliver a second terminal
+    // event per owner, so only mark the escaped reference closed.
+    if (this.#canceled || this.#submitted) {
+      this.#asyncAborted = true;
+      return;
+    }
+    this.releaseLifecycle?.();
+    this.#abandonOwners(this.#frameOwners());
+    this.#owners.clear();
+    this.#discardedOwners.clear();
+    // The claimed-group validation promises of the dropped encoder are never delivered: no draw of
+    // this frame ran, so any native error they carry is about work that was thrown away.
+    discardClaimedGroupValidationResults(this.#validations);
+    this.#validations.length = 0;
+    this.#asyncAborted = true;
   }
 
   /**
@@ -479,6 +680,67 @@ function frameDrawable(drawable: Draw | Effect): FrameDrawableProtocol {
   return encodable;
 }
 
+/** Nominal computable protocol of a `Compute`; the frame never imports `compute.ts`. */
+function frameComputable(compute: Compute): FrameComputableProtocol {
+  const encodable = frameComputableOf(compute);
+  if (!encodable) throw new TypeError("Invalid Compute instance: f.compute() expects a Compute created by this library.");
+  return encodable;
+}
+
+/**
+ * Detects the one runtime shape contract #24 keys on: a thenable return. `typeof then === "function"`
+ * is the same test the Promise resolution algorithm uses, so a hand-rolled thenable counts exactly
+ * like a native promise — which is the point, since this path exists for JavaScript and `any`.
+ */
+function isThenableValue(value: unknown): value is PromiseLike<unknown> {
+  return typeof (value as { then?: unknown } | null | undefined)?.then === "function";
+}
+
+/**
+ * WebGPU's `copyBufferToBuffer` validation, preserved verbatim rather than softened (contract #18).
+ *
+ * An omitted `size` is the **source remainder** — `source.size - sourceOffset`, exactly as WebGPU
+ * defines the default — never `min(source remainder, destination remainder)`: a destination too small
+ * for it is an error, not a truncated copy. Every check runs before the caller encodes anything.
+ */
+function validatedBufferCopy(opts: CopyBufferOptions): { source: GPUBuffer; sourceOffset: number; destination: GPUBuffer; destinationOffset: number; size: number } {
+  if (typeof opts !== "object" || opts === null) throw invalidCopy(`received ${previewValue(opts)}; expected { source, destination, size?, sourceOffset?, destinationOffset? }.`);
+  const source = copyableBuffer(opts.source, "source");
+  const destination = copyableBuffer(opts.destination, "destination");
+  const sourceOffset = copyOffset(opts.sourceOffset, "sourceOffset");
+  const destinationOffset = copyOffset(opts.destinationOffset, "destinationOffset");
+  const size = opts.size ?? source.size - sourceOffset;
+  if (typeof size !== "number" || !Number.isInteger(size) || size < 0) throw invalidCopy(`size received ${previewValue(opts.size)}; expected a non-negative integer.`);
+  // The default is the source remainder, so an unaligned source.size (or an offset past the end)
+  // surfaces here as an error rather than silently rounding the copy down.
+  if (size % 4 !== 0) throw invalidCopy(`size ${size} is not a multiple of 4${opts.size === undefined ? ` (it defaulted to the source remainder, source.size ${source.size} - sourceOffset ${sourceOffset})` : ""}.`);
+  // Identity, not equality of contents: WebGPU requires distinct buffers, and two vgpu facades can
+  // wrap the same GPUBuffer, so the underlying handle is what has to differ.
+  if (source.gpu === destination.gpu) throw invalidCopy("source and destination are the same buffer.");
+  if (sourceOffset + size > source.size) throw invalidCopy(`sourceOffset ${sourceOffset} + size ${size} exceeds source.size ${source.size}.`);
+  if (destinationOffset + size > destination.size) throw invalidCopy(`destinationOffset ${destinationOffset} + size ${size} exceeds destination.size ${destination.size}.`);
+  return { source: source.gpu, sourceOffset, destination: destination.gpu, destinationOffset, size };
+}
+
+function invalidCopy(detail: string): VGPUError {
+  return copyBufferInvalidError("Frame.copyBuffer", detail);
+}
+
+function copyableBuffer(value: unknown, field: string): CopyableBuffer {
+  const candidate = value as Partial<CopyableBuffer> | null | undefined;
+  if (!candidate || typeof candidate !== "object" || typeof candidate.size !== "number" || !candidate.gpu) {
+    throw invalidCopy(`${field} received ${previewValue(value)}; expected a buffer with a .gpu handle and a .size in bytes.`);
+  }
+  return candidate as CopyableBuffer;
+}
+
+function copyOffset(value: number | undefined, field: string): number {
+  if (value === undefined) return 0;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw invalidCopy(`${field} received ${previewValue(value)}; expected a non-negative integer.`);
+  if (value % 4 !== 0) throw invalidCopy(`${field} ${value} is not a multiple of 4.`);
+  return value;
+}
+
 function invalidBundle(): never {
   throw new VGPUError({ code: "VGPU-R3-BUNDLE-INVALID", message: "p.bundles() expected bundles created by bundle(gpu, { target }, cb).", where: "FramePass.bundles" });
 }
@@ -551,6 +813,11 @@ function isDeviceGoneError(error: unknown): boolean {
   return code === "VGPU-DEVICE-DISPOSED" || code === "VGPU-DEVICE-LOST";
 }
 
+/** True when the frame was already closed by an inner thenable abort, so there is nothing left to flush. */
+function isFrameClosedError(error: unknown): boolean {
+  return (error as VGPUError | undefined)?.code === "VGPU-FRAME-CLOSED";
+}
+
 export class FrameRunner {
   #running = false;
   /**
@@ -559,7 +826,7 @@ export class FrameRunner {
    * stop the loops still running without holding on to the ones already stopped.
    */
   constructor(private readonly createFrame: (opts?: FrameOptions) => Frame, private readonly advance: () => void, private readonly trackLoop?: (handle: FrameLoopHandle) => () => void) {}
-  frame(cb?: (frame: Frame) => void, opts?: FrameOptions): Frame {
+  frame<R>(cb?: FrameCallback<R>, opts?: FrameOptions): Frame {
     if (this.#running || isSurfaceResizeCallbackActive()) throw frameReentrantError();
     this.#running = true;
     enterFrame();
@@ -567,16 +834,29 @@ export class FrameRunner {
       this.advance();
       const frame = this.createFrame(opts);
       if (cb) {
-        try { cb(frame); }
+        let result: unknown;
+        try { result = cb(frame); }
         finally {
-          // A callback is allowed to dispose the owning gpu (gpu.dispose() inside a loop tick does
-          // exactly that). The device is then gone and the frame has nothing left to flush, so this
-          // implicit submit swallows that one error instead of throwing over the callback's own
-          // intent — the same reason a canceled frame submits as a no-op. An explicit
-          // frame.submit() on a dead device still reports it.
-          try { frame.submit(); }
-          catch (error) { if (!isDeviceGoneError(error)) throw error; }
+          // Contract #24: a thenable return aborts the frame instead of submitting what it recorded —
+          // the one explicit exception to "a managed frame submits itself when its callback returns",
+          // and never a partial submit. A callback that *throws* synchronously never assigns `result`,
+          // so it still takes the submit branch: frame() is documented to submit on the way out of a
+          // throw, and only the thenable case discards the encoder.
+          if (isThenableValue(result)) frame.abortAsync();
+          else {
+            // A callback is allowed to dispose the owning gpu (gpu.dispose() inside a loop tick does
+            // exactly that). The device is then gone and the frame has nothing left to flush, so this
+            // implicit submit swallows that one error instead of throwing over the callback's own
+            // intent — the same reason a canceled frame submits as a no-op. An explicit
+            // frame.submit() on a dead device still reports it. A frame an inner f.raw() already
+            // aborted is closed for the same reason: it has nothing left to flush, and swallowing
+            // VGPU-FRAME-CLOSED here keeps the VGPU-ASYNC-FRAME-CALLBACK that caused it as the error
+            // the caller sees.
+            try { frame.submit(); }
+            catch (error) { if (!isDeviceGoneError(error) && !isFrameClosedError(error)) throw error; }
+          }
         }
+        if (isThenableValue(result)) throw asyncFrameCallbackError("frame");
       }
       return frame;
     } finally {
@@ -584,7 +864,7 @@ export class FrameRunner {
       this.#running = false;
     }
   }
-  loop(cb: FrameLoopCallback, opts: FrameLoopOptions = {}): FrameLoopHandle {
+  loop<R>(cb: FrameCallback<R>, opts: FrameLoopOptions = {}): FrameLoopHandle {
     let stopped = false;
     const request = globalThis.requestAnimationFrame ?? ((fn: FrameRequestCallback) => setTimeout(() => fn(performance.now()), 16) as unknown as number);
     const cancel = globalThis.cancelAnimationFrame ?? ((id: number) => clearTimeout(id));
