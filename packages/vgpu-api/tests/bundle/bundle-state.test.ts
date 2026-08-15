@@ -472,9 +472,56 @@ test("a skipped bundle does not stop the rest of the pass from replaying", async
   await prepare(gpu, { bundle: ready });
   const pending = bundle(gpu, { target: scene, label: "mixedPending" }, (b) => b.draw(pendingFx));
 
+  const executed: unknown[][] = [];
+  const passes: GPURenderPassEncoder[] = [];
+  const originalPass = gpu.device.gpu.createCommandEncoder.bind(gpu.device.gpu);
+  vi.spyOn(gpu.device.gpu, "createCommandEncoder").mockImplementation((desc?: GPUCommandEncoderDescriptor) => {
+    const encoder = originalPass(desc);
+    const beginRenderPass = encoder.beginRenderPass.bind(encoder);
+    encoder.beginRenderPass = (descriptor: GPURenderPassDescriptor) => {
+      const pass = beginRenderPass(descriptor);
+      passes.push(pass);
+      const executeBundles = pass.executeBundles.bind(pass);
+      pass.executeBundles = (list: Iterable<GPURenderBundle>) => { executed.push([...list]); return executeBundles(list); };
+      return pass;
+    };
+    return encoder;
+  });
+
   expect(() => frame(gpu, (f) => f.pass(scene, (p) => p.bundles(ready, pending)), { pendingPipelines: "skip" })).not.toThrow();
 
   expect(ready.status).toBe("ready");
+  // The skipped entry must be FILTERED OUT, not passed to WebGPU as a hole: executeBundles(undefined)
+  // is a native validation error waiting to happen, and the mock's no-op stub would never notice.
+  expect(executed.length).toBe(1);
+  expect(executed[0]).toEqual([ready.gpu]);
+  expect(executed[0]?.every((entry) => entry !== undefined)).toBe(true);
+
+  // ...and when EVERY bundle of the call is skipped there must be no executeBundles call at all:
+  // executeBundles([]) is a native call for nothing, repeated every frame of a loop that is waiting
+  // for its pipelines. The early return is the thing being asserted here.
+  executed.length = 0;
+  expect(() => frame(gpu, (f) => f.pass(scene, (p) => p.bundles(pending)), { pendingPipelines: "skip" })).not.toThrow();
+  expect(executed).toEqual([]);
+  vi.restoreAllMocks();
+  gpu.dispose();
+});
+
+test('a "sync" replay hands the policy down to the recorded draws, not just to the bundle', async () => {
+  // The gpu default is "throw" here, so a draw that is asked to encode without an explicit policy
+  // refuses to compile. The frame says "sync", and that has to reach the recorded draws through the
+  // encode — otherwise the bundle materializes its native encoder and the draw inside it throws.
+  const gpu = await init({ pendingPipelines: "throw" });
+  const scene = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, SOLID, { label: "policyDownFx" });
+  const recorded = bundle(gpu, { target: scene, label: "policyDownBundle" }, (b) => b.draw(fx));
+  const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
+  const syncCompiles = mock.calls.createRenderPipeline;
+
+  expect(() => frame(gpu, (f) => f.pass(scene, (p) => p.bundles(recorded)), { pendingPipelines: "sync" })).not.toThrow();
+
+  expect(recorded.status).toBe("ready");
+  expect(mock.calls.createRenderPipeline).toBe(syncCompiles + 1);
   gpu.dispose();
 });
 
