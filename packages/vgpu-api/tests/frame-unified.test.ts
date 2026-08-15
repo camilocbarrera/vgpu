@@ -30,6 +30,16 @@ const COMPUTE_WGSL = `
 @compute @workgroup_size(1) fn main() {}
 `;
 
+/** Same shape compute/aliasing.test.ts uses: one read binding plus one writable binding to trip on. */
+const ALIASING_WGSL = `
+@group(0) @binding(0) var<storage, read> src: array<vec4f>;
+@group(0) @binding(1) var<storage, read_write> dst: array<vec4f>;
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  dst[id.x] = src[id.x];
+}
+`;
+
 let gpu: Awaited<ReturnType<typeof init>> | undefined;
 
 afterEach(() => {
@@ -264,6 +274,7 @@ test("a thenable-returning frame callback throws VGPU-ASYNC-FRAME-CALLBACK and s
   gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: RENDER_WGSL, label: "dots" });
+  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
   const spy = spyFrameEncoder(gpu.device.gpu);
   let escaped: Frame | undefined;
 
@@ -284,6 +295,7 @@ test("a thenable-returning frame callback throws VGPU-ASYNC-FRAME-CALLBACK and s
   expect(caught(() => escaped!.cancel())?.code).toBe("VGPU-FRAME-CLOSED");
   expect(caught(() => escaped!.raw(() => undefined))?.code).toBe("VGPU-FRAME-CLOSED");
   expect(caught(() => escaped!.copyBuffer({ source: storage(gpu!, 4), destination: storage(gpu!, 4) }))?.code).toBe("VGPU-FRAME-CLOSED");
+  expect(caught(() => escaped!.compute(sim, 1))?.code).toBe("VGPU-FRAME-CLOSED");
   expect(spy.submits.count).toBe(0);
 });
 
@@ -523,4 +535,47 @@ test("f.compute() rejects a value that is not a Compute created by this library"
 
   expect(error).toBeInstanceOf(TypeError);
   expect(error?.message).toContain("f.compute()");
+});
+
+test("the gpu-wide default applies when neither the call site nor the frame names a policy (contract #3 chain)", async () => {
+  // Last link of the chain: with both overrides absent, f.compute() must read init()'s default
+  // rather than falling back to a hardcoded "sync".
+  gpu = await init({ pendingPipelines: "throw" });
+  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const spy = spyFrameEncoder(gpu.device.gpu);
+
+  const error = caught(() => frame(gpu!, (f) => f.compute(sim, 1)));
+
+  expect(error?.code).toBe("VGPU-PIPELINE-PENDING");
+  expect(getMockGPUDeviceInstrumentation(gpu.device.gpu).calls.createComputePipeline).toBe(0);
+  expect(names(spy.ops)).toEqual([]);
+});
+
+test("f.compute() runs the writable-storage aliasing guard and encodes nothing when it trips", async () => {
+  // The guard is #preflightAliasing, reused verbatim from dispatch()/dispatchOnce(): the frame path
+  // must not be a hole through which an aliased bind group reaches the queue.
+  gpu = await init();
+  const sim = compute(gpu, ALIASING_WGSL, { label: "sim" });
+  const buffer = storage(gpu, 16);
+  sim.set({ src: buffer, dst: buffer });
+  const spy = spyFrameEncoder(gpu.device.gpu);
+
+  const error = caught(() => frame(gpu!, (f) => f.compute(sim, 1)));
+
+  expect(error?.code).toBe(caught(() => sim.dispatch(1))?.code);
+  expect(error?.message).toContain("alias");
+  expect(names(spy.ops)).toEqual([]);
+});
+
+test("an unexpected submit failure propagates instead of being swallowed", async () => {
+  // frame()'s implicit submit swallows exactly two codes (device gone, frame closed). Anything else
+  // must reach the caller: silently dropping a queue failure would hide a real bug.
+  gpu = await init();
+  const colorTarget = target(gpu, { size: [4, 4] });
+  const drawable = draw(gpu, { shader: RENDER_WGSL, label: "dots" });
+  vi.spyOn(gpu.device.gpu.queue, "submit").mockImplementation(() => {
+    throw new Error("submit exploded");
+  });
+
+  expect(() => frame(gpu!, (f) => f.pass(colorTarget, (p) => p.draw(drawable)))).toThrowError("submit exploded");
 });
