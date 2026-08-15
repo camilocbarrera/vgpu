@@ -445,10 +445,14 @@ export class FramePass {
     // reject up front instead of leaving it to native validation.
     if (this.depthReadOnly) throw passDepthReadOnlyError("pass cannot replay bundles: bundle records bundles with writable depth/stencil, and WebGPU only executes read-only-recorded bundles in a read-only pass.", "Encode the draws directly with pass.draw(...) inside the depthReadOnly pass.", "FramePass.bundles");
     const recorded = bundles.map((entry) => frameBundleOf(entry) ?? invalidBundle());
-    // Staleness is checked for every bundle before the first one replays: a pass either replays the
-    // whole list or none of it.
-    for (const entry of recorded) entry.assertReplayable(this.target);
-    this.encoder.executeBundles(recorded.map((entry) => entry.gpu));
+    // Readiness and staleness are resolved for every bundle before the first one replays: a pass
+    // either replays the whole list or none of it. The bundle owns the `BundleStatus` ×
+    // `pendingPipelines` table (frame → gpu; `p.bundles()` takes no per-call policy), so this hands
+    // it the frame's policy and gets back either a native bundle or nothing — `undefined` is the
+    // bundle the resolved policy skipped this frame.
+    const replayable = recorded.map((entry) => entry.resolveForReplay(this.target, this.pendingPipelines)).filter((native): native is GPURenderBundle => native !== undefined);
+    if (!replayable.length) return;
+    this.encoder.executeBundles(replayable);
   }
 }
 

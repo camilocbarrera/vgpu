@@ -79,23 +79,38 @@ test("precompiled draws record into signature bundles without sync pipeline crea
   gpu.dispose();
 });
 
-test("signature bundle recording still requires draw resources to be set", async () => {
+test("a bundle recording still requires draw resources to be set, at the moment it is encoded", async () => {
   const gpu = await init();
+  const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const post = effect(gpu, TEXTURE, { label: "post" });
 
-  expect(() => bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "unsetTextureBundle" }, (b) => b.draw(post))).toThrowError(/VGPU-R1-BINDING-NEVER-SET|Unset/);
+  // Contract #15, row 1: construction records the logical command list and encodes nothing, so an
+  // unset binding is no longer discovered by bundle() itself — the encode the first replay performs
+  // (or prepare()) is what resolves the bind groups, and that is where it fails.
+  const recorded = bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "unsetTextureBundle" }, (b) => b.draw(post));
+  expect(recorded.status).toBe("pending-pipelines");
+
+  expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: scene }, (p) => p.bundles(recorded)))).toThrowError(/VGPU-R1-BINDING-NEVER-SET|Unset/);
   gpu.dispose();
 });
 
-test("cold signature bundle recording uses the sync pipeline path and reports failures through gpu.onError", async () => {
+test("the first sync replay of a cold bundle uses the sync pipeline path and reports failures through gpu.onError", async () => {
   const gpu = await init();
+  const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const shader = effect(gpu, SOLID, { label: "coldFailure" });
   const nativeError = new Error("sync pipeline failed during bundle recording");
   const errors: unknown[] = [];
   gpu.onError((error) => errors.push(error));
   vi.spyOn(gpu.device.gpu, "createRenderPipeline").mockImplementation(() => { throw nativeError; });
 
-  expect(() => bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "coldFailureBundle" }, (b) => b.draw(shader))).not.toThrow();
+  // Contract #15: "construction never throws for pending pipelines" — and it never compiles either,
+  // so nothing can fail here. The inline compile moved to the first replay, which under the train's
+  // "sync" default reproduces exactly the eager behavior (and its error report) of before.
+  const recorded = bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "coldFailureBundle" }, (b) => b.draw(shader));
+  await gpu.settled();
+  expect(errors).toEqual([]);
+
+  expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: scene }, (p) => p.bundles(recorded)))).not.toThrow();
   await gpu.settled();
 
   expect(errors).toEqual([

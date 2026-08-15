@@ -5,7 +5,7 @@ export type { Compute, ComputeOptions, DispatchOptions, GpuErrorListener, PingPo
 export type { ClearColor } from "./target-utils.ts";
 export type { Timer, TimerSpan } from "./timer.ts";
 export type { Visibility, VisibilityOptions, VisibilityQuery } from "./visibility.ts";
-export type { Bundle, BundleOptions, BundleRecorder } from "./bundle.ts";
+export type { Bundle, BundleOptions, BundleRecorder, BundleStatus } from "./bundle.ts";
 export type { Surface, SurfaceOptions, SurfaceResizeEvent } from "./surface.ts";
 
 import { createCoreGpu } from "./kernel.ts";

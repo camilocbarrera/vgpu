@@ -4,6 +4,7 @@ import { bundle } from "../src/bundle.ts";
 import { compute } from "../src/compute.ts";
 import { draw } from "../src/draw.ts";
 import { effect } from "../src/effect.ts";
+import { prepare } from "../src/prepare.ts";
 import { frame } from "../src/frame.ts";
 import { init } from "../src/mock.ts";
 import { storage } from "../src/storage.ts";
@@ -539,11 +540,16 @@ test(".bind() to a different resource marks a recorded bundle stale", async () =
   const second = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: TEXTURE_SHADER, label: "fx", bindings: { src: first } });
   const recorded = bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "bnd" }, (r) => r.draw(fx));
+  // Contract #15: only a `ready` bundle can go stale, and construction no longer materializes one —
+  // prepare() is what encodes the native bundle whose bind groups the identity change invalidates.
+  await prepare(gpu, { bundle: recorded });
 
   fx.bind("src", second);
 
   // Replaying a bundle whose binding identity moved must fail loudly instead of drawing `first`.
-  expect(codeOf(() => frame(gpu, (f) => f.pass({ target: screen }, (p) => p.bundles(recorded))))).toBe("VGPU-R3-BUNDLE-STALE");
+  // Asserted under the explicit "throw" policy: for a stale bundle the train's "sync" default is
+  // the sanctioned opt-in inline re-encode (contract #15, replay sub-table), not a silent stale draw.
+  expect(codeOf(() => frame(gpu, (f) => f.pass({ target: screen }, (p) => p.bundles(recorded)), { pendingPipelines: "throw" }))).toBe("VGPU-R3-BUNDLE-STALE");
   gpu.dispose();
 });
 

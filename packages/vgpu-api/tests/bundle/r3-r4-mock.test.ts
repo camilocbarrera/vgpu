@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { bind, createBindGroup, createBindGroupLayout } from "@vgpu/core";
 import { UniformPool } from "../../src/core.ts";
-import { init, bundle, draw, effect, frame, target } from "../../src/mock.ts";
+import { init, bundle, draw, effect, frame, prepare, target } from "../../src/mock.ts";
 
 const FLOOR = `
 struct Fog { fogDensity: f32 }
@@ -42,15 +42,21 @@ test("R3 bundle replay stays valid after JS value writes and stales on bind-grou
     b.draw(walls);
   });
 
+  // Contract #15: the native bundle is materialized by prepare(), never by construction — and only a
+  // `ready` bundle can be made stale by an identity change.
+  await prepare(gpu, { bundle: staticScene });
+
   floor.set({ fogDensity: 0.2 });
   expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(staticScene)))).not.toThrow();
 
   walls.set({ detail: tex2 });
-  expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(staticScene)))).toThrowError(
+  // Loud failure lives on the "throw" policy: for a stale bundle "sync" (the train's default) is the
+  // opt-in inline re-encode of the retained recording, which draws current resources, never stale ones.
+  expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(staticScene)), { pendingPipelines: "throw" })).toThrowError(
     "bundle 'staticScene' is stale: binding `detail` (@group(0) @binding(0)) of draw\n" +
       "  'walls' changed resource after recording. Bundles freeze commands and bind groups.\n" +
-      "  Fix: re-record it → staticScene = bundle(gpu, { target: scene }, ...)\n" +
-      "  (re-recording is always your responsibility; the library only detects this).",
+      "  Fix: re-encode the retained recording → await prepare(gpu, { bundle: staticScene })\n" +
+      '  (or pendingPipelines: "sync" to re-encode inline; rebuild() only replaces the recorded commands).',
   );
   gpu.dispose();
 });
@@ -65,23 +71,25 @@ test("R3 bundle sampling a repeatedly resized target stales through binding iden
   });
 
   const firstBundle = recordBundle("postBundleA");
+  await prepare(gpu, { bundle: firstBundle });
   source.resize([8, 8]);
 
-  expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(firstBundle)))).toThrowError(
+  expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(firstBundle)), { pendingPipelines: "throw" })).toThrowError(
     "bundle 'postBundleA' is stale: binding `detail` (@group(0) @binding(0)) of draw\n" +
       "  'post' changed resource after recording. Bundles freeze commands and bind groups.\n" +
-      "  Fix: re-record it → postBundleA = bundle(gpu, { target: scene }, ...)\n" +
-      "  (re-recording is always your responsibility; the library only detects this).",
+      "  Fix: re-encode the retained recording → await prepare(gpu, { bundle: postBundleA })\n" +
+      '  (or pendingPipelines: "sync" to re-encode inline; rebuild() only replaces the recorded commands).',
   );
 
   const secondBundle = recordBundle("postBundleB");
+  await prepare(gpu, { bundle: secondBundle });
   source.resize([16, 16]);
 
-  expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(secondBundle)))).toThrowError(
+  expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(secondBundle)), { pendingPipelines: "throw" })).toThrowError(
     "bundle 'postBundleB' is stale: binding `detail` (@group(0) @binding(0)) of draw\n" +
       "  'post' changed resource after recording. Bundles freeze commands and bind groups.\n" +
-      "  Fix: re-record it → postBundleB = bundle(gpu, { target: scene }, ...)\n" +
-      "  (re-recording is always your responsibility; the library only detects this).",
+      "  Fix: re-encode the retained recording → await prepare(gpu, { bundle: postBundleB })\n" +
+      '  (or pendingPipelines: "sync" to re-encode inline; rebuild() only replaces the recorded commands).',
   );
   gpu.dispose();
 });

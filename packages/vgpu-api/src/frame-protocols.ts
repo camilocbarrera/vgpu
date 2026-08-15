@@ -18,6 +18,7 @@
 import type { Device } from "@vgpu/core";
 import type { ClaimedGroupValidationResult } from "./claim-validation.ts";
 import type { DrawCallOptions } from "./draw.ts";
+import type { PendingPipelines } from "./pending-pipelines.ts";
 import type { Target } from "./target.ts";
 
 /**
@@ -57,9 +58,17 @@ export function frameDrawableOf(value: unknown): FrameDrawableProtocol | undefin
 export const FRAME_BUNDLE: unique symbol = Symbol("vgpu.frame.bundle");
 
 export interface FrameBundleProtocol {
-  readonly gpu: GPURenderBundle;
-  /** Throws `VGPU-R3-BUNDLE-STALE` when the recorded signature no longer matches `target`. */
-  assertReplayable(target: Target): void;
+  /**
+   * The native bundle to execute this frame, or `undefined` when the resolved `pendingPipelines`
+   * policy skipped it. The whole `BundleStatus` × policy table lives behind this call, so the frame
+   * never learns what a bundle status is: it either gets something to execute or nothing.
+   *
+   * Throws for the cases the policy does not absorb — `VGPU-BUNDLE-DISPOSED` (always),
+   * `VGPU-R3-BUNDLE-STALE` (recorded signature no longer matches `target`, or `"throw"` on a stale
+   * bundle), `VGPU-PIPELINE-PENDING` (`"throw"` on an unprepared bundle) and the retained failure of
+   * a `failed` bundle.
+   */
+  resolveForReplay(target: Target, policy?: PendingPipelines): GPURenderBundle | undefined;
 }
 
 export interface FrameBundleLike {

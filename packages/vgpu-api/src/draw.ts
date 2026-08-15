@@ -570,6 +570,20 @@ export class InternalDraw implements Draw {
     return this.#pipelineForEncode(target, "sync");
   }
 
+  /**
+   * Is the pipeline of THIS combination already compiled? Asks the store for the very key
+   * `pipelineForAsync`/`#compileKey` would use and never starts a compilation, so a caller can
+   * classify readiness without paying for it.
+   *
+   * `gpu` cannot answer this: it reports the first resolved key of any signature, while a bundle
+   * needs the answer for the one signature it recorded.
+   *
+   * @internal
+   */
+  readyForSignature(signature: TargetSignature): boolean {
+    return !!drawState(this).pipelineStore.getReady(this.#pipelineKey(signature));
+  }
+
   pipelineForAsync(target: Target | TargetSignature): Promise<GPURenderPipeline> {
     assertDeviceUsable(drawState(this).device, `${this.label}.pipelineForAsync`);
     const { key, signature, signatureKey } = this.#compileKey(target, `${this.label}.pipelineForAsync`);

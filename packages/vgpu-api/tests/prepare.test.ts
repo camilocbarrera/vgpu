@@ -408,15 +408,20 @@ test("prepare({ bundle }) re-encodes a bundle made stale by a binding identity c
   drawable.set({ data: storage(gpu, 16) });
   const recorded = bundle(gpu, { target: colorTarget, label: "forest" }, (r) => r.draw(drawable));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
-  const encodersAfterRecord = mock.calls.createRenderBundleEncoder;
+  // Contract #15, row 1: construction materializes nothing, so the first prepare() is what encodes
+  // the native bundle an identity change can then make stale.
+  expect(recorded.gpu).toBeUndefined();
+  await prepare(gpu, { bundle: recorded });
+  const encodersAfterPrepare = mock.calls.createRenderBundleEncoder;
   const nativeBefore = recorded.gpu;
 
   drawable.set({ data: storage(gpu, 16) });
-  expect(caught(() => frame(gpu, (f) => f.pass(colorTarget, (p) => p.bundles(recorded))))?.code).toBe("VGPU-R3-BUNDLE-STALE");
+  expect(recorded.status).toBe("stale");
+  expect(caught(() => frame(gpu, (f) => f.pass(colorTarget, (p) => p.bundles(recorded)), { pendingPipelines: "throw" }))?.code).toBe("VGPU-R3-BUNDLE-STALE");
 
   const prepared = await prepare(gpu, { bundle: recorded });
 
-  expect(mock.calls.createRenderBundleEncoder).toBe(encodersAfterRecord + 1);
+  expect(mock.calls.createRenderBundleEncoder).toBe(encodersAfterPrepare + 1);
   expect(prepared.bundle).toBe(recorded);
   expect(prepared.gpu).toBe(recorded.gpu);
   expect(recorded.gpu).not.toBe(nativeBefore);
@@ -424,7 +429,7 @@ test("prepare({ bundle }) re-encodes a bundle made stale by a binding identity c
   gpu.dispose();
 });
 
-test("prepare({ bundle }) on a fresh bundle is a no-op that returns the recorded native bundle", async () => {
+test("prepare({ bundle }) materializes a fresh bundle, and preparing it again is free", async () => {
   const gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: WGSL, label: "fresh" });
@@ -434,9 +439,18 @@ test("prepare({ bundle }) on a fresh bundle is a no-op that returns the recorded
 
   const prepared = await prepare(gpu, { bundle: recorded });
 
+  // prepare() is the spelling that materializes the native bundle (contract #15, row 2) — it is no
+  // longer a no-op on a fresh bundle, because construction no longer encoded one.
   expect(prepared.gpu).toBe(recorded.gpu);
   expect(prepared.signature).toEqual(normalizeSignature(colorTarget));
-  expect(mock.calls.createRenderBundleEncoder).toBe(encoders);
+  expect(mock.calls.createRenderBundleEncoder).toBe(encoders + 1);
+  expect(recorded.status).toBe("ready");
+
+  // Contract #7 (bundle half): re-preparing a ready bundle creates no pipeline and re-encodes nothing.
+  const again = await prepare(gpu, { bundle: recorded });
+
+  expect(again.gpu).toBe(prepared.gpu);
+  expect(mock.calls.createRenderBundleEncoder).toBe(encoders + 1);
   gpu.dispose();
 });
 
