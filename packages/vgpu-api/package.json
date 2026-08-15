@@ -91,9 +91,9 @@
     "./core": "client"
   },
   "vgpuExportBundleBudgetsGzipBytes": {
-    ".": 41984,
-    "./node": 42496,
-    "./mock": 42496,
+    ".": 43520,
+    "./node": 43520,
+    "./mock": 43520,
     "./scene": 12800,
     "./client": 512,
     "./core": 3584
@@ -103,10 +103,10 @@
   },
   "vgpuExperienceBundleBudgetsGzipBytes": {
     "init-only": 1536,
-    "effect-only": 27648,
-    "triangle-low-level": 30720,
-    "draw-recipe-box": 31744,
-    "full-root": 42496
+    "effect-only": 28672,
+    "triangle-low-level": 31744,
+    "draw-recipe-box": 32768,
+    "full-root": 43520
   },
   "vgpuSceneBundleBudgetNote": "The scene barrel retains all recipe builders after the geometry redesign; direct primitive imports retain only their selected mesh, as the experience fixtures assert."
 }

@@ -52,7 +52,23 @@ export interface StorageOptions {
   /** Adds the "indirect" buffer usage so the buffer can supply GPU-read draw/dispatch arguments. Defaults to false. */
   readonly indirect?: boolean;
 }
-export interface StorageBuffer { readonly size: number; readonly access: StorageAccess; read(): Promise<ArrayBuffer>; write(data: BufferSource): void }
+export interface StorageBuffer {
+  readonly size: number;
+  readonly access: StorageAccess;
+  /**
+   * The underlying `GPUBuffer` — the single `.gpu` accessor spelling every vgpu object uses
+   * (`gpu.gpu` is the `GPUDevice`, `Texture.gpu` a `GPUTexture`, `prepared.gpu` the pipeline). It is
+   * what makes this buffer usable with `f.copyBuffer()` and inside an `f.raw()` block, and with raw
+   * WebGPU calls vgpu does not wrap.
+   *
+   * It is a real handle, so `destroy()` is reachable through it: the same trade-off `Buffer.gpu` and
+   * `Texture.gpu` already accept. Destroying it by hand leaves the owning `StorageBuffer` pointing at
+   * a destroyed buffer — let `gpu.dispose()` own the lifetime instead.
+   */
+  readonly gpu: GPUBuffer;
+  read(): Promise<ArrayBuffer>;
+  write(data: BufferSource): void;
+}
 export interface PingPongTargets { readonly read: Target; readonly write: Target; swap(): void }
 export interface PingPongStorage { readonly read: StorageBuffer; readonly write: StorageBuffer; swap(): void }
 export interface SharedUniforms<T extends Record<string, unknown> = Record<string, unknown>> { set(values: Partial<T>): void }
