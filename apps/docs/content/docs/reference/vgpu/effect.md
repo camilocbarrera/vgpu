@@ -129,7 +129,7 @@ await renderOnce(gpu, screen, (p) => {
 });
 ```
 
-## Readiness and ownership
+## Pipeline pre-warm
 
 **Readiness is a property of a combination, never of an object.** An `Effect` can be ready for the
 screen, uncompiled for an HDR target and failed for a `depth24plus-stencil8` target at the same
@@ -148,6 +148,8 @@ prepared.draw;       // the renderable, echoed back — the handle identifies th
 prepared.signature;  // resolved TargetSignature { colors, depth, sampleCount }
 prepared.gpu;        // GPURenderPipeline — the only low-level pipeline escape hatch
 ```
+
+## Ownership
 
 **Ownership is fixed at construction**, and the two update paths never overlap:
 
