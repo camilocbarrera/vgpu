@@ -89,6 +89,38 @@ function validateMsaaFormat(format: GPUTextureFormat, caps: TargetDeviceCaps): v
   );
 }
 
+/**
+ * **Transient attachments are automatic, not a flag.** No public `transient` option: a transient
+ * attachment cannot be sampled or copied, and a public flag invites exactly that misuse.
+ * `surface()`/`target()` may allocate an internally-managed attachment with `TRANSIENT_ATTACHMENT`
+ * (feature-detected) **only when the attachment satisfies all four conditions at allocation time**:
+ * (1) vgpu allocated it and it is **unreachable through every public accessor** (`.color`,
+ * `.colors`, `.depth`, `read()`, `readFloats()`, and any binding path); (2) it is used
+ * **exclusively** as a render attachment — never sampled, copied, or bound; (3) **every** pass that
+ * can write it uses `storeOp: "discard"` / `depthStoreOp: "discard"`; (4) **no public option can
+ * cause it to be loaded** (`preserve` / `loadOp: "load"` / `depthReadOnly`). The predicate must be
+ * decidable when the texture is created — usage flags are immutable, so "nobody will preserve it
+ * later" is not something the implementation may assume.
+ *
+ * Under this tree's shape the only candidate is the **intermediate multisample color attachment**
+ * (`view: msaa.createView()` below, `storeOp: "discard"` unconditionally; `target-offscreen.ts`'s
+ * `#createMsaaColors()` and `surface.ts`'s `#msaaColor`, both allocated `render_attachment`-only and
+ * exposed by no getter). Conditions 1, 2 and 3 hold for it — **condition 4 does not**: `preserve`
+ * puts `loadOp: "load"` on that very `view` (and `depthLoadOp: "load"` on a multisample depth aspect
+ * in `depthAttachment()` below), i.e. a public option loads an attachment whose `storeOp` was
+ * `"discard"`. That is bug **#323**, which the authoritative design leaves explicitly out of scope
+ * ("this design only prevents the class going forward, through the transient predicate's four
+ * decidable conditions"). So **this tree applies `TRANSIENT_ATTACHMENT` nowhere**: applying it while
+ * `preserve` can still reach the candidate would turn a silent contents bug into native validation
+ * failure or worse, and the design does not require the optimization — contract #22 is negative
+ * ("Applying the flag is **not** a required behavior — the required behavior is that it never
+ * appears on an observable attachment"), and it is verified as such in
+ * `tests/transient-attachment.test.ts`.
+ *
+ * Explicitly **not** transient regardless of #323: a `depth: true` attachment (single-sample OR
+ * multisample) fails condition 1 — `target.depth` is public and allocated `texture_binding` — and a
+ * target's `.color`/`.colors` and a surface's canvas texture fail conditions 1 and 2.
+ */
 export function colorAttachment(resolved: { createView(): GPUTextureView }, msaa: { createView(): GPUTextureView } | undefined, clear: ClearColor, preserve?: boolean): GPURenderPassColorAttachment {
   const attachment: GPURenderPassColorAttachment = {
     view: (msaa ?? resolved).createView(),
