@@ -316,18 +316,16 @@ async function createScene(gpu: Gpu, output: Output, label: string): Promise<Sce
     vertices: 3,
     depth: { write: false, compare: 'always' },
     label: `${label}-background`,
+    bindings: { env_tex: env, env_samp: envSampler },
   });
-  background.set({ env_tex: env, env_samp: envSampler });
 
-  const floor = draw(gpu, { shader: floorWgsl, geometry: floorGeometry, cull: 'none', label: `${label}-floor` });
-  floor.set({ env_tex: env, env_samp: envSampler });
+  const floor = draw(gpu, { shader: floorWgsl, geometry: floorGeometry, cull: 'none', label: `${label}-floor`, bindings: { env_tex: env, env_samp: envSampler } });
 
   const backface = draw(gpu, { shader: backfaceWgsl, geometry: cubeGeometry, cull: 'front', label: `${label}-backface` });
-  const glass = draw(gpu, { shader: glassWgsl, geometry: cubeGeometry, cull: 'back', label: `${label}-glass` });
-  glass.set({ env_tex: env, env_samp: envSampler });
+  const glass = draw(gpu, { shader: glassWgsl, geometry: cubeGeometry, cull: 'back', label: `${label}-glass`, bindings: { env_tex: env, env_samp: envSampler } });
 
   const present = effect(gpu, { shader: presentWgsl, label: `${label}-present` });
-  present.set({ present: { exposure: EXPOSURE } });
+  present.set("present", { exposure: EXPOSURE });
 
   const blurs: BlurPair[] = [];
   for (let level = 1; level < SCENE_LEVELS; level++) {
@@ -374,7 +372,7 @@ async function bakeEnvironment(gpu: Gpu, samplerState: GPUSampler, label: string
   });
 
   const sky = effect(gpu, { shader: skyWgsl, label: `${label}-sky` });
-  sky.set({ sky: SKY });
+  sky.set("sky", SKY);
   const blur = effect(gpu, { shader: blurWgsl, label: `${label}-env-blur` });
 
   let source = target(gpu, { size: [...ENV_SIZE], format: HDR_FORMAT, label: `${label}-env-level0` });
@@ -477,46 +475,38 @@ function renderScene(gpu: Gpu, scene: Scene, output: Output, view: CameraView, c
   const model = modelMatrix();
   const doubleRefraction = controls.refraction === 'double';
 
-  scene.background.set({
-    scene_camera: {
-      position: view.position,
-      tan_half_fov: view.tanHalfFov,
-      forward: view.forward,
-      aspect: view.aspect,
-      right: view.right,
-      texel_angle: TEXEL_ANGLE,
-      up: view.up,
-      intensity: 1,
-      env_size: ENV_SIZE,
-    },
+  scene.background.set("scene_camera", {
+    position: view.position,
+    tan_half_fov: view.tanHalfFov,
+    forward: view.forward,
+    aspect: view.aspect,
+    right: view.right,
+    texel_angle: TEXEL_ANGLE,
+    up: view.up,
+    intensity: 1,
+    env_size: ENV_SIZE,
   });
-  scene.floor.set({
-    floor_uniforms: {
-      ...FLOOR,
-      view_projection: view.camera.viewProjection,
-      model: translationMatrix(0, FLOOR_HEIGHT, 0),
-      camera_position: view.position,
-    },
+  scene.floor.set("floor_uniforms", {
+    ...FLOOR,
+    view_projection: view.camera.viewProjection,
+    model: translationMatrix(0, FLOOR_HEIGHT, 0),
+    camera_position: view.position,
   });
-  scene.backface.set({
-    backface: {
-      view_projection: view.camera.viewProjection,
-      model,
-      camera_position: view.position,
-    },
+  scene.backface.set("backface", {
+    view_projection: view.camera.viewProjection,
+    model,
+    camera_position: view.position,
   });
-  scene.glass.set({
-    glass: {
-      ...GLASS,
-      view_projection: view.camera.viewProjection,
-      model,
-      camera_position: view.position,
-      ior: controls.ior,
-      roughness: controls.roughness,
-      dispersion: controls.dispersion ? 1 : 0,
-      refraction_mode: doubleRefraction ? 1 : 0,
-      scene_levels: targets.levels,
-    },
+  scene.glass.set("glass", {
+    ...GLASS,
+    view_projection: view.camera.viewProjection,
+    model,
+    camera_position: view.position,
+    ior: controls.ior,
+    roughness: controls.roughness,
+    dispersion: controls.dispersion ? 1 : 0,
+    refraction_mode: doubleRefraction ? 1 : 0,
+    scene_levels: targets.levels,
   });
 
   frame(gpu, (currentFrame) => {

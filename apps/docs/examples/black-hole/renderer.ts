@@ -135,7 +135,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     const gpuClock = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !effects || !targets || !canvasSurface || !input) return;
-      effects.scene.set({ params: { pointer: input.update(), time: gpuClock.time } });
+      effects.scene.set("params", { pointer: input.update(), time: gpuClock.time });
       renderChain(currentFrame, effects, targets, canvasSurface);
     });
   };
@@ -232,7 +232,7 @@ function destroyTarget(colorTarget: Target | undefined): void {
 }
 
 function setConstants(effects: Effects): void {
-  effects.scene.set({ params: { pointer: [0, 0.05], time: 0, motion: 1 } });
+  effects.scene.set("params", { pointer: [0, 0.05], time: 0, motion: 1 });
   effects.brightPass.set({ samp: effects.sampler, bright: { threshold: 1, knee: 0.6 } });
   effects.blurH1.set({ samp: effects.sampler, blur: { direction: [1, 0], radius: 1 } });
   effects.blurV1.set({ samp: effects.sampler, blur: { direction: [0, 1], radius: 1 } });
@@ -242,7 +242,7 @@ function setConstants(effects: Effects): void {
 }
 
 function setBindings(effects: Effects, targets: Targets, output: Output): void {
-  effects.scene.set({ params: { resolution: targets.scene.size } });
+  effects.scene.set("params", { resolution: targets.scene.size });
   effects.brightPass.set({ src: targets.scene });
   effects.blurH1.set({ src: targets.bloomA, blur: { texelSize: targets.bloomA.texelSize } });
   effects.blurV1.set({ src: targets.bloomB, blur: { texelSize: targets.bloomB.texelSize } });
@@ -272,7 +272,7 @@ function renderChain(currentFrame: Frame, effects: Effects, targets: Targets, ou
 }
 
 function renderAt(gpu: Gpu, effects: Effects, targets: Targets, output: Target, time: number, pointer: Orbit): void {
-  effects.scene.set({ params: { pointer, time } });
+  effects.scene.set("params", { pointer, time });
   frame(gpu, (currentFrame) => renderChain(currentFrame, effects, targets, output));
 }
 

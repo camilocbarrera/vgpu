@@ -87,13 +87,13 @@ export async function prepareFluid(fluid: Fluid, output: Output): Promise<void> 
     _pad0: 0,
     _pad1: [0, 0],
   };
-  fluid.passes.advectVelocity.set({ grid });
-  fluid.passes.curl.set({ grid });
-  fluid.passes.vorticity.set({ grid });
-  fluid.passes.divergence.set({ grid });
-  fluid.passes.pressure.set({ grid });
-  fluid.passes.project.set({ grid });
-  fluid.passes.advectDye.set({ grid });
+  fluid.passes.advectVelocity.set("grid", grid);
+  fluid.passes.curl.set("grid", grid);
+  fluid.passes.vorticity.set("grid", grid);
+  fluid.passes.divergence.set("grid", grid);
+  fluid.passes.pressure.set("grid", grid);
+  fluid.passes.project.set("grid", grid);
+  fluid.passes.advectDye.set("grid", grid);
 
   const config = { dye_size: [DYE_WIDTH, DYE_HEIGHT], output_size: output.size };
   fluid.passes.display[0].set({ config, dye: fluid.dye.read });

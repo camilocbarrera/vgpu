@@ -82,7 +82,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     const gpuClock = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !canvasSurface) return;
-      shader.set({ uniforms: { time: gpuClock.time, resolution: canvasSurface.size } });
+      shader.set("uniforms", { time: gpuClock.time, resolution: canvasSurface.size });
       currentFrame.pass({ target: canvasSurface }, (pass) => pass.draw(shader));
     });
   };
@@ -112,11 +112,9 @@ export async function renderThumbnail(
 ): Promise<void> {
   try {
     const shader = effect(gpu, fragment);
-    shader.set({
-      uniforms: {
-        time: options.time ?? Math.PI / 4,
-        resolution: target.size,
-      },
+    shader.set("uniforms", {
+      time: options.time ?? Math.PI / 4,
+      resolution: target.size,
     });
     frame(gpu, (currentFrame) => currentFrame.pass({ target }, (pass) => pass.draw(shader)));
   } finally {

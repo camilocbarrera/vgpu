@@ -128,8 +128,8 @@ export function createLightSourcesRaw(
         renderBlackOccluder,
         sanitizedClipInset,
       );
-      lightSourcesDraw.set({ cfg: uniformData });
-      ledEmittersDraw.set({ cfg: uniformData });
+      lightSourcesDraw.set("cfg", uniformData);
+      ledEmittersDraw.set("cfg", uniformData);
       const bakeKey = `${renderBlackOccluder ? 1 : 0}:${sanitizedClipInset}`;
 
       if (bakeKey !== lastBakeKey) {

@@ -12,7 +12,7 @@ export async function renderGradientHeadless() {
   const gpu = await init();
   const colorTarget = target(gpu, { size: [8, 8], format: "rgba8unorm" });
   const p = effect(gpu, { shader: GRADIENT, label: "gradient" });
-  p.set({ time: 1.25, speed: 1 });
+  p.set("params", { time: 1.25, speed: 1 });
   p.draw({ target: colorTarget });
   return { gpu, target: colorTarget };
 }

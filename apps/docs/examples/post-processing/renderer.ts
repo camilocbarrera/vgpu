@@ -97,7 +97,7 @@ async function prewarm(effects: EffectChain, targets: ChainTargets, output: Surf
 }
 
 function setChainConstants(effects: EffectChain): void {
-  effects.scene.set({ _pad: 0 });
+  effects.scene.set("uniforms", { _pad: 0 });
   effects.threshold.set({ threshold: 0.82, knee: 0.045, linear_samp: effects.sampler });
   effects.blurH.set({ direction: [1, 0], linear_samp: effects.sampler });
   effects.blurV.set({ direction: [0, 1], linear_samp: effects.sampler });
@@ -113,7 +113,7 @@ function setChainConstants(effects: EffectChain): void {
 function setChainBindings(effects: EffectChain, targets: ChainTargets, output: Surface | Target): void {
   const sceneSize = targets.scene.size;
   const blurSize = targets.blurA.size;
-  effects.scene.set({ resolution: sceneSize });
+  effects.scene.set("uniforms", { resolution: sceneSize });
   effects.threshold.set({ resolution: blurSize, scene_tex: targets.scene });
   effects.blurH.set({ resolution: blurSize, source_tex: targets.bright });
   effects.blurV.set({ resolution: blurSize, source_tex: targets.blurA });
@@ -134,7 +134,7 @@ function renderChain(
   output: Surface | Target,
   time: number,
 ): void {
-  effects.scene.set({ time });
+  effects.scene.set("uniforms", { time });
   currentFrame.pass({ target: targets.scene, clear: SCENE_CLEAR }, (pass) => pass.draw(effects.scene));
   // Extraction stays encoded while bloom is off so the final pass keeps stable bindings.
   currentFrame.pass({ target: targets.bright, clear: [0, 0, 0, 1] }, (pass) => pass.draw(effects.threshold));

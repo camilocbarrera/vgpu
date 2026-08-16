@@ -44,7 +44,7 @@ async function createScene(gpu: Gpu, colorTarget: Target, n: number): Promise<Sc
     ],
   });
   const drawable = draw(gpu, { shader: sceneWgsl, geometry: geo, label: `instanced-cubes-${n}` });
-  drawable.set({ light: [-0.45, -0.75, -0.35] });
+  drawable.set("uniforms", { light: [-0.45, -0.75, -0.35] });
   try {
     await drawable.compile(colorTarget);
     const recorded = bundle(gpu, { target: colorTarget, label: `instanced-cubes-${n}` }, (b) => b.draw(drawable));
