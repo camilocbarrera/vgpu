@@ -3,8 +3,7 @@ import { InternalDraw, drawUsesBlendConstant, drawUsesStencilReference, encodeDr
 import { InternalEffect, effectDraw, type Effect } from "./effect.ts";
 import type { CompileTarget, Target, TargetSignature } from "./target.ts";
 import { normalizeSignature, signatureKeyOf, validateTargetSignature } from "./pipeline-store.ts";
-import { bundleBlendConstantError, bundleDisposedError, bundleStencilReferenceError, compileFailedError, pipelinePendingError, surfaceNotInFrameError, VGPUError } from "./errors.ts";
-import { isFrameActive, isSurface } from "./surface.ts";
+import { bundleBlendConstantError, bundleDisposedError, bundleStencilReferenceError, compileFailedError, pipelinePendingError, VGPUError } from "./errors.ts";
 import { FRAME_BUNDLE, type FrameBundleProtocol } from "./frame-protocols.ts";
 import { assertDeviceUsable } from "./lifecycle.ts";
 import { liveKernel } from "./live-kernel.ts";
@@ -140,7 +139,6 @@ let recordingDepth = 0;
 /** Records explicit WebGPU render bundles and keeps the R3 stale signature checked at replay time. */
 export function createBundle(host: BundleHost, opts: BundleOptions, record: (recorder: BundleRecorder) => void): Bundle {
   const id = opts.label ?? `bundle${nextBundleId++}`;
-  if (isSurface(opts.target) && !isFrameActive()) throw surfaceNotInFrameError("bundle");
   const signature = normalizeBundleSignature(opts.target);
   const bundle = new RecordedBundle(host, id, signature);
   bundle.track(record);

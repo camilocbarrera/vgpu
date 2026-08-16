@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
-import { init, bundle, effect, frame, target } from "../src/mock.ts";
+import { init, bundle, effect, frame, prepare, surface, target } from "../src/mock.ts";
+import type { Frame } from "../src/mock.ts";
 
 const SOLID = `
 @fragment fn main(@location(0) uv: vec2f) -> @location(0) vec4f {
@@ -121,5 +122,71 @@ test("the first sync replay of a cold bundle uses the sync pipeline path and rep
       detail: { signature: "rgba8unorm:none:1" },
     }),
   ]);
+  gpu.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// Contract #8 / §4 — recording a bundle needs only formats, never `getCurrentTexture()`, so it is
+// legal outside `frame()`, exactly like `prepare()`.
+// ---------------------------------------------------------------------------
+
+function bundleTestCanvas(ledger?: { currentTextures: number }): HTMLCanvasElement {
+  const canvas: Record<string, unknown> = { width: 4, height: 4 };
+  canvas.getContext = (kind: string) => kind === "webgpu" ? {
+    configure: () => undefined,
+    unconfigure: () => undefined,
+    getCurrentTexture: () => { if (ledger) ledger.currentTextures += 1; return { createView: () => ({}) }; },
+  } : null;
+  return canvas as HTMLCanvasElement;
+}
+
+test("bundle(gpu, { target: surface }, ...) outside frame() is legal, exactly like prepare()", async () => {
+  const gpu = await init();
+  const ledger = { currentTextures: 0 };
+  const canvasSurface = surface(gpu, bundleTestCanvas(ledger));
+  const shader = effect(gpu, SOLID, { label: "outOfFrameFx" });
+
+  let recorded: ReturnType<typeof bundle> | undefined;
+  expect(() => { recorded = bundle(gpu, { target: canvasSurface, label: "outOfFrameBundle" }, (b) => b.draw(shader)); }).not.toThrow();
+  expect(recorded!.status).toBe("pending-pipelines");
+
+  // `prepare()` materializes it — still without ever opening a frame.
+  await prepare(gpu, [{ bundle: recorded! }]);
+  expect(recorded!.status).toBe("ready");
+  // The clause is literal about the REASON this is legal — "needs only formats, never
+  // `getCurrentTexture()`". Without this the whole path could be re-implemented on the presentation
+  // texture and every assertion above would still pass (mutation-verified).
+  expect(ledger.currentTextures).toBe(0);
+  gpu.dispose();
+});
+
+test("Frame.pass() over a surface, called through an escaped Frame after its callback already submitted, still throws VGPU-SURFACE-NOT-IN-FRAME", async () => {
+  const gpu = await init();
+  const canvasSurface = surface(gpu, bundleTestCanvas());
+  const shader = effect(gpu, SOLID, { label: "escapedFramePassFx" });
+  let escaped: Frame | undefined;
+
+  frame(gpu, (f) => {
+    escaped = f;
+    f.pass(canvasSurface, (p) => p.draw(shader));
+  });
+
+  expect(() => escaped!.pass(canvasSurface, (p) => p.draw(shader))).toThrowError(
+    expect.objectContaining({ code: "VGPU-SURFACE-NOT-IN-FRAME" }),
+  );
+  gpu.dispose();
+});
+
+test("bundle(gpu, { target: disposedSurface }, ...) still throws — VGPU-SURFACE-DISPOSED, not the removed frame guard", async () => {
+  const gpu = await init();
+  const canvasSurface = surface(gpu, bundleTestCanvas());
+  const shader = effect(gpu, SOLID, { label: "disposedSurfaceFx" });
+  canvasSurface.dispose();
+
+  // `normalizeSignature()` reads `surface.pipelineSignature`, whose getter asserts liveness before
+  // returning anything — a disposed surface never reaches (or needs) the frame-activity guard.
+  expect(() => bundle(gpu, { target: canvasSurface, label: "disposedSurfaceBundle" }, (b) => b.draw(shader))).toThrowError(
+    expect.objectContaining({ code: "VGPU-SURFACE-DISPOSED" }),
+  );
   gpu.dispose();
 });
