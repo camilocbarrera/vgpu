@@ -28,11 +28,21 @@ prepare-insertion, is semi-automated and uses the same primitives for its automa
   `start`) are fine.
 - **`lib/glob-corpus.mjs`** — `getCorpusFiles(repoRoot)` enumerates the real corpus files this
   train's codemods operate on: `apps/docs/examples/**/*.ts(x)`, `apps/docs/components/hero/**/*.ts`,
-  `apps/docs/app/**/*.ts(x)` (filtered to the ones that actually import `vgpu`), and
-  `examples/**/src/**/*.ts`. Explicitly excludes `**/*.generated.*`, `**/dist/**`,
-  `**/node_modules/**`, and `apps/docs/generated/**` (derived content, regenerates itself — see
-  T04-20). Each codemod imports this list and filters it further by its own pattern of interest;
-  none of them re-derive the corpus independently.
+  `apps/docs/app/**/*.ts(x)` (filtered to the ones that actually import `vgpu`),
+  `examples/**/src/**/*.ts`, `packages/*/tests/**/*.ts(x)`, and `experiments/**/*.ts`. The last two
+  zones exist because T04-16/T04-17 both cite incidental usage inside `packages/vgpu-api/tests/**`
+  and `experiments/ort-init-device/shared/pipeline.ts` as part of their verified counts — without
+  them, ~35–60% of those tickets' target sites are invisible here even though the report still
+  *looks* complete (an adversarial QA pass caught this before push; see
+  `lib/glob-corpus.test.ts`'s two coverage tests). Explicitly excludes `**/*.generated.*`,
+  `**/dist/**`, `**/node_modules/**`, and `apps/docs/generated/**` (derived content, regenerates
+  itself — see T04-20). Each codemod imports this list and filters it further by its own pattern of
+  interest; none of them re-derive the corpus independently. Which files inside
+  `packages/*/tests/**` are the legacy-form SUBJECT of a test (must stay on the old signature) vs.
+  incidental usage (must migrate) is each downstream codemod's own classification job — this
+  module only guarantees the file is visible.
+  **Known limitation:** this is built on `git ls-files`, so it only sees *tracked* files — a new
+  example file not yet `git add`ed is silently invisible until staged.
 - **`lib/report.mjs`** — the standard `--dry-run` contract: `isDryRun(argv)`, `reportEntry(...)` /
   `formatReport(entries)` / `printReport(entries)` for the `{file, line, before, after,
   classification}` JSON report, and `writeUnlessDryRun({dryRun, file, text})` as the single choke
@@ -82,3 +92,24 @@ printReport(report);
 ```bash
 pnpm vitest run scripts/codemods
 ```
+
+### Mutation-testing note (post adversarial-QA pass)
+
+A pre-push adversarial QA pass mutation-tested `token-scan.mjs` (10 hand-written mutants) and
+`splice.mjs` (12 mutants) against this test suite. After the fixes and test cases added in that
+pass, **19/22 mutants are killed**. The 3 that survive are genuine *equivalent mutants* — verified
+by hand (see the git history of this file / the QA report for the repro) to produce byte-identical
+output to the un-mutated code for every reachable, valid input, not gaps in test coverage:
+
+- **`S-sort-by-end`** (`splice.mjs` sorts by `end` instead of `start`): for any *valid* (accepted,
+  non-overlapping, non-duplicate) edit set, start-order and end-order are provably the same
+  ordering — two disjoint ranges `[s1,e1)` and `[s2,e2)` with `s1 < s2` always also have `e1 <= s2`,
+  so `e1 <= e2`. The only place the two orderings could differ is a tie on `start`, and the
+  tie-break (`|| a.end - b.end`) sorts by `end` too — so this mutant is indistinguishable from the
+  real code on any input `applyEdits` actually accepts.
+- **`T-setParentNodes-false`** / **`T-target-ES5`** (`token-scan.mjs`'s `ts.createSourceFile` call):
+  neither `setParentNodes` nor `ts.ScriptTarget` changes which offsets `ts.isIdentifier`/`this`
+  nodes start at for any construct this module's call sites exercise (decorators, generics,
+  destructuring, JSDoc, optional chaining, BigInt, numeric separators, private fields — all
+  probed by hand with zero observed divergence); both flags affect binding/type-checking and emit
+  respectively, not this module's plain syntax walk.

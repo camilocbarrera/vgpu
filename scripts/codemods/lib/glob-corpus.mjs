@@ -17,6 +17,16 @@ const CORPUS_GLOBS = [
   "apps/docs/examples/**/*.tsx",
   "apps/docs/components/hero/**/*.ts",
   "examples/**/src/**/*.ts",
+  // packages/*/tests/** and experiments/** carry real, migratable call sites too (T04-16/17
+  // explicitly enumerate incidental usage inside `packages/vgpu-api/tests/**` and
+  // `experiments/ort-init-device/shared/pipeline.ts` as part of their verified counts) —
+  // without these, getCorpusFiles() silently hides ~35-60% of the sites those two codemods must
+  // touch. Which files inside `packages/*/tests/**` are the legacy-form SUBJECT of a test (must
+  // stay on the old signature) vs incidental usage (must migrate) is each codemod's own
+  // classification job — this module's only job is to make sure the file is visible at all.
+  "packages/*/tests/**/*.ts",
+  "packages/*/tests/**/*.tsx",
+  "experiments/**/*.ts",
 ];
 
 // `apps/docs/app/**/*.ts(x)` is scanned separately: only files that actually import `vgpu` belong
@@ -32,6 +42,10 @@ const DOCS_GENERATED_RE = /^apps\/docs\/generated\//u;
 
 const VGPU_IMPORT_RE = /\bfrom\s+["']vgpu(?:\/(?:node|mock|scene|core|client))?["']|\brequire\(\s*["']vgpu/u;
 
+// LIMITATION (documented, not fixed — this is `git ls-files`'s contract, not a bug here): this
+// only sees TRACKED files. A brand-new example file created mid-branch and not yet `git add`ed is
+// invisible to getCorpusFiles() until it is staged, with no warning. A codemod run should
+// `git add -A` (or otherwise stage) new corpus files before running the harness against them.
 function gitLsFiles(repoRoot, globs) {
   const args = ["ls-files", "--", ...globs.map((g) => `:(glob)${g}`)];
   const out = execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" });

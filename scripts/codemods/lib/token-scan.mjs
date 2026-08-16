@@ -41,3 +41,20 @@ export function tokenStarts(text, fileName = "source.ts") {
 export function isRealTokenStart(text, fileName, offset) {
   return tokenStarts(text, fileName).has(offset);
 }
+
+/**
+ * Returns the number of TS parse-time syntax errors found while parsing `text` as `fileName`.
+ *
+ * `tokenStarts`/`isRealTokenStart` never throw on unparseable input or a wrong-extension guess
+ * (JSX inside a `.ts` file, a Markdown file mistakenly parsed as TS, a truncated file, invalid
+ * UTF — the TS compiler's error recovery is very forgiving) — they silently return whatever
+ * PARTIAL set of real token offsets the recovered tree happens to contain, which typically
+ * under-counts real sites rather than over-counting them. A codemod driving a corpus of
+ * heterogeneous, possibly-mislabeled files should check this is `0` for each file before
+ * trusting `tokenStarts`'s output for it, and fail loudly (skip + report, not skip + stay
+ * silent) otherwise.
+ */
+export function parseDiagnosticsCount(text, fileName = "source.ts") {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.ESNext, true, scriptKindFor(fileName));
+  return source.parseDiagnostics.length;
+}

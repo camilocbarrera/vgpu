@@ -76,3 +76,44 @@ test("does not mutate the input string reference-wise (pure function)", () => {
   applyEdits(text, [{ start: 0, end: 1, replacement: "H" }]);
   expect(text).toBe(copy);
 });
+
+// --- adversarial QA pre-push additions (T04-15) ----------------------------------------------
+// A codemod's `replacement` is frequently built from an optional regex capture group / AST node
+// that is absent on some call shape — these pin that such a bug throws loudly instead of writing
+// the literal text "undefined"/a coerced number into the file.
+
+test('throws instead of writing the literal text "undefined" for a missing replacement', () => {
+  expect(() => applyEdits("abcdef", [{ start: 0, end: 3, replacement: undefined }])).toThrow(
+    /replacement/,
+  );
+});
+
+test("throws instead of silently coercing a non-string replacement (e.g. a number)", () => {
+  expect(() => applyEdits("abcdef", [{ start: 0, end: 3, replacement: 42 }])).toThrow(
+    /replacement/,
+  );
+});
+
+test("throws on a null edit entry instead of crashing with an opaque TypeError", () => {
+  expect(() => applyEdits("abc", [null])).toThrow(/replacement/);
+});
+
+// A total, deterministic sort order (start, then end) matters most for insertion-heavy codemods
+// (T04-19's prepare-insertion): several edits routinely share the same `start`.
+
+test("same-start edits (a zero-length insertion + a same-start replacement) apply deterministically, regardless of input order", () => {
+  const text = "0123456789";
+  const insert = { start: 5, end: 5, replacement: "INS" };
+  const replace = { start: 5, end: 8, replacement: "REPL" };
+  const expected = "01234INSREPL89";
+  expect(applyEdits(text, [insert, replace])).toBe(expected);
+  expect(applyEdits(text, [replace, insert])).toBe(expected);
+});
+
+test("throws on duplicate edit ranges instead of silently picking whichever happened to sort first", () => {
+  const edits = [
+    { start: 1, end: 1, replacement: "A" },
+    { start: 1, end: 1, replacement: "B" },
+  ];
+  expect(() => applyEdits("xy", edits)).toThrow(/duplicate/);
+});

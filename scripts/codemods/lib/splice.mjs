@@ -12,17 +12,34 @@
  * @param {string} text - the original source text. Never mutated.
  * @param {{start: number, end: number, replacement: string}[]} edits - offsets into `text`.
  *   `start`/`end` are absolute offsets against the ORIGINAL `text`, not against any
- *   intermediate/partial result.
+ *   intermediate/partial result. `replacement` must be a string.
  * @returns {string} the text with all edits applied.
- * @throws if any two edits overlap, or if an edit's range is invalid — fail fast, never silently
- *   corrupt the output by applying an inconsistent set of edits.
+ * @throws if `replacement` is missing/not a string, if any edit's range is invalid, if two edits
+ *   have the exact same range (ambiguous — which replacement wins?), or if any two edits
+ *   overlap — fail fast, never silently corrupt the output by applying an inconsistent set of
+ *   edits or writing the literal text "undefined".
  */
 export function applyEdits(text, edits) {
   if (edits.length === 0) return text;
 
-  const sorted = [...edits].sort((a, b) => a.start - b.start);
+  // Sort by `start` primarily, but give ties (same `start`) a TOTAL, deterministic order by
+  // `end` — a plain `sort((a, b) => a.start - b.start)` only promises to preserve whatever order
+  // the caller happened to pass same-start edits in (stable sort, not a total order over the
+  // edits themselves). That made the result of applying the exact same edit *set* depend on
+  // array order — e.g. a zero-length insertion and a same-start replacement would throw the
+  // "overlapping edits" error in one order and apply cleanly in the other. Insertion-heavy
+  // codemods (T04-19's prepare-insertion) hit same-start edits routinely.
+  const sorted = [...edits].sort((a, b) => a.start - b.start || a.end - b.end);
 
   for (const edit of sorted) {
+    if (edit == null || typeof edit.replacement !== "string") {
+      throw new Error(
+        `splice: edit.replacement must be a string, got ${JSON.stringify(edit)} — a codemod ` +
+          `whose replacement is built from an optional capture group/AST node must not let it ` +
+          `reach applyEdits() as undefined (it would otherwise be written into the file as the ` +
+          `literal text "undefined").`,
+      );
+    }
     if (
       !Number.isInteger(edit.start)
       || !Number.isInteger(edit.end)
@@ -39,6 +56,11 @@ export function applyEdits(text, edits) {
   for (let i = 1; i < sorted.length; i++) {
     const prev = sorted[i - 1];
     const cur = sorted[i];
+    if (cur.start === prev.start && cur.end === prev.end) {
+      throw new Error(
+        `splice: duplicate edit range [${cur.start}, ${cur.end}) — ambiguous result order`,
+      );
+    }
     // Adjacent edits (prev.end === cur.start) are fine — they do not overlap, they abut.
     if (cur.start < prev.end) {
       throw new Error(
