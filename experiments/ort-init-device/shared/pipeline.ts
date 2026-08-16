@@ -34,7 +34,7 @@ export async function runPipeline(gpu: Gpu, raw: GPUBuffer, mode: Mode): Promise
     try {
       const consumer = compute(gpu, { shader: WGSL, label: `ort-${mode}-consumer` });
       consumer.set({ source, destination });
-      consumer.dispatch(1);
+      await consumer.dispatchOnce(1);
       lifecycle.push("consumer-submitted");
       await gpu.device.queue.flush();
       lifecycle.push("queue-flushed");
