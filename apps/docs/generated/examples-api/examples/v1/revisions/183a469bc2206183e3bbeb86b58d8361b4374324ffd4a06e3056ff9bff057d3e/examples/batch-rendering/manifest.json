@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "contractId": "vgpu-examples/v1",
+  "revision": "183a469bc2206183e3bbeb86b58d8361b4374324ffd4a06e3056ff9bff057d3e",
+  "id": "batch-rendering",
+  "title": "Batch Rendering",
+  "description": "Four primitive ranges in one mesh, recorded once as a render bundle.",
+  "tags": [
+    "batch-rendering",
+    "render-bundles",
+    "instancing"
+  ],
+  "capabilities": [
+    "webgpu",
+    "render-bundles",
+    "offscreen-rendering",
+    "resize"
+  ],
+  "aggregateSha256": "cf1ee3484bf21b1f28faf0eb0281ad82596567f42f45fabc0da1f3c495fcb5cd",
+  "files": [
+    {
+      "path": "index.tsx",
+      "contentType": "text/typescript",
+      "size": 817,
+      "sha256": "29257f24de5a94d5e50757e5f42602f8c5064e187db97027f134cb51d69d8c48",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/183a469bc2206183e3bbeb86b58d8361b4374324ffd4a06e3056ff9bff057d3e/examples/batch-rendering/files/index.tsx.raw"
+    },
+    {
+      "path": "renderer.ts",
+      "contentType": "text/typescript",
+      "size": 12171,
+      "sha256": "19ac6bf5f7b8f9889bd8d283442f4ce25ced5157fa84567ec624d7d76d68d12e",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/183a469bc2206183e3bbeb86b58d8361b4374324ffd4a06e3056ff9bff057d3e/examples/batch-rendering/files/renderer.ts.raw"
+    },
+    {
+      "path": "scene.wgsl",
+      "contentType": "text/wgsl",
+      "size": 1063,
+      "sha256": "2ae3dbff1e389856aeece491d8de4f9de7dc8eccbb72781430c3f59ef1043d17",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/183a469bc2206183e3bbeb86b58d8361b4374324ffd4a06e3056ff9bff057d3e/examples/batch-rendering/files/scene.wgsl.raw"
+    },
+    {
+      "path": "blit.wgsl",
+      "contentType": "text/wgsl",
+      "size": 348,
+      "sha256": "1d6957358650364304515e7deb8728bf20186482b84dcd361e5525b60c0c6566",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/183a469bc2206183e3bbeb86b58d8361b4374324ffd4a06e3056ff9bff057d3e/examples/batch-rendering/files/blit.wgsl.raw"
+    }
+  ]
+}
