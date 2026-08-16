@@ -38,9 +38,9 @@ export interface InitOptions {
    * a `(renderable, target signature)` combination whose pipeline is not ready yet. The policy is
    * resolved call site → frame → here.
    *
-   * Omitted, it resolves to {@link DEFAULT_PENDING_PIPELINES} — `"sync"` during the 0.4 train
-   * (T04-05, index invariant 2), which is the eager-compile behavior every existing program already
-   * relies on. The frozen design's `"throw"` default lands in the cut wave, with the codemods.
+   * Omitted, it resolves to {@link DEFAULT_PENDING_PIPELINES} — `"throw"`: an encode that meets an
+   * unready combination names it and points at `prepare()` instead of stalling on an inline
+   * `createRenderPipeline`. Pass `"sync"` here for the (permanent, explicit) eager-compile opt-in.
    */
   readonly pendingPipelines?: PendingPipelines;
 }
@@ -113,7 +113,7 @@ export interface Kernel {
   readonly disposed: boolean;
   /**
    * Gpu-wide `pendingPipelines` default resolved at `init()`; the last link of the
-   * call site → frame → gpu chain. `"sync"` unless `init({ pendingPipelines })` said otherwise.
+   * call site → frame → gpu chain. `"throw"` unless `init({ pendingPipelines })` said otherwise.
    */
   pendingPipelinesDefault(): PendingPipelines;
   /**

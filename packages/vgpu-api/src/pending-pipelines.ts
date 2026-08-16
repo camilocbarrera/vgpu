@@ -20,13 +20,26 @@
 export type PendingPipelines = "throw" | "skip" | "sync";
 
 /**
- * Effective default of the whole train (T04-05, index invariant 2): **`"sync"`, not `"throw"`**.
+ * The default of the library: **`"throw"`** (AC #3 of the frozen design, satisfied in value and no
+ * longer only in mechanism).
  *
- * The frozen design (AC #3) mandates `"throw"` as the final default, and this branch implements the
- * complete mechanism — three values, full call site → frame → gpu resolution chain. What it does
- * NOT do is flip the default: zero call sites have migrated to `prepare()` yet, so `"throw"` would
- * break every existing program at once. `"sync"` is exactly the eager-compile behavior the corpus
- * has today, which keeps this wave purely additive. The flip to `"throw"` belongs to the cut wave,
- * together with the codemods that migrate the call sites.
+ * It is uniform — same value in the browser, in node, and over the mock adapter, with no dev/prod
+ * divergence and no migration flag — because the alternative is the bug this whole design exists to
+ * remove: a synchronous encode that silently stalls the frame on `createRenderPipeline` in
+ * development and only shows up as a hitch on someone else's machine. Under `"throw"` an encode
+ * that meets an unready combination does not start compilation and does not stall; it names the
+ * combination and points at `prepare()`.
+ *
+ * Why it is safe *now*, where it was not during the additive phase (T04-05 shipped the mechanism
+ * with a temporary `"sync"` default, index invariant 2): every encode site of the corpus reaches
+ * its first frame through `prepare()` — `examples/*` and `apps/docs/examples/*` were migrated by
+ * T04-19 and the last re-record inside a synchronous frame callback
+ * (`triangle-led-front/light-sources-raw.ts`) was hoisted behind a readiness gate by this ticket.
+ * `packages/vgpu-api/tests/prepare-corpus-throw.test.ts` executes that claim against the shipped
+ * example modules instead of asserting it.
+ *
+ * `"sync"` did not disappear: it is a permanent, explicit opt-in (`init({ pendingPipelines:
+ * "sync" })`, `frame(gpu, cb, { pendingPipelines: "sync" })`, or per call site), for code that
+ * genuinely prefers a stall to a throw. It just stopped being what you get by accident.
  */
-export const DEFAULT_PENDING_PIPELINES: PendingPipelines = "sync";
+export const DEFAULT_PENDING_PIPELINES: PendingPipelines = "throw";
