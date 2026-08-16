@@ -168,8 +168,10 @@ test("cats getting-started guide from forgiving guide names", () => {
 });
 
 test("greps content with case and package options", () => {
-  expect(success(["docs", "grep", "uniforms(gpu"])).toContain("uniforms(gpu");
-  expect(runCli(["docs", "grep", "UNIFORMS(GPU"]).code).toBe(1);
+  // `uniform(gpu` (singular) is the 0.4 spelling the corpus documents; the uppercase probe keeps
+  // asserting that grep is case-sensitive by default.
+  expect(success(["docs", "grep", "uniform(gpu"])).toContain("uniform(gpu");
+  expect(runCli(["docs", "grep", "UNIFORM(GPU"]).code).toBe(1);
   const filtered = success(["docs", "grep", "-i", "--package", "@vgpu/wgsl", "MINIFY"]);
   expect(filtered).toContain("/@vgpu/wgsl/");
 });

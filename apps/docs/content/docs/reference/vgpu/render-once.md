@@ -1,0 +1,88 @@
+---
+title: "renderOnce"
+description: "`await renderOnce(gpu, target, body)` renders once, standalone: it awaits async pipeline readiness for every draw the body records, then creates **its own** command encoder and render pass, encodes the draws and submits **exactly once**. It is the render half of the one-shot paths; `compute.dispatchOnce()` is the compute half."
+---
+
+## Import
+
+```ts
+import { renderOnce } from "vgpu";
+import type { RenderOncePass } from "vgpu";
+```
+
+## Signature
+
+```ts
+import type { Draw, DrawCallOptions, Effect, Gpu, RenderDestination } from "vgpu";
+
+interface RenderOncePass {
+  draw(drawable: Draw | Effect, opts?: DrawCallOptions): void;
+}
+
+declare function renderOnce(gpu: Gpu, target: RenderDestination, body: (pass: RenderOncePass) => void): Promise<void>;
+```
+
+## Parameters
+
+| Param | Type | Required | Default | Notes |
+|---|---|---:|---|---|
+| gpu | `Gpu` | ✔ | — | The context that owns the target and the drawables. |
+| target | `RenderDestination` | ✔ | — | A `Surface` or an offscreen `Target`. |
+| body | `(pass: RenderOncePass) => void` | ✔ | — | **Synchronous**, and it only *records* which draws to encode: nothing native is touched while it runs. It must not retain the pass — a `p.draw()` after the body returns is an error. |
+| p.draw.drawable | `Draw \| Effect` | ✔ | — | The same `Draw \| Effect` union `FramePass.draw()` and `prepare({ draw })` take. |
+| p.draw.opts | `DrawCallOptions` | ✖ | `{}` | Per-draw counts, offsets and `indirect`. The `pendingPipelines` policy does not apply here: one-shot helpers always take their async readiness path. |
+
+**Returns:** `Promise<void>`, resolved after pipeline readiness **and submission** — never after GPU completion. Waiting for completion is explicit and separate: `await gpu.settled()`.
+
+**Throws:** `VGPU-TARGET-REQUIRED` without a destination; `VGPU-RING1-UNSUPPORTED` when the body records a draw after returning; `VGPU-PREPARE-FAILED` when a required pipeline cannot compile; `VGPU-SURFACE-DISPOSED` / `VGPU-DEVICE-LOST` / `VGPU-GPU-DISPOSED` from the usual lifecycle guards; plus the binding errors of the draws it encodes (`VGPU-R1-BINDING-NEVER-SET`, `VGPU-R1-EXTERNAL-BINDING`, …).
+
+## Examples
+
+```ts
+import { init, effect, renderOnce, target } from "vgpu/mock";
+
+const gpu = await init();
+const screen = target(gpu, { size: [64, 64] });
+const quad = effect(gpu, `@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f { return vec4f(uv, 0, 1); }`);
+
+// Standalone render: async readiness, own encoder, exactly one submit. No prepare() needed.
+await renderOnce(gpu, screen, (p) => p.draw(quad));
+
+const pixels = await screen.read();
+console.log(pixels.length);
+```
+
+```ts
+import { init, compute, draw, frame, prepare, renderOnce, storage, target } from "vgpu/mock";
+
+const gpu = await init();
+const screen = target(gpu, { size: [64, 64] });
+const buffer = storage(gpu, 256);
+const seed = compute(gpu, {
+  shader: `
+    @group(0) @binding(0) var<storage, read_write> data: array<f32>;
+    @compute @workgroup_size(1) fn cs_main(@builtin(global_invocation_id) id: vec3u) { data[id.x] = 1.0; }
+  `,
+  bindings: { data: buffer },
+});
+const result = draw(gpu, { shader: `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }` });
+
+// One-shot initialization work, outside any frame:
+await seed.dispatchOnce(64);
+await renderOnce(gpu, screen, (p) => p.draw(result));
+
+// Work that must share ordering and ONE submission goes in a frame instead:
+await prepare(gpu, [{ compute: seed }, { draw: result, target: screen }]);
+frame(gpu, (f) => {
+  f.compute(seed, 64);
+  f.pass(screen, (p) => p.draw(result));
+});
+```
+
+## Notes
+
+- **One-shot helpers are for standalone work**: initialization, preprocessing, snapshots, tests, headless rendering. They own their encoder and submit independently, so they are *not* the API for work that belongs inside a frame — that is `f.pass()` / `f.compute()`, which keep program order and the frame's single submit.
+- Both one-shot helpers resolve after readiness + submit and **never** await `onSubmittedWorkDone`. Use `await gpu.settled()` when you need GPU completion (it also flushes pending `gpu.onError` deliveries).
+- The `pendingPipelines` chain governs **synchronous** encode contexts only. `renderOnce()` / `dispatchOnce()` always use the async pipeline-creation path, so they never throw `VGPU-PIPELINE-PENDING` and never stall on a synchronous compile. An already-prepared combination is reused without compiling anything.
+- `RenderOncePass` is deliberately smaller than `FramePass`: no `bundles()`, no `occlusion()`. Those belong to a frame pass, where their per-frame bookkeeping lives.
+- **See also:** `prepare`, `Compute` (`dispatchOnce`), `Frame`, `Draw`, `Effect`, `Target`, `Surface`.

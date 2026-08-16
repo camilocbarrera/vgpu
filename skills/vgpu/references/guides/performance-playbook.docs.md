@@ -22,29 +22,31 @@ const staticScene = bundle(gpu, { target: scene }, (b) => {
   b.draw(floor);
   b.draw(walls);
 });
+await prepare(gpu, [{ bundle: staticScene }, { draw: player, target: scene }]);
 frameLoop(gpu, (f) => f.pass({ target: scene }, (p) => {
   p.bundles(staticScene);
   p.draw(player);
 }));
 ```
-Default: bundle static work once and replay with `p.bundles(...)`.
+Default: bundle static work once, `prepare()` it, and replay with `p.bundles(...)`. Recording compiles nothing (the bundle is born `"pending-pipelines"`); `prepare(gpu, [{ bundle }])` compiles the missing pipelines and encodes the native bundle. Byte updates keep it `"ready"`; an identity swap moves it to `"stale"`, which `prepare()` re-encodes from the retained recording.
 
-## 2. Pipeline pre-warm (`compile`)
+## 2. Pipeline pre-warm (`prepare`)
 
-Use before the first visible frame or route transition. This compiles render pipelines for the target color/depth/MSAA signature before the hitch-sensitive frame.
+Use before the first visible frame or route transition — and in fact always: under the default `pendingPipelines: "throw"` a synchronous encode never compiles implicitly, so an unprepared combination throws `VGPU-PIPELINE-PENDING` instead of hitching. Readiness belongs to the **combination** `(renderable, target signature)`, so one prepared target says nothing about another.
 
 Before:
 ```text
 const cube = draw(gpu, { shader: LIT_WGSL, geometry: geometry(gpu, box()) });
+frame(gpu, (f) => f.pass({ target: scene }, (p) => p.draw(cube))); // VGPU-PIPELINE-PENDING
 ```
 After:
 ```text
-const scene = target(gpu, { size: [256, 256], format: "rgba16float", depth: true, msaa: true });
+const scene = target(gpu, { size: [256, 256], format: "rgba16float", depth: true, sampleCount: 4 });
 const cube = draw(gpu, { shader: LIT_WGSL, geometry: geometry(gpu, box()) });
-await cube.compile(scene);
+await prepare(gpu, [{ draw: cube, target: scene }]);
 frame(gpu, (f) => f.pass({ target: scene }, (p) => p.draw(cube)));
 ```
-Default: `await draw.compile(target)` for every target signature a draw will hit before the hitch-sensitive frame. `targets: [target]` remains synchronous creation-time sugar when blocking is acceptable.
+Default: `await prepare(gpu, [{ draw, target }])` for every combination a frame will encode — plus `{ compute }` for kernels and `{ bundle }` for bundles. It is idempotent, free on an already-warm combination, and it rejects with `VGPU-PREPARE-FAILED` listing every failure. There is no per-object `compile()` / `compileSync()` / `pipelineFor()` and no `targets: [...]` precompile list; inline compilation is reachable only as the explicit `pendingPipelines: "sync"` opt-in, where the stall is visible at the call site.
 
 ## 3. Manual group claim + dynamic offsets (`draw.group`)
 
@@ -53,7 +55,7 @@ Use for hundreds or thousands of objects that share one shader and one bind-grou
 Before:
 ```text
 for (const obj of objects) {
-  cube.set({ model: obj.model });
+  cube.set("model", { model: obj.model }); // one buffer write per object, every frame
   p.draw(cube);
 }
 ```
@@ -88,26 +90,29 @@ Default: for many per-object uniforms, allocate a `UniformPool` slot with an `en
 
 ## 4. `set()` in-place
 
-Use for animated JS values. The first `set()` latches ownership: plain JS values are lib-owned and update in place; resources are user-owned and keep their identity.
+Use for animated JS values. Ownership is fixed **at construction**: bindings in `values` (or declared in the WGSL and listed in neither bag) are instance-owned and written with `.set(binding, value)`; bindings in `bindings` are external, swapped with `.bind(binding, resource)` and updated on the resource itself. `.set()` writes bytes and never rebuilds a bind group, so bundles stay `"ready"`.
 
 Before:
 ```text
-const wave = effect(gpu, WAVE_WGSL, { set: { time: 0, speed: 2 } });
+const wave = effect(gpu, { shader: WAVE_WGSL, values: { params: { time: 0, speed: 2 } } });
 frameLoop(gpu, (frame) => {
-  wave.set({ time: clock(gpu).time, speed: 2 });
+  wave.set("params", { time: clock(gpu).time, speed: 2 }); // re-writes `speed` every frame
   frame.pass(target, wave);
 });
 ```
 After:
 ```text
-const wave = effect(gpu, WAVE_WGSL, { set: { time: 0, speed: 2 } });
+const wave = effect(gpu, { shader: WAVE_WGSL, values: { params: { time: 0, speed: 2 } } });
 frameLoop(gpu, (frame) => {
-  wave.set({ time: clock(gpu).time });
+  wave.set("params", { time: clock(gpu).time });  // partial: `speed` keeps its value
   frame.pass(target, wave);
 });
 ```
-Default: create once; update changing numbers/vectors/structs with `set()`. `set()` performs no equality check — a value written every frame is uploaded
-every frame, so hoist static and resize-class values out of the render loop.
+Default: create once; update the binding that changed with `.set(binding, value)`. A struct takes a
+partial and N fields collapse into **one** buffer write. `set()` performs no equality check — a value
+written every frame is uploaded every frame, so hoist static and resize-class values out of the render
+loop. Never `.set()` an external binding: that throws `VGPU-R1-EXTERNAL-BINDING` and names the
+resource to update instead.
 
 ## 5. Bake static inputs once
 
@@ -116,18 +121,26 @@ Use when a heavy pass produces a texture that does not change every frame.
 Before:
 ```text
 frameLoop(gpu, (f) => {
-  f.pass({ target: baked }, (p) => p.draw(heavyScene));
-  post.set({ src: baked.color, texel: baked.texelSize });
+  f.pass({ target: baked }, (p) => p.draw(heavyScene));  // re-rendered every frame
+  post.set("params", { texel: baked.texelSize });
   f.pass({ target: screen }, (p) => p.draw(post));
 });
 ```
 After:
 ```text
-frame(gpu, (f) => f.pass({ target: baked }, (p) => p.draw(heavyScene)));
-post.set({ src: baked.color, texel: baked.texelSize });
+const post = effect(gpu, {
+  shader: POST_WGSL,
+  values:   { params: { texel: baked.texelSize } },  // instance-owned → .set()
+  bindings: { src: baked },                          // bind the TARGET, not baked.color
+});
+await prepare(gpu, [{ draw: heavyScene, target: baked }, { draw: post, target: screen }]);
+
+frame(gpu, (f) => f.pass({ target: baked }, (p) => p.draw(heavyScene)));  // bake once
 frameLoop(gpu, (f) => f.pass({ target: screen }, (p) => p.draw(post)));
 ```
-Default: if an input is static, bake it outside the loop with one `frame(gpu, ...)`.
+Default: if an input is static, bake it outside the loop with one `frame(gpu, ...)`. Bind the `Target`
+rather than `target.color`: a target re-binds its new texture identity when it is recreated on resize,
+while a `Texture` snapshot goes **silently** stale.
 
 ## 6. Instancing (`instances`, `vertices`)
 
@@ -136,44 +149,51 @@ Use for N copies of the same geometry. `DrawOptions.instances/vertices/firstInst
 Before:
 ```text
 for (let i = 0; i < COUNT; i++) {
-  particles.set({ particleIndex: i });
+  particles.set("params", { particleIndex: i });
   p.draw(particles);
 }
 ```
 After:
 ```text
-const particles = draw(gpu, { shader: PARTICLE_WGSL, instances: COUNT, vertices: 6 });
-await particles.compile(scene);
-particles.set({ particleBuffer });
+const particles = draw(gpu, {
+  shader: PARTICLE_WGSL,
+  instances: COUNT,
+  vertices: 6,
+  bindings: { particleBuffer },      // external storage buffer, identity fixed here
+});
+await prepare(gpu, [{ draw: particles, target: scene }]);
 frameLoop(gpu, (f) => f.pass({ target: scene }, (p) => p.draw(particles)));
 ```
 Default: one draw with `instances` beats N draw calls.
 
-## 7. `uniforms(gpu)` shared values
+## 7. `uniform(gpu)` shared values
 
 Use when many shaders consume the same time, camera, mouse, or exposure values.
 
 Before:
 ```text
 const time = clock(gpu);
-wave.set({ time: time.time, mouse });
-blur.set({ time: time.time, mouse });
-post.set({ time: time.time, mouse });
+wave.set("globals", { time: time.time, mouse });   // three instances, three writes
+blur.set("globals", { time: time.time, mouse });
+post.set("globals", { time: time.time, mouse });
 ```
 After:
 ```text
-const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
-const wave = effect(gpu, WAVE_WGSL, { set: { globals } });
-const blur = effect(gpu, BLUR_WGSL, { set: { globals } });
+const globals = uniform(gpu, { time: 0, mouse: [0, 0] });
+const wave = effect(gpu, { shader: WAVE_WGSL, bindings: { globals } });
+const blur = effect(gpu, { shader: BLUR_WGSL, bindings: { globals } });
+await prepare(gpu, [{ draw: wave, target }, { draw: blur, target }]);
 frameLoop(gpu, (frame) => {
-  globals.set({ time: clock(gpu).time, mouse });
+  globals.set({ time: clock(gpu).time, mouse });   // ONE write, every pipeline sees it
   frame.pass(target, (pass) => {
     pass.draw(wave);
     pass.draw(blur);
   });
 });
 ```
-Default: shared values belong in one `uniforms(gpu)` object.
+Default: shared values belong in one `uniform(gpu, …)` object, declared in `bindings` and updated on
+the resource. Its storage is zero-initialized, and `uniform()` keeps a one-argument `.set()` because
+the receiver *is* the binding — the plural `uniforms()` is a legacy alias of the same factory.
 
 ## 8. Ping-pong (`pingPong`) without churn + two bundles
 
@@ -182,8 +202,8 @@ Use for iterative effects. Ping-pong keeps two stable identities, so bind-group 
 Before:
 ```text
 frameLoop(gpu, (f) => {
-  const tmp = target(gpu, { size: [256, 256], format: "rgba16float" });
-  sim.set({ src: previous.color });
+  const tmp = target(gpu, { size: [256, 256], format: "rgba16float" });  // new identity every frame
+  sim.bind("src", previous);
   f.pass({ target: tmp }, (p) => p.draw(sim));
   previous = tmp;
 });
@@ -191,10 +211,14 @@ frameLoop(gpu, (f) => {
 After:
 ```text
 const state = pingPong(gpu, 512, 512, { format: "rgba16float" });
-const even = bundle(gpu, { target: state.write }, (b) => { sim.set({ src: state.read.color }); b.draw(sim); });
+const sim = effect(gpu, { shader: SIM_WGSL, bindings: { src: state.read } });
+const even = bundle(gpu, { target: state.write }, (b) => b.draw(sim));
 state.swap();
-const odd = bundle(gpu, { target: state.write }, (b) => { sim.set({ src: state.read.color }); b.draw(sim); });
+sim.bind("src", state.read);
+const odd = bundle(gpu, { target: state.write }, (b) => b.draw(sim));
 state.swap();
+sim.bind("src", state.read);
+await prepare(gpu, [{ bundle: even }, { bundle: odd }]);
 let parity = 0;
 frameLoop(gpu, (f) => {
   f.pass({ target: state.write }, (p) => p.bundles(parity === 0 ? even : odd));
@@ -202,11 +226,14 @@ frameLoop(gpu, (f) => {
   parity ^= 1;
 });
 ```
-Default: create ping-pong resources once; if you bundle, record both parity cases and replay the matching one.
+Default: create ping-pong resources once and `.bind()` the swapped halves — two stable identities, so
+bind-group caches reuse them. If you bundle, record both parity cases, `prepare()` both, and replay the
+matching one. Recording captures the identity current at record time, so each parity bundle keeps its
+own; re-`prepare()` a bundle only when it reports `"stale"`.
 
 ## 9. MSAA/depth in the target
 
-Use for 3D anti-aliasing and depth testing. Resolution, depth, color format, and sample count are target state.
+Use for 3D anti-aliasing and depth testing. Resolution, depth, color format, and sample count are target state — and the last three **are** the pipeline signature. `sampleCount` is the one spelling for multisampling, on both `target()` and `surface()`.
 
 Before:
 ```text
@@ -215,12 +242,12 @@ const cube = draw(gpu, { shader: LIT_WGSL, geometry: geometry(gpu, box()) });
 ```
 After:
 ```text
-const scene = target(gpu, { size: [256, 256], format: "rgba16float", depth: true, msaa: true });
+const scene = target(gpu, { size: [256, 256], format: "rgba16float", depth: true, sampleCount: 4 });
 const cube = draw(gpu, { shader: LIT_WGSL, geometry: geometry(gpu, box()) });
-await cube.compile(scene);
+await prepare(gpu, [{ draw: cube, target: scene }]);
 frameLoop(gpu, (f) => f.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(cube)));
 ```
-Default: put depth/MSAA on the target; do not invent global render settings.
+Default: put depth and `sampleCount` on the target (or the surface — `surface(gpu, canvas, { depth: true, sampleCount: 4 })` owns its own attachments); do not invent global render settings. A resize that preserves color format, depth format and sample count invalidates no prepared pipeline and leaves bundles `"ready"`; changing any of the three does.
 
 ## 10. Back-face culling (`cull: "back"`)
 
@@ -251,6 +278,11 @@ After:
 ```text
 const vis = visibility(gpu);
 const qStatue = vis.query("statue");
+await prepare(gpu, [
+  { draw: world, target: scene },
+  { draw: statueProxy, target: scene },
+  { draw: statue, target: scene },
+]);
 frameLoop(gpu, (f) => {
   f.pass({ target: scene, visibility: vis }, (p) => {
     p.draw(world); // occluders first
@@ -273,10 +305,17 @@ p.draw(particles, { instances: decodeCount(data) });
 After:
 ```text
 const args = storage(gpu, 16, { indirect: true });
-emit.dispatch(Math.ceil(COUNT / 64)); // compute writes the draw arguments into `args`
-frameLoop(gpu, (f) => f.pass({ target: scene }, (p) => p.draw(particles, { indirect: args })));
+await prepare(gpu, [{ compute: emit }, { draw: particles, target: scene }]);
+frameLoop(gpu, (f) => {
+  f.compute(emit, Math.ceil(COUNT / 64));  // compute writes the draw arguments into `args`…
+  f.pass({ target: scene }, (p) => p.draw(particles, { indirect: args })); // …same encoder, same submit
+});
 ```
-Default: counts produced on the GPU stay on the GPU. The same option shape drives compute: `sim.dispatch({ indirect: args })`.
+Default: counts produced on the GPU stay on the GPU. Put the producing dispatch in the **same frame**
+as the consuming draw — `f.compute()` shares the frame's encoder, so program order is execution order
+and no second submit is needed. For standalone one-shot work outside a frame there is
+`await emit.dispatchOnce(n)`, which owns its encoder and awaits pipeline readiness on its own. The same
+option shape drives compute: `await sim.dispatchOnce({ indirect: args })`.
 
 ## 13. Time passes before optimizing (`timer()`)
 
@@ -291,8 +330,9 @@ const ms = performance.now() - t0; // encode + submit time, not GPU cost
 After:
 ```text
 const gpu = await init({ requiredFeatures: ["timestamp-query"] });
-const timer = timer(gpu);
-timer.onResults((spans) => console.log(`main ${spans.main}ms`));
-frameLoop(gpu, (f) => f.pass({ target: scene, timer: timer.span("main") }, (p) => p.draw(world)));
+const spans = timer(gpu);
+spans.onResults((results) => console.log(`main ${results.main}ms`));
+await prepare(gpu, [{ draw: world, target: scene }]);
+frameLoop(gpu, (f) => f.pass({ target: scene, timer: spans.span("main") }, (p) => p.draw(world)));
 ```
 Default: attach `timer.span(name)` to each pass you plan to touch and optimize the worst milliseconds first. Open `measuring` for what else to measure.

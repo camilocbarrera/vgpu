@@ -17,27 +17,32 @@ order: 60
 
 # Frames
 
-A frame is one unit of GPU work. Inside it you open passes, each drawing into a target you choose, and draw the effects you created earlier. When the callback returns, vgpu encodes everything into one command encoder and submits it once.
+A frame is one unit of GPU work. Inside it you open passes, dispatch compute, copy buffers and reach the raw encoder if you need to — all into **one** command encoder, in program order. When the callback returns, vgpu submits it **once**.
+
+Frame callbacks are **synchronous**: the type rejects an `async` callback, because a frame borrows its encoder for exactly the extent of the callback. Do the async work — asset loading, `await prepare(gpu, …)` — before entering the frame.
 
 ## Render a single frame
 
 [`frame(gpu)`](/reference/vgpu/frame#framerunner) runs synchronously and renders immediately — every pass inside is encoded into one command encoder and submitted once. That single submit is what the frame is for:
 
 ```ts
-import { init, effect, frame, sampler, surface, target } from "vgpu";
+import { init, effect, frame, prepare, sampler, surface, target } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
 const canvasTarget = surface(gpu, canvas);
-const pulseEffect = effect(gpu, `
-  struct Params { time: f32 }
-  @group(0) @binding(0) var<uniform> params: Params;
+const pulseEffect = effect(gpu, {
+  shader: `
+    struct Params { time: f32 }
+    @group(0) @binding(0) var<uniform> params: Params;
 
-  @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-    return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
-  }
-`, { set: { params: { time: 0 } } });
-const postEffect = effect(gpu, `
+    @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+      return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
+    }
+  `,
+  values: { params: { time: 0 } },
+});
+const postSource = `
   @group(0) @binding(0) var src: texture_2d<f32>;
   @group(0) @binding(1) var samp: sampler;
 
@@ -45,24 +50,39 @@ const postEffect = effect(gpu, `
     let base = textureSampleLevel(src, samp, uv, 0.0);
     return vec4f(1.0 - base.rgb, 1.0);
   }
-`);
+`;
 
 // ---cut---
 const sceneTarget = target(gpu, { size: [canvasTarget.size[0], canvasTarget.size[1]] });
-postEffect.set({
-  src: sceneTarget,
-  samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
+const post = effect(gpu, {
+  shader: postSource,
+  bindings: {
+    src: sceneTarget,                                            // bind the Target, not its texture
+    samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
+  },
 });
+
+await prepare(gpu, [
+  { draw: pulseEffect, target: sceneTarget },
+  { draw: post, target: canvasTarget },
+]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass(sceneTarget, pulseEffect);
-  currentFrame.pass(canvasTarget, postEffect);
+  currentFrame.pass(canvasTarget, post);
 }); // two passes, one encoder, one submit
 ```
 
-One-shot draws like `pulseEffect.draw(canvasTarget)` are the simple default for a single pass. Multi-pass hot paths should use `frame(gpu)` to batch passes into one command encoder and one submit. One-shot draws never join a surrounding frame; inside `frame(gpu)`, always go through `frame.pass()`.
+A frame is also where compute belongs when its output is read in the same frame: `f.compute(kernel, n)`
+encodes into the *same* encoder as the passes around it, so program order is execution order and no
+second submit is needed. `f.copyBuffer({ source, destination })` and `f.raw((encoder) => …)` share
+that encoder too — all three are legal only **between** managed passes; inside an open `f.pass()`
+they throw `VGPU-FRAME-ENCODER-LOCKED`, exactly like WebGPU's own locked-encoder rule.
 
-> Warning: one-shot `draw()` calls do not join a surrounding frame — inside a frame callback they submit on their own immediately. Inside `frame(gpu)`, always draw through `frame.pass()`.
+For standalone work outside any frame there are the one-shot helpers —
+`await renderOnce(gpu, target, cb)` and `await kernel.dispatchOnce(n)` — which own their encoder,
+submit once, and await pipeline readiness on their own. They never join a surrounding frame, so do
+not reach for them inside one.
 
 > Warning: Do not call `frame(gpu)` from inside another frame callback or from a surface resize callback. vgpu throws `VGPU-FRAME-REENTRANT` so command encoders stay ordered and predictable.
 
@@ -71,24 +91,29 @@ One-shot draws like `pulseEffect.draw(canvasTarget)` are the simple default for 
 For animation, use [`frameLoop(gpu)`](/reference/vgpu/frame#framerunner) — it runs your frame every tick:
 
 ```ts
-import { clock, init, effect, frameLoop, surface } from "vgpu";
+import { clock, init, effect, frameLoop, prepare, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
 const canvasTarget = surface(gpu, canvas);
-const pulseEffect = effect(gpu, `
-  struct Params { time: f32 }
-  @group(0) @binding(0) var<uniform> params: Params;
+const pulseEffect = effect(gpu, {
+  shader: `
+    struct Params { time: f32 }
+    @group(0) @binding(0) var<uniform> params: Params;
 
-  @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-    return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
-  }
-`, { set: { params: { time: 0 } } });
+    @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+      return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
+    }
+  `,
+  values: { params: { time: 0 } },
+});
 
 // ---cut---
+await prepare(gpu, [{ draw: pulseEffect, target: canvasTarget }]); // before the loop, not inside it
+
 const time = clock(gpu);
 const handle = frameLoop(gpu, (frame) => {
-  pulseEffect.set({ params: { time: time.time } }); // update uniforms every tick
+  pulseEffect.set("params", { time: time.time }); // binding-scoped write, every tick
   frame.pass(canvasTarget, pulseEffect);
 }, { fps: 30 });
 
@@ -100,29 +125,39 @@ The loop advances the frame clock — `clock(gpu).time`, `deltaTime` and `frameC
 This is what the same loop looks like by hand with `requestAnimationFrame`:
 
 ```ts
-import { init, effect, surface } from "vgpu";
+import { frame, init, effect, prepare, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
 const canvasTarget = surface(gpu, canvas);
-const pulseEffect = effect(gpu, `
-  struct Params { time: f32 }
-  @group(0) @binding(0) var<uniform> params: Params;
+const pulseEffect = effect(gpu, {
+  shader: `
+    struct Params { time: f32 }
+    @group(0) @binding(0) var<uniform> params: Params;
 
-  @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-    return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
-  }
-`, { set: { params: { time: 0 } } });
+    @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+      return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
+    }
+  `,
+  values: { params: { time: 0 } },
+});
 
 // ---cut---
+await prepare(gpu, [{ draw: pulseEffect, target: canvasTarget }]);
+
 function tick() {
-  pulseEffect.set({ params: { time: performance.now() / 1000 } }); // you own the clock now
-  pulseEffect.draw(canvasTarget);
-  requestAnimationFrame(tick); // and the scheduling
+  pulseEffect.set("params", { time: performance.now() / 1000 }); // you own the clock now
+  frame(gpu, (f) => f.pass(canvasTarget, pulseEffect));           // one explicit frame per tick
+  requestAnimationFrame(tick);                                     // and the scheduling
 }
 requestAnimationFrame(tick);
 ```
 
-Both work. `frameLoop(gpu)` is the same loop with the clock, throttling, and resize handling done for you.
+Both work, and neither is a fallback: **`frame(gpu, cb)` per tick is the primitive** — most real
+applications hand the loop to an animation engine or a host framework — while `frameLoop(gpu)` is
+convenience sugar for self-contained demos, with the clock, throttling and resize handling done for
+you. When an external ticker owns the loop, advance the clock yourself with
+`clock(gpu).advance(deltaSeconds)`; see
+[Driving vgpu with an external ticker](/guides/external-ticker).
 
 See it live: the [fluid example](/examples/fluid) runs a compute-driven simulation with exactly this frame loop shape.

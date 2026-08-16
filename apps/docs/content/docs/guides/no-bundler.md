@@ -60,7 +60,7 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
 import { resolveShader } from "@vgpu/wgsl/runtime";
-import { effect, init, target } from "vgpu/node";
+import { effect, init, renderOnce, target } from "vgpu/node";
 
 const resolved = await resolveShader({
   entry: fileURLToPath(new URL("./shader.wgsl", import.meta.url)),
@@ -70,8 +70,8 @@ const width = 160;
 const height = 90;
 const gpu = await init();
 const colorTarget = target(gpu, { size: [width, height] });
-const shader = effect(gpu, resolved.wgsl, { set: { params: { time: 0 } } });
-shader.draw(colorTarget);
+const shader = effect(gpu, { shader: resolved.wgsl, values: { params: { time: 0 } } });
+await renderOnce(gpu, colorTarget, (p) => p.draw(shader));   // awaits pipeline readiness, one submit
 
 const pixels = await colorTarget.read();   // RGBA bytes — assert on them
 const png = new PNG({ width, height });
@@ -80,7 +80,7 @@ writeFileSync("frame.png", PNG.sync.write(png));
 gpu.dispose();                              // stops Dawn's polling so the process exits
 ```
 
-Nothing about this changes when the shader grows: `resolveShader()` inlines the whole import graph, so `effect()` still sees one string. Animating? Call `shader.set({ params: { time } })` and draw again in a loop, reading the target after each draw.
+Nothing about this changes when the shader grows: `resolveShader()` inlines the whole import graph, so `effect()` still sees one string. Animating? Call `shader.set("params", { time })` and render again in a loop, reading the target after each render. `renderOnce()` takes the async readiness path itself, so no `prepare()` is needed here; inside a `frame(gpu, cb)` loop you would `await prepare(gpu, [{ draw: shader, target: colorTarget }])` once, before the loop.
 
 Rendering an actual 3D scene rather than a fullscreen effect? See [Two-pass rendering](two-pass-rendering.docs.md) for the offscreen-depth-target recipe — it composes with this same no-bundler setup.
 
