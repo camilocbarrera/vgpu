@@ -11,13 +11,18 @@ import type { Surface, SurfaceOptions, SurfaceResizeEvent } from "vgpu";
 ## Signature
 
 ```ts
-import type { Target } from "vgpu";
+import type { ClearColor, RenderDestination } from "vgpu";
 
 interface SurfaceOptions {
   readonly autoResize?: boolean;
+  readonly clearColor?: ClearColor;
   readonly dpr?: number | readonly [number, number];
   readonly size?: readonly [number, number];
   readonly format?: GPUTextureFormat;
+  /** NEW in 0.4: the surface owns its depth attachment. `true` resolves to `depth24plus`. */
+  readonly depth?: boolean | GPUTextureFormat;
+  /** NEW in 0.4: multisampling. `sampleCount` is the one spelling (no `msaa`). */
+  readonly sampleCount?: 1 | 4;
   readonly alphaMode?: GPUCanvasAlphaMode;
   readonly colorSpace?: PredefinedColorSpace;
   readonly label?: string;
@@ -30,7 +35,9 @@ interface SurfaceResizeEvent {
   readonly surface: Surface;
 }
 
-interface Surface extends Target {
+// A Surface is a RenderDestination, NOT a Target: it has no `.color`/`.colors`/`.depth` accessors
+// and is not usable as a texture binding (VGPU-SURFACE-NOT-BINDABLE).
+interface Surface extends RenderDestination {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   readonly context: GPUCanvasContext;
   readonly autoResize: boolean;
@@ -51,7 +58,9 @@ interface Surface extends Target {
 | opts.autoResize | `boolean` | ✖ | `true` for layout-backed canvases, `false` when `size` is provided or when the canvas has no numeric `clientWidth` | Auto-resize is checked at the frame boundary before user frame callbacks. Explicit `true` on buffer-only canvases throws. |
 | opts.dpr | `number \| readonly [number, number]` | ✖ | `globalThis.devicePixelRatio ?? 1` | Number fixes DPR. Tuple clamps runtime DPR to `[min, max]`; layout-backed surfaces re-read DPR each frame. |
 | opts.size | `readonly [number, number]` | ✖ | Layout-backed: `clientWidth/clientHeight × dpr`; buffer-only: existing `canvas.width/height` | Physical pixel size. When provided, initial canvas buffer is set and `autoResize` defaults to `false`. |
-| opts.format | `GPUTextureFormat` | ✖ | `navigator.gpu.getPreferredCanvasFormat() ?? "bgra8unorm"` | Canvas swapchain format. |
+| opts.format | `GPUTextureFormat` | ✖ | `navigator.gpu.getPreferredCanvasFormat() ?? "bgra8unorm"` | Canvas swapchain format. Part of the pipeline signature. |
+| opts.depth | `boolean \| GPUTextureFormat` | ✖ | `undefined` (color-only) | The surface owns an internal depth attachment and recreates it on resize/auto-resize. `true` resolves through the same `depthFormatFor` rule `target()` uses → `depth24plus`; a format string selects it explicitly (e.g. `"depth24plus-stencil8"` for stencil work). The depth format is part of the pipeline signature: changing it invalidates prepared pipelines. |
+| opts.sampleCount | `1 \| 4` | ✖ | `1` | Multisampling for surface passes: the surface owns the intermediate multisample attachments and resolves them into the presentation texture. `sampleCount` is the **one** spelling for multisampling on both `surface()` and `target()` (WebGPU platform vocabulary); `msaa` is not a second spelling for it. Also part of the pipeline signature. |
 | opts.alphaMode | `GPUCanvasAlphaMode` | ✖ | `"premultiplied"` | Passed to `GPUCanvasContext.configure`. |
 | opts.colorSpace | `PredefinedColorSpace` | ✖ | `"srgb"` | Passed to `GPUCanvasContext.configure`. |
 | opts.clearColor | `ClearColor` | ✖ | `[0, 0, 0, 1]` | Default clear color of this surface, used by passes that clear without naming one. Writable at runtime as `surface.clearColor`; a pass `clear` color still wins for that pass. Four finite numbers, or a `GPUColor` object. |
@@ -65,18 +74,22 @@ interface Surface extends Target {
 
 **Returns:** `surface(gpu)` returns `Surface`; `onResize()` returns an unsubscribe function; `dispose()` returns `void`.
 
-**Throws:** `VGPU-SURFACE-CONTEXT` when `getContext("webgpu")` returns `null`; `VGPU-SURFACE-DUPLICATE` when a live surface already owns the canvas; `VGPU-SURFACE-AUTORESIZE-UNSUPPORTED` for explicit `autoResize: true` on buffer-only canvases; `VGPU-SURFACE-DISPOSED` when using a disposed surface; `VGPU-SURFACE-RESIZE-REENTRANT` when resizing the same surface from its own resize callback; `VGPU-FRAME-REENTRANT` when `frame(gpu)` is called from any `onResize` callback. The immediate `onResize` fire on subscription also counts as being inside an `onResize` callback, so call `frame(gpu)` before subscribing or from code outside the callback.
+**Throws:** `VGPU-SURFACE-NOT-BINDABLE` when a `Surface` is used as a texture binding — in `bindings: { src: surfaceInstance }` or `instance.bind("src", surfaceInstance)`, including through the JavaScript/`unknown` path (structural typing is not the enforcement mechanism); render into a `Target` and bind that, or read back with `surface.read()`; `VGPU-SURFACE-CONTEXT` when `getContext("webgpu")` returns `null`; `VGPU-SURFACE-DUPLICATE` when a live surface already owns the canvas; `VGPU-SURFACE-AUTORESIZE-UNSUPPORTED` for explicit `autoResize: true` on buffer-only canvases; `VGPU-SURFACE-DISPOSED` when using a disposed surface; `VGPU-SURFACE-RESIZE-REENTRANT` when resizing the same surface from its own resize callback; `VGPU-FRAME-REENTRANT` when `frame(gpu)` is called from any `onResize` callback. The immediate `onResize` fire on subscription also counts as being inside an `onResize` callback, so call `frame(gpu)` before subscribing or from code outside the callback.
 
 ## Examples
 
 ```ts
-import { init, effect, frame, surface } from "vgpu";
+import { init, effect, frame, prepare, surface } from "vgpu";
 
 declare const canvas: HTMLCanvasElement;
 
 const gpu = await init();
-const canvasSurface = surface(gpu, canvas, { dpr: [1, 2] });
+const canvasSurface = surface(gpu, canvas, { dpr: [1, 2], depth: true, sampleCount: 4 });
 const wave = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(0.2, 0.6, 1, 1); }`);
+
+// A Surface has a frame-independent pipeline signature — { colors: [format], depth, sampleCount } comes
+// from its CONFIGURATION, not from getCurrentTexture() — so preparing outside frame() is legal.
+await prepare(gpu, [{ draw: wave, target: canvasSurface }]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: canvasSurface }, (pass) => pass.draw(wave));
@@ -84,7 +97,7 @@ frame(gpu, (currentFrame) => {
 ```
 
 ```ts
-import { init, effect, frame, surface, target } from "vgpu/mock";
+import { init, effect, frame, prepare, surface, target } from "vgpu/mock";
 
 const gpu = await init();
 declare const canvas: HTMLCanvasElement;
@@ -92,16 +105,30 @@ const canvasSurface = surface(gpu, canvas);
 
 const bloomSize = (w: number, h: number): [number, number] => [w / 2, h / 2];
 const bloom = target(gpu, { size: bloomSize(canvasSurface.size[0], canvasSurface.size[1]) });
-const brightPass = effect(gpu, `
-  struct Params { resolution: vec2f }
-  @group(0) @binding(0) var<uniform> params: Params;
-  @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }
-`, { set: { params: { resolution: bloom.size } } });
-const composite = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+const brightPass = effect(gpu, {
+  shader: `
+    struct Params { resolution: vec2f }
+    @group(0) @binding(0) var<uniform> params: Params;
+    @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }
+  `,
+  values: { params: { resolution: bloom.size } },   // instance-owned → .set()
+});
+const composite = effect(gpu, {
+  shader: `
+    @group(0) @binding(0) var src: texture_2d<f32>;
+    @fragment fn fs_main() -> @location(0) vec4f { return textureLoad(src, vec2u(0, 0), 0); }
+  `,
+  bindings: { src: bloom },     // bind the TARGET, not bloom.color: resizes re-bind transparently
+});
+
+await prepare(gpu, [
+  { draw: brightPass, target: bloom },
+  { draw: composite, target: canvasSurface },
+]);
 
 canvasSurface.onResize(({ width, height }) => {
   bloom.resize(bloomSize(width, height));
-  brightPass.set({ params: { resolution: bloom.size } });
+  brightPass.set("params", { resolution: bloom.size });   // binding-scoped byte write
 });
 
 frame(gpu, (currentFrame) => {
@@ -111,7 +138,7 @@ frame(gpu, (currentFrame) => {
 ```
 
 ```ts
-import { init, effect, frame, surface } from "vgpu";
+import { init, effect, frame, prepare, surface } from "vgpu";
 
 declare const canvasA: HTMLCanvasElement;
 declare const canvasB: HTMLCanvasElement;
@@ -120,6 +147,9 @@ const gpu = await init();
 const main = surface(gpu, canvasA);
 const preview = surface(gpu, canvasB, { autoResize: false, size: [320, 180] });
 const shader = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+
+// One combination per (renderable, destination): two surfaces are two signatures.
+await prepare(gpu, [{ draw: shader, target: main }, { draw: shader, target: preview }]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: main }, (p) => p.draw(shader));
@@ -146,27 +176,33 @@ canvasSurface.resize([640, 360]);
 ```
 
 ```ts
-import { init, bundle, effect, frame, surface } from "vgpu/mock";
+import { init, bundle, effect, frame, prepare, surface } from "vgpu/mock";
 
 declare const canvas: HTMLCanvasElement;
 
 const gpu = await init();
 const canvasSurface = surface(gpu, canvas);
 const draw = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
-let statics = bundle(gpu, { target: canvasSurface }, (recorded) => recorded.draw(draw));
+// Recording needs only formats — never getCurrentTexture() — so this is legal outside frame().
+const statics = bundle(gpu, { target: canvasSurface }, (recorded) => recorded.draw(draw));
+await prepare(gpu, [{ bundle: statics }]);   // materializes the native GPURenderBundle
 
-// Drawing onto a resized surface keeps the same bundle valid as long as the render signature matches.
+// A resize that preserves color format, depth format and sample count keeps the bundle "ready".
 frame(gpu, (currentFrame) => currentFrame.pass({ target: canvasSurface }, (pass) => pass.bundles(statics)));
 ```
 
 ## Notes
 
-- Use a `Surface` for the swapchain/backbuffer: it is an ephemeral current-frame render target, not a stable reusable or ping-pong intermediate. Use `target(gpu, ...)` for intermediate, reusable, sampleable/readable images; see `Target` for the contrast.
-- A surface pass may be the final presentation pass; do not use a surface as a ping-pong resource. For post-processing, render into a `Target`, then sample it in a draw or effect targeting the surface in the same frame.
+- **`Surface` is a presentation destination; `Target` is a bindable resource.** Both are render destinations — `RenderDestination` is the shared supertype (size, formats, sample count, clear color, resize, render-pass descriptor) and both are accepted by `f.pass()` and by `prepare()` as a target signature. Only a `Target` additionally has **persistent resource identity**: `.color` / `.colors` / `.depth`, usable as a texture binding, auto-healing across resize. `Surface` does **not** extend `Target`, and passing one as a binding fails with `VGPU-SURFACE-NOT-BINDABLE`.
+- The presentation texture is **frame-scoped**: it may change every frame, so a bind group built over it would retain a view of an already-invalid texture, and any bundle recorded over it would be continuously stale. There is no `withSurface()` / current-texture borrowing API, and `f.raw()` is not a second path to it — a borrowed encoder cannot reach it either. Readback stays an explicit copy: `surface.read()` / `surface.readFloats()` (the canvas is configured `COPY_SRC`).
+- A surface pass may be the final presentation pass; do not use a surface as a ping-pong resource. For post-processing, render into a `Target`, then sample **that target** in a draw or effect targeting the surface in the same frame.
+- **A surface's pipeline signature is frame-independent**, derived from its configuration (`{ colors: [format], depth: depthFormatFor(opts.depth), sampleCount }`), not from `getCurrentTexture()`. `prepare(gpu, [{ draw, target: surface }])` and `bundle(gpu, { target: surface }, cb)` outside `frame()` are both legal and are the canonical happy path; only *encoding* needs the current texture. Frame-independent is not lifetime-independent: a disposed surface's signature is not derivable, so reading it throws like every other operation on a disposed object.
+- **Resize invalidation is by signature, not by identity.** A resize that preserves color format, depth format and sample count invalidates no prepared pipeline and leaves bundles `ready`; changing any of those three invalidates the corresponding prepared combinations.
+- `depth` and `sampleCount` on `surface()` are new surface area in 0.4, not a passthrough of `target()`: the surface owns its internal depth/multisample attachments, recreates them on resize, and resolves MSAA into the presentation texture. The internal multisample attachments are never reachable through a public accessor, which is exactly why vgpu may allocate them as transient — an implementation detail with no observable effect.
 - Layout-backed detection is structural: `typeof canvas.clientWidth === "number"`; it does not use `instanceof`.
 - Resize callbacks run in surface creation order at the frame boundary, before the user frame callback.
 - Manual `surface.resize()` fires callbacks synchronously at the call site and works for `OffscreenCanvas`.
 - `surface.read()` returns RGBA bytes. Canvas formats `bgra8unorm` and `bgra8unorm-srgb` are supported and swizzled to RGBA, which matters on platforms where `navigator.gpu.getPreferredCanvasFormat()` returns BGRA.
 - `surface.readFloats()` returns the same pixels decoded to a `Float32Array` of components (`unorm8` canvas formats normalized to `[0, 1]`); it is the readback to use if a surface is ever configured with a float format.
 - A canvas can have only one live surface. Call `surface.dispose()` before creating another one for the same canvas.
-- **See also:** `init`, `surface`, `Target`, `Frame`, `Bundle`.
+- **See also:** `init`, `surface`, `Target`, `prepare`, `Frame`, `Bundle`.

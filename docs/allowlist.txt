@@ -17,6 +17,15 @@ vgpu FramePass packages/vgpu-api/src/frame.docs.md
 vgpu FrameRunner packages/vgpu-api/src/frame.docs.md
 vgpu FramePassOptions packages/vgpu-api/src/frame.docs.md
 vgpu FrameLoopHandle packages/vgpu-api/src/frame.docs.md
+vgpu prepare packages/vgpu-api/src/prepare.docs.md
+vgpu PrepareRequest packages/vgpu-api/src/prepare.docs.md
+vgpu PreparedDraw packages/vgpu-api/src/prepare.docs.md
+vgpu PreparedCompute packages/vgpu-api/src/prepare.docs.md
+vgpu PreparedBundle packages/vgpu-api/src/prepare.docs.md
+vgpu PreparedFor packages/vgpu-api/src/prepare.docs.md
+vgpu PendingPipelines packages/vgpu-api/src/prepare.docs.md
+vgpu renderOnce packages/vgpu-api/src/render-once.docs.md
+vgpu RenderOncePass packages/vgpu-api/src/render-once.docs.md
 vgpu Bundle packages/vgpu-api/src/bundle.docs.md
 vgpu BundleOptions packages/vgpu-api/src/bundle.docs.md
 vgpu BundleRecorder packages/vgpu-api/src/bundle.docs.md
