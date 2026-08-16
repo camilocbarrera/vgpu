@@ -164,7 +164,7 @@ test("compile validates signatures and missing default targets synchronously", a
 test("Effect compile delegates to Draw, fixes gpu getter, and shares the device store", async () => {
   const gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
-  const shader1 = effect(gpu, WGSL, { label: "fx" });
+  const shader1 = effect(gpu, { shader: WGSL, label: "fx" });
   const drawable = draw(gpu, { shader: WGSL, label: "drawFx" });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 

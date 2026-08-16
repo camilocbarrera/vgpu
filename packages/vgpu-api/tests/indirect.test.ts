@@ -167,7 +167,7 @@ test("indirect arguments must fit: 16 bytes for drawIndirect, 20 for drawIndexed
   const geo = geometry(gpu, { buffers: [{ data: new Float32Array([0, 0, 1, 0, 0, 1]), attributes: { position: { format: "float32x2", location: 0 } } }], indices: new Uint16Array([0, 1, 2]) });
   const drawable = draw(gpu, { shader: DRAW_SHADER, label: "too-small" });
   const indexed = draw(gpu, { shader: MESH_SHADER, label: "too-small-indexed", geometry: geo });
-  const sim = compute(gpu, COMPUTE_SHADER, { label: "too-small-sim" });
+  const sim = compute(gpu, { shader: COMPUTE_SHADER, label: "too-small-sim" });
 
   // drawIndirect reads 4 u32s: a 12-byte buffer, or 16 bytes at offset 4, cannot hold them.
   expect(() => drawable.draw({ target: colorTarget, indirect: storage(gpu, 12, { indirect: true }) })).toThrowError(/VGPU-INDIRECT-INVALID|Invalid indirect/);
@@ -216,7 +216,7 @@ test("compute dispatch indirect emits dispatchWorkgroupsIndirect and keeps posit
   const gpu = await init();
   const ops = spyComputePassOps(gpu.device.gpu);
   const args = storage(gpu, 24, { indirect: true });
-  const sim = compute(gpu, COMPUTE_SHADER, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_SHADER, label: "sim" });
 
   sim.dispatch(4);
   sim.dispatch(2, 3, 4);
@@ -235,7 +235,7 @@ test("compute dispatch indirect emits dispatchWorkgroupsIndirect and keeps posit
 
 test("compute indirect validation mirrors the draw rules", async () => {
   const gpu = await init();
-  const sim = compute(gpu, COMPUTE_SHADER, { label: "sim-invalid" });
+  const sim = compute(gpu, { shader: COMPUTE_SHADER, label: "sim-invalid" });
 
   expect(() => sim.dispatch({ indirect: storage(gpu, 12) })).toThrowError(/VGPU-INDIRECT-INVALID|Invalid indirect/);
   expect(() => sim.dispatch({ indirect: { buffer: storage(gpu, 64, { indirect: true }), offset: 6 } })).toThrowError(/VGPU-INDIRECT-INVALID|Invalid indirect/);

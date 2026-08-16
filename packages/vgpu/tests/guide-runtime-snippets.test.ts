@@ -26,20 +26,20 @@ test("corrected playbook and post-processing patterns run against vgpu/mock", as
   const gpu = await init();
   const colorTarget = target(gpu, { size: [64, 64] });
   const output = target(gpu, { size: [64, 64] });
-  const wave = effect(gpu, `
+  const wave = effect(gpu, { shader: `
     struct Params { time: f32, speed: f32 }
     @group(0) @binding(0) var<uniform> params: Params;
     @fragment fn fs_main() -> @location(0) vec4f {
       return vec4f(params.time * 0.0, params.speed * 0.0, 0.0, 1.0);
     }
-  `, { set: { params: { time: 0, speed: 2 } } });
-  const post = effect(gpu, `
+  `, set: { params: { time: 0, speed: 2 } } });
+  const post = effect(gpu, { shader: `
     @group(0) @binding(0) var src: texture_2d<f32>;
     @group(0) @binding(1) var samp: sampler;
     @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
       return textureSampleLevel(src, samp, uv, 0.0);
     }
-  `, { set: {
+  `, set: {
     src: colorTarget,
     samp: sampler(gpu, { minFilter: "linear", magFilter: "linear" }),
   } });
@@ -52,13 +52,13 @@ test("corrected playbook and post-processing patterns run against vgpu/mock", as
 
   const canvasSurface = surface(gpu, createMockCanvas());
   const bloom = target(gpu, { size: [32, 32] });
-  const bright = effect(gpu, `
+  const bright = effect(gpu, { shader: `
     struct Params { resolution: vec2f }
     @group(0) @binding(0) var<uniform> params: Params;
     @fragment fn fs_main() -> @location(0) vec4f {
       return vec4f(params.resolution * 0.0, 0.0, 1.0);
     }
-  `, { set: { params: { resolution: bloom.size } } });
+  `, set: { params: { resolution: bloom.size } } });
   canvasSurface.onResize(({ width, height }) => {
     bloom.resize([width / 2, height / 2]);
     bright.set({ params: { resolution: bloom.size } });

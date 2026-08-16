@@ -108,7 +108,7 @@ function names(ops: readonly EncodeOp[]): string[] {
 test("a compute dispatch and a render pass in the same frame() produce exactly one submit, in program order (contract #1)", async () => {
   gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const drawable = draw(gpu, { shader: RENDER_WGSL, label: "dots" });
   const spy = spyFrameEncoder(gpu.device.gpu);
 
@@ -124,7 +124,7 @@ test("a compute dispatch and a render pass in the same frame() produce exactly o
 test("program order is the encode order, render first (contract #1)", async () => {
   gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const drawable = draw(gpu, { shader: RENDER_WGSL, label: "dots" });
   const spy = spyFrameEncoder(gpu.device.gpu);
 
@@ -139,7 +139,7 @@ test("program order is the encode order, render first (contract #1)", async () =
 
 test("f.compute() dispatches the resolved workgroup counts and never finishes the borrowed encoder", async () => {
   gpu = await init();
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const dispatched: Array<readonly [number, number, number]> = [];
   const createCommandEncoder = gpu.device.gpu.createCommandEncoder.bind(gpu.device.gpu);
   let finishes = 0;
@@ -179,7 +179,7 @@ test("f.compute() dispatches the resolved workgroup counts and never finishes th
 
 test("f.compute() rejects non-integer and negative workgroup counts with the same code as dispatchOnce (contract #17)", async () => {
   gpu = await init();
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const spy = spyFrameEncoder(gpu.device.gpu);
 
   const legacy = await dispatchOnceError(sim);
@@ -274,7 +274,7 @@ test("a thenable-returning frame callback throws VGPU-ASYNC-FRAME-CALLBACK and s
   gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: RENDER_WGSL, label: "dots" });
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const spy = spyFrameEncoder(gpu.device.gpu);
   let escaped: Frame | undefined;
 
@@ -348,7 +348,7 @@ test("f.raw() lends the frame's own encoder between managed passes, keeping one 
   gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: RENDER_WGSL, label: "dots" });
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const scratchSource = storage(gpu, 16);
   const scratchDestination = storage(gpu, 16);
   const spy = spyFrameEncoder(gpu.device.gpu);
@@ -406,7 +406,7 @@ test("f.raw() reentrantly from another f.raw() callback throws VGPU-FRAME-ENCODE
 test("f.compute() and f.copyBuffer() inside a managed pass are rejected the same way (contract #25 boundary)", async () => {
   gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const source = storage(gpu, 16);
   const destination = storage(gpu, 16);
 
@@ -472,7 +472,7 @@ test("a frame with only f.pass() still submits exactly once, unchanged", async (
 
 test("f.compute() compiles inline under the effective \"sync\" default (contract #3)", async () => {
   gpu = await init();
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const spy = spyFrameEncoder(gpu.device.gpu);
 
   frame(gpu, (f) => f.compute(sim, 1));
@@ -485,7 +485,7 @@ test("f.compute() compiles inline under the effective \"sync\" default (contract
 
 test("f.compute() under \"throw\" reports VGPU-PIPELINE-PENDING and starts no compilation (contract #3)", async () => {
   gpu = await init();
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const spy = spyFrameEncoder(gpu.device.gpu);
 
   const error = caught(() => frame(gpu!, (f) => f.compute(sim, 1), { pendingPipelines: "throw" }));
@@ -499,7 +499,7 @@ test("f.compute() under \"throw\" reports VGPU-PIPELINE-PENDING and starts no co
 
 test("f.compute() under \"skip\" starts async compilation, encodes nothing and never throws (contract #3)", async () => {
   gpu = await init();
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const spy = spyFrameEncoder(gpu.device.gpu);
 
   expect(() => frame(gpu!, (f) => f.compute(sim, 1), { pendingPipelines: "skip" })).not.toThrow();
@@ -519,7 +519,7 @@ test("f.compute() under \"skip\" starts async compilation, encodes nothing and n
 
 test("the call-site policy wins over the frame policy for f.compute() (contract #3 chain)", async () => {
   gpu = await init();
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
 
   frame(gpu, (f) => f.compute(sim, 1, undefined, undefined, { pendingPipelines: "skip" }), { pendingPipelines: "throw" });
 
@@ -541,7 +541,7 @@ test("the gpu-wide default applies when neither the call site nor the frame name
   // Last link of the chain: with both overrides absent, f.compute() must read init()'s default
   // rather than falling back to a hardcoded "sync".
   gpu = await init({ pendingPipelines: "throw" });
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const spy = spyFrameEncoder(gpu.device.gpu);
 
   const error = caught(() => frame(gpu!, (f) => f.compute(sim, 1)));
@@ -555,7 +555,7 @@ test("f.compute() runs the writable-storage aliasing guard and encodes nothing w
   // The guard is #preflightAliasing, reused verbatim from dispatch()/dispatchOnce(): the frame path
   // must not be a hole through which an aliased bind group reaches the queue.
   gpu = await init();
-  const sim = compute(gpu, ALIASING_WGSL, { label: "sim" });
+  const sim = compute(gpu, { shader: ALIASING_WGSL, label: "sim" });
   const buffer = storage(gpu, 16);
   sim.set({ src: buffer, dst: buffer });
   const spy = spyFrameEncoder(gpu.device.gpu);

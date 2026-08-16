@@ -54,7 +54,7 @@ describe("vgpu/scene", () => {
   test("effect() rejects geometry options and points to draw()", async () => {
     const gpu = await init();
     const geo = geometry(gpu, box());
-    expect(() => effect(gpu, SIMPLE_DRAW, { geometry: geo } as never)).toThrowError(/effect\(\) never accepts vertex buffers; use draw\(gpu, /);
+    expect(() => effect(gpu, { shader: SIMPLE_DRAW, geometry: geo } as never)).toThrowError(/effect\(\) never accepts vertex buffers; use draw\(gpu, /);
     gpu.dispose();
   });
 });

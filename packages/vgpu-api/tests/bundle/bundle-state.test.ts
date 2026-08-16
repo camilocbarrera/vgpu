@@ -58,7 +58,7 @@ async function rejection(run: () => Promise<unknown>): Promise<VGPUError> {
 test("bundle() records the logical command list without compiling or encoding anything", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "constructionFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "constructionFx" });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
   const recorded = bundle(gpu, { target: scene, label: "construction" }, (b) => b.draw(fx));
@@ -75,7 +75,7 @@ test("bundle() records the logical command list without compiling or encoding an
 test("a bundle whose draws already have their pipeline is still born pending-pipelines", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "warmFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "warmFx" });
   await prepare(gpu, { draw: fx, target: scene });
 
   // "always: the native bundle is not materialized at construction" — readiness of the pipelines is
@@ -94,7 +94,7 @@ test("a bundle whose draws already have their pipeline is still born pending-pip
 test("prepare({ bundle }) compiles the recorded draws asynchronously and then encodes the native bundle", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "prepareFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "prepareFx" });
   const recorded = bundle(gpu, { target: scene, label: "preparedBundle" }, (b) => b.draw(fx));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -122,7 +122,7 @@ test("prepare({ bundle }) compiles the recorded draws asynchronously and then en
 test("prepare() of the same bundle twice in one batch does not duplicate the work", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "batchFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "batchFx" });
   const recorded = bundle(gpu, { target: scene, label: "batchBundle" }, (b) => b.draw(fx));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -142,7 +142,7 @@ test("prepare() of the same bundle twice in one batch does not duplicate the wor
 test("a failed prepare({ bundle }) leaves the bundle failed with the error retained, and a later prepare retries it", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "failingFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "failingFx" });
   const recorded = bundle(gpu, { target: scene, label: "failingBundle" }, (b) => b.draw(fx));
   const nativeError = new Error("async pipeline creation failed");
   const original = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
@@ -220,7 +220,7 @@ test("an identity update on a bundle that is not ready leaves its status unchang
 test("rebuild() replaces the recording without compiling or encoding and lands on stale when every draw is ready", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "rebuildFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "rebuildFx" });
   const recorded = bundle(gpu, { target: scene, label: "rebuildBundle" }, (b) => b.draw(fx));
   await prepare(gpu, { bundle: recorded });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -247,10 +247,10 @@ test("rebuild() replaces the recording without compiling or encoding and lands o
 test("rebuild() goes to pending-pipelines when the new recording introduces an uncompiled combination", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const known = effect(gpu, SOLID, { label: "knownFx" });
+  const known = effect(gpu, { shader: SOLID, label: "knownFx" });
   // A distinct shader source: two effects over the SAME source share a cached module and therefore
   // the same pipeline key, which would make the new draw ready for free.
-  const introduced = effect(gpu, OTHER_SOLID, { label: "introducedFx" });
+  const introduced = effect(gpu, { shader: OTHER_SOLID, label: "introducedFx" });
   const recorded = bundle(gpu, { target: scene, label: "growingBundle" }, (b) => b.draw(known));
   await prepare(gpu, { bundle: recorded });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -268,7 +268,7 @@ test("rebuild() goes to pending-pipelines when the new recording introduces an u
 test("rebuild() clears the retained error immediately because it replaces the recording that failed", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "clearedFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "clearedFx" });
   const recorded = bundle(gpu, { target: scene, label: "clearedBundle" }, (b) => b.draw(fx));
   const original = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
   const spy = vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockRejectedValue(new Error("nope"));
@@ -290,7 +290,7 @@ test("rebuild() clears the retained error immediately because it replaces the re
 test('replaying a pending-pipelines bundle under "throw" throws VGPU-PIPELINE-PENDING and compiles nothing', async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "throwPendingFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "throwPendingFx" });
   const recorded = bundle(gpu, { target: scene, label: "throwPendingBundle" }, (b) => b.draw(fx));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -327,7 +327,7 @@ test('replaying a stale bundle under "throw" throws VGPU-R3-BUNDLE-STALE naming 
 test('replaying a failed bundle under "throw" rethrows the retained error with its cause', async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "throwFailedFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "throwFailedFx" });
   const recorded = bundle(gpu, { target: scene, label: "throwFailedBundle" }, (b) => b.draw(fx));
   vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockRejectedValue(new Error("compile said no"));
   await rejection(() => prepare(gpu, { bundle: recorded }));
@@ -342,7 +342,7 @@ test('replaying a failed bundle under "throw" rethrows the retained error with i
 test('a pending-pipelines bundle under "skip" is omitted and its compilation continues in the background', async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "skipPendingFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "skipPendingFx" });
   const recorded = bundle(gpu, { target: scene, label: "skipPendingBundle" }, (b) => b.draw(fx));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -383,7 +383,7 @@ test('a stale bundle under "skip" is skipped and never silently re-encoded', asy
 test('a failed bundle under "skip" is reported once through gpu.onError and keeps being skipped', async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "skipFailedFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "skipFailedFx" });
   const recorded = bundle(gpu, { target: scene, label: "skipFailedBundle" }, (b) => b.draw(fx));
   vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockRejectedValue(new Error("still no"));
   await rejection(() => prepare(gpu, { bundle: recorded }));
@@ -404,7 +404,7 @@ test('a failed bundle under "skip" is reported once through gpu.onError and keep
 test('a pending-pipelines bundle under "sync" is compiled and encoded inline, which is the legacy eager behavior', async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "syncPendingFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "syncPendingFx" });
   const recorded = bundle(gpu, { target: scene, label: "syncPendingBundle" }, (b) => b.draw(fx));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -448,7 +448,7 @@ test('a stale bundle under "sync" is re-encoded inline without compiling', async
 test('a failed bundle under "sync" rethrows the retained error and does not retry', async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "syncFailedFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "syncFailedFx" });
   const recorded = bundle(gpu, { target: scene, label: "syncFailedBundle" }, (b) => b.draw(fx));
   vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockRejectedValue(new Error("no pipeline"));
   await rejection(() => prepare(gpu, { bundle: recorded }));
@@ -466,8 +466,8 @@ test('a failed bundle under "sync" rethrows the retained error and does not retr
 test("a skipped bundle does not stop the rest of the pass from replaying", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const readyFx = effect(gpu, SOLID, { label: "mixedReadyFx" });
-  const pendingFx = effect(gpu, SOLID, { label: "mixedPendingFx" });
+  const readyFx = effect(gpu, { shader: SOLID, label: "mixedReadyFx" });
+  const pendingFx = effect(gpu, { shader: SOLID, label: "mixedPendingFx" });
   const ready = bundle(gpu, { target: scene, label: "mixedReady" }, (b) => b.draw(readyFx));
   await prepare(gpu, { bundle: ready });
   const pending = bundle(gpu, { target: scene, label: "mixedPending" }, (b) => b.draw(pendingFx));
@@ -513,7 +513,7 @@ test('a "sync" replay hands the policy down to the recorded draws, not just to t
   // encode — otherwise the bundle materializes its native encoder and the draw inside it throws.
   const gpu = await init({ pendingPipelines: "throw" });
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "policyDownFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "policyDownFx" });
   const recorded = bundle(gpu, { target: scene, label: "policyDownBundle" }, (b) => b.draw(fx));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
   const syncCompiles = mock.calls.createRenderPipeline;
@@ -532,7 +532,7 @@ test('a "sync" replay hands the policy down to the recorded draws, not just to t
 test("dispose() is terminal and idempotent, and every replay policy throws VGPU-BUNDLE-DISPOSED", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "disposedFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "disposedFx" });
   const recorded = bundle(gpu, { target: scene, label: "disposedBundle" }, (b) => b.draw(fx));
   await prepare(gpu, { bundle: recorded });
 
@@ -590,10 +590,10 @@ test("an identity update during an in-flight prepare() is not lost: the encode t
 test("rebuild() during an in-flight prepare() makes that prepare finish on the new recording", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const before = effect(gpu, SOLID, { label: "beforeRebuildFx" });
+  const before = effect(gpu, { shader: SOLID, label: "beforeRebuildFx" });
   // A DIFFERENT shader on purpose: the new recording needs a pipeline the in-flight prepare never
   // warmed, which is exactly what the #generation re-check has to notice.
-  const after = effect(gpu, OTHER_SOLID, { label: "afterRebuildFx" });
+  const after = effect(gpu, { shader: OTHER_SOLID, label: "afterRebuildFx" });
   const recorded = bundle(gpu, { target: scene, label: "rebuildRaceBundle" }, (b) => b.draw(before));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
   const syncCompiles = mock.calls.createRenderPipeline;
@@ -671,7 +671,7 @@ test("dispose() unregisters the bundle from its draws: a later identity change r
 test("dispose() during an in-flight prepare() makes that prepare fail with VGPU-BUNDLE-DISPOSED", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, SOLID, { label: "disposeRaceFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "disposeRaceFx" });
   const recorded = bundle(gpu, { target: scene, label: "disposeRaceBundle" }, (b) => b.draw(fx));
   const original = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
   let release!: () => void;

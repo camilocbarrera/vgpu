@@ -26,7 +26,7 @@ test.skipIf(typeof gc() !== "function")("a disposed bundle is collectable while 
   try {
     const scene = target(gpu, { size: [4, 4] });
     // The draw outlives every bundle here: that is the whole point. It is what holds the registry.
-    const fx = effect(gpu, SOLID, { label: "retentionFx" });
+    const fx = effect(gpu, { shader: SOLID, label: "retentionFx" });
 
     const makeDisposedBundle = async (): Promise<WeakRef<object>> => {
       const recorded = bundle(gpu, { target: scene, label: "retentionDisposed" }, (b) => b.draw(fx));

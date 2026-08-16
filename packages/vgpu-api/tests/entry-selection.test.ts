@@ -128,8 +128,8 @@ test("absent entry keeps descriptors byte-identical to first-of-stage selection"
 test("compute entry selects the named @compute entry point and its binding visibility", async () => {
   const gpu = await init();
 
-  const pickB = compute(gpu, TWO_COMPUTE_WGSL, { label: "pick-cs-b", entry: "cs_b" });
-  const csDefault = compute(gpu, TWO_COMPUTE_WGSL, { label: "cs-default" });
+  const pickB = compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "pick-cs-b", entry: "cs_b" });
+  const csDefault = compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "cs-default" });
   // compute() no longer compiles its pipeline at construction (contract #4) — dispatch(0) is a valid,
   // no-op-workgroup call that satisfies each entry's active binding and triggers the lazy compile this
   // assertion inspects, without running any shader logic.
@@ -149,9 +149,9 @@ test("compute entry selects the named @compute entry point and its binding visib
 
 test("compute entry validates at construction with where compute", async () => {
   const gpu = await init();
-  expect(() => compute(gpu, TWO_COMPUTE_WGSL, { label: "unknown", entry: "cs_c" })).toThrow(expect.objectContaining({ code: "VGPU-ENTRY-INVALID", where: "compute" }));
-  expect(() => compute(gpu, TWO_COMPUTE_WGSL, { label: "unknown-list", entry: "cs_c" })).toThrowError(/"cs_a" \(@compute\), "cs_b" \(@compute\)/);
-  expect(() => compute(gpu, MIXED_STAGE_COMPUTE_WGSL, { label: "wrong-stage", entry: "vs_main" })).toThrowError(/VGPU-ENTRY-INVALID|is a @vertex entry point, not @compute/);
-  expect(() => compute(gpu, TWO_COMPUTE_WGSL, { label: "not-string", entry: 1 as never })).toThrowError(/VGPU-ENTRY-INVALID|expected an entry point name string/);
+  expect(() => compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "unknown", entry: "cs_c" })).toThrow(expect.objectContaining({ code: "VGPU-ENTRY-INVALID", where: "compute" }));
+  expect(() => compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "unknown-list", entry: "cs_c" })).toThrowError(/"cs_a" \(@compute\), "cs_b" \(@compute\)/);
+  expect(() => compute(gpu, { shader: MIXED_STAGE_COMPUTE_WGSL, label: "wrong-stage", entry: "vs_main" })).toThrowError(/VGPU-ENTRY-INVALID|is a @vertex entry point, not @compute/);
+  expect(() => compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "not-string", entry: 1 as never })).toThrowError(/VGPU-ENTRY-INVALID|expected an entry point name string/);
   gpu.dispose();
 });

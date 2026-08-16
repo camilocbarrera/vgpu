@@ -61,7 +61,7 @@ test("invalid blend and writeMask options fail at draw construction", async () =
 test("effect options pass blend and writeMask through to the fullscreen draw", async () => {
   const gpu = await init();
   const colorTarget = target(gpu, { size: [2, 2] });
-  effect(gpu, EFFECT_SHADER, { blend: "additive", writeMask: ["a"] }).draw(colorTarget);
+  effect(gpu, { shader: EFFECT_SHADER, blend: "additive", writeMask: ["a"] }).draw(colorTarget);
   const desc = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors.at(-1);
   expect(desc?.fragment?.targets?.[0]).toMatchObject({
     blend: { color: { srcFactor: "one", dstFactor: "one", operation: "add" }, alpha: { srcFactor: "one", dstFactor: "one", operation: "add" } },

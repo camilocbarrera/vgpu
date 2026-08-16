@@ -139,7 +139,7 @@ test("a Target is still bindable exactly as before, and so is the Texture a surf
 test("a Surface is still a render destination: pass(), prepare({ target }) and bundle({ target }) all accept it", async () => {
   const gpu = await init();
   const screen = surface(gpu, canvasLike());
-  const fx = effect(gpu, SOLID, { label: "destinationFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "destinationFx" });
 
   await prepare(gpu, [{ draw: fx, target: screen }]);
   // Recording a bundle over a surface is legal in or out of a frame (contract #8 / §4: recording needs
@@ -159,7 +159,7 @@ test("a Surface is still a render destination: pass(), prepare({ target }) and b
 test("a resize that preserves colors, depth and sampleCount compiles no pipeline and leaves the bundle ready", async () => {
   const gpu = await init();
   const scene = target(gpu, { size: [8, 4], depth: true, label: "resizedScene" });
-  const fx = effect(gpu, SOLID, { label: "resizedFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "resizedFx" });
   const recorded = bundle(gpu, { target: scene, label: "resizedBundle" }, (b) => b.draw(fx));
   await prepare(gpu, { bundle: recorded });
   expect(recorded.status).toBe("ready");
@@ -186,7 +186,7 @@ test("changing the sample count is a different signature, so the prepared combin
   // prepares that combination and no other.
   const single = target(gpu, { size: [8, 4], label: "singleSampled" });
   const multi = target(gpu, { size: [8, 4], sampleCount: 4, label: "multiSampled" });
-  const fx = effect(gpu, SOLID, { label: "signatureFx" });
+  const fx = effect(gpu, { shader: SOLID, label: "signatureFx" });
   await prepare(gpu, [{ draw: fx, target: single }]);
 
   expect(signatureKeyOf(normalizeSignature(single))).not.toBe(signatureKeyOf(normalizeSignature(multi)));

@@ -33,8 +33,8 @@ test("R3 bundle replay stays valid after JS value writes and stales on bind-grou
   const scene = target(gpu, { size: [4, 4] });
   const tex1 = target(gpu, { size: [4, 4] });
   const tex2 = target(gpu, { size: [4, 4] });
-  const floor = effect(gpu, FLOOR, { label: "floor", set: { fogDensity: 0.1 } });
-  const walls = effect(gpu, WALLS, { label: "walls" });
+  const floor = effect(gpu, { shader: FLOOR, label: "floor", set: { fogDensity: 0.1 } });
+  const walls = effect(gpu, { shader: WALLS, label: "walls" });
   walls.set({ detail: tex1 });
 
   const staticScene = bundle(gpu, { target: scene, label: "staticScene" }, (b) => {
@@ -65,7 +65,7 @@ test("R3 bundle sampling a repeatedly resized target stales through binding iden
   const gpu = await init();
   const scene = target(gpu, { size: [4, 4] });
   const source = target(gpu, { size: [4, 4] });
-  const post = effect(gpu, WALLS, { label: "post", set: { detail: source } });
+  const post = effect(gpu, { shader: WALLS, label: "post", set: { detail: source } });
   const recordBundle = (label: string) => bundle(gpu, { target: scene, label }, (b) => {
     b.draw(post);
   });
