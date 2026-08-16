@@ -184,12 +184,15 @@ async function softwareRendererState() {
 }
 
 async function realRender() {
-  const { init, effect, frame, target } = await import("vgpu/node");
+  // `renderOnce` awaits pipeline readiness itself, so the probe renders under the shipped default
+  // (T04-21) instead of naming a policy: doctor asks "can this machine render", and the answer has
+  // to come from the same path a user's first program takes.
+  const { init, effect, renderOnce, target } = await import("vgpu/node");
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [16, 16], format: "rgba8unorm", label: "vgpu-doctor" });
     const probe = effect(gpu, "@fragment fn main() -> @location(0) vec4f { return vec4f(0.25, 0.5, 0.75, 1.0); }");
-    frame(gpu, (current) => current.pass({ target: colorTarget }, (encoder) => encoder.draw(probe)));
+    await renderOnce(gpu, colorTarget, (encoder) => encoder.draw(probe));
     const pixels = await colorTarget.read();
     if (!pixels || pixels.byteLength < 16 * 16 * 4) throw new Error("render readback returned too few bytes");
     const info = gpu.device?.adapterInfo ?? {};

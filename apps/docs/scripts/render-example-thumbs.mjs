@@ -2,7 +2,7 @@ import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
-import { init, effect, frame, target } from 'vgpu/node';
+import { init, effect, renderOnce, target } from 'vgpu/node';
 import { comparePngSnapshot, writePng } from '@vgpu/cli/lib/snapshot/png.js';
 import { transformWgsl } from '@vgpu/wgsl/loader-vite';
 
@@ -54,7 +54,10 @@ const compareOptions = {
 const aaModeNames = new Map([[0, 'off'], [1, 'msaa-4x'], [2, 'ssaa-2x'], [3, 'fxaa']]);
 const postProcessingModeNames = ['all-off', 'bloom-only', 'ca-only'];
 
-function renderFragmentThumb(gpu, colorTarget, fragmentSource, { time }) {
+// `renderOnce` (T04-21): the fragment-only examples have no renderer module of their own to carry a
+// `prepare()`, and this encode used to reach an uncompiled pipeline. The one-shot path awaits its own
+// readiness, so thumbs and proofs render under the shipped `"throw"` default.
+async function renderFragmentThumb(gpu, colorTarget, fragmentSource, { time }) {
   const shader = effect(gpu, fragmentSource);
   const [width, height] = colorTarget.size;
   shader.set({
@@ -63,7 +66,7 @@ function renderFragmentThumb(gpu, colorTarget, fragmentSource, { time }) {
       resolution: [width, height],
     },
   });
-  frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(shader)));
+  await renderOnce(gpu, colorTarget, (p) => p.draw(shader));
 }
 
 await mkdir(outDir, { recursive: true });
@@ -149,7 +152,7 @@ async function renderOne(renderers, example, exampleSources, size, metaThumb, ou
       const fragmentFile = resolveFragmentFile(example, exampleSources);
       if (!fragmentFile) throw new Error(`No fragment shader found for '${slug}'.`);
       const fragmentSource = sourceFor(exampleSources, slug, fragmentFile);
-      renderFragmentThumb(
+      await renderFragmentThumb(
         gpu,
         colorTarget,
         fragmentSource,
