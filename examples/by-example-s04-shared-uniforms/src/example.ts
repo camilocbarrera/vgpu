@@ -1,4 +1,4 @@
-import { init, effect, frame, target, uniforms } from "vgpu/node";
+import { init, effect, frame, prepare, target, uniforms } from "vgpu/node";
 
 export const WAVE = /* wgsl */ `
 struct Globals { time: f32, mouse: vec2f }
@@ -23,6 +23,11 @@ export async function runSharedUniformsExample() {
   const wave = effect(gpu, { shader: WAVE, label: "wave", set: { globals } });
   const tint = effect(gpu, { shader: TINT, label: "tint", set: { g: globals } });
   globals.set({ time: 0.8 });
+  // Two passes into the same target — same signature, still two distinct combinations.
+  await prepare(gpu, [
+    { draw: wave, target: colorTarget },
+    { draw: tint, target: colorTarget },
+  ]);
   frame(gpu, (currentFrame) => {
     currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (p) => p.draw(wave));
     currentFrame.pass({ target: colorTarget }, (p) => p.draw(tint));

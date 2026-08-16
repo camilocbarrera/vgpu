@@ -1,4 +1,4 @@
-import { init, draw, frame, geometry, target } from "vgpu/node";
+import { init, draw, frame, geometry, prepare, target } from "vgpu/node";
 import { box, orbit, perspectiveCamera } from "vgpu/scene";
 
 export const LIT_WGSL = /* wgsl */ `
@@ -30,6 +30,7 @@ export async function runSceneExample() {
   cube.set("camera", { viewProjection: cam.viewProjection });
   cube.set("model", { model: orbit(0) });
   cube.set("light", { direction: [-1, -1, -1], intensity: 1 });
+  await prepare(gpu, [{ draw: cube, target: colorTarget }]);
   frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0.05, 0.05, 0.08, 1] }, (p) => p.draw(cube)));
   return { gpu, target: colorTarget };
 }

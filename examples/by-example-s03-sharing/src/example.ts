@@ -1,4 +1,4 @@
-import { init, Uniform, draw, frame, target } from "vgpu/node";
+import { init, Uniform, draw, frame, prepare, target } from "vgpu/node";
 
 export const SHARED_CAMERA = /* wgsl */ `
 struct Camera { exposure: f32 }
@@ -42,6 +42,12 @@ export async function runSharingExample() {
   const floor = draw(gpu, { shader: FLOOR, label: "floor" });
   cube.set({ camera, params: { color: [1, 0, 0, 1] } });
   floor.set({ camera, params: { color: [0, 1, 0, 1] } });
+
+  // Two renderables sharing one target: two combinations, one grouped await.
+  await prepare(gpu, [
+    { draw: cube, target: colorTarget },
+    { draw: floor, target: colorTarget },
+  ]);
 
   frame(gpu, (currentFrame) => {
     currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (p) => {

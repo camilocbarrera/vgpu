@@ -1,4 +1,4 @@
-import { init, draw, frame, target } from "vgpu/node";
+import { init, draw, frame, prepare, target } from "vgpu/node";
 
 export const CLAIMED = /* wgsl */ `
 struct Params { color: vec4f }
@@ -24,6 +24,9 @@ export async function runGroupClaimExample() {
   buffer.write(new Float32Array([0.9, 0.2, 0.1, 1]));
   const bindGroup = gpu.gpu.createBindGroup({ label: "claimed-bg", layout, entries: [{ binding: 0, resource: { buffer: buffer.gpu, offset: 0, size: 16 } }] });
   drawable.group(0, bindGroup);
+  // The claimed group and its dynamic offsets are encode-time state; the pipeline key is still
+  // just (drawable, signature), so one request covers the frame below.
+  await prepare(gpu, [{ draw: drawable, target: colorTarget }]);
   const currentFrame = frame(gpu, (f) => f.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (p) => p.draw(drawable, { offsets: { 0: [0] } })));
   await currentFrame.done; // completion signal before callers inspect/read the target
   return { gpu, target: colorTarget };
