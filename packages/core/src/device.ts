@@ -27,6 +27,16 @@ export class Device {
   private state: DeviceState = "alive";
   private lossInfo: GPUDeviceLostInfo | undefined;
   private observeLoss = true;
+  /**
+   * Resolves **only** on a real device loss (design §9): the same transition that flips `state` to
+   * `"lost"`, never a deliberate `destroy()`/`dispose()`. WebGPU resolves the native `GPUDevice.lost`
+   * with reason `"destroyed"` when the device is destroyed, and `observeLoss` (cleared by `destroy()`
+   * before anything else) is what keeps that resolution from reaching here. A device that is disposed,
+   * or whose native handle exposes no `lost` promise at all, leaves this pending forever — pending is
+   * the honest answer to "was this device lost?" when it was not.
+   */
+  readonly lost: Promise<GPUDeviceLostInfo | undefined>;
+  private resolveLost: ((info: GPUDeviceLostInfo | undefined) => void) | undefined;
 
   constructor(gpu: GPUDevice, adapterInfo?: GPUAdapterInfo | null, options?: DeviceOptions);
   constructor(
@@ -41,12 +51,16 @@ export class Device {
     this.isCompatibilityMode = opts.isCompatibilityMode ?? false;
     this.queue = new (Queue as unknown as new (gpu: GPUQueue, guard: (where: string) => void) => Queue)(gpu.queue, (where) => this.#assertUsable(where));
     this.readback = new Readback(gpu);
+    this.lost = new Promise<GPUDeviceLostInfo | undefined>((resolve) => { this.resolveLost = resolve; });
     const lost = gpu.lost;
     if (lost && typeof (lost as PromiseLike<GPUDeviceLostInfo>).then === "function") {
       void Promise.resolve(lost).then((info) => {
         if (!this.observeLoss || this.state !== "alive") return;
         this.lossInfo = info;
         this.state = "lost";
+        // Same callback, same guard: `lost` is the existing transition made observable, not a second
+        // subscription that could disagree with `state` about whether this device was lost.
+        this.resolveLost?.(info);
       }, () => undefined);
     }
   }
