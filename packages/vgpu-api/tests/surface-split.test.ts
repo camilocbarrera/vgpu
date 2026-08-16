@@ -142,8 +142,8 @@ test("a Surface is still a render destination: pass(), prepare({ target }) and b
   const fx = effect(gpu, SOLID, { label: "destinationFx" });
 
   await prepare(gpu, [{ draw: fx, target: screen }]);
-  // Recording a bundle over a surface stays a frame-scoped operation (VGPU-SURFACE-NOT-IN-FRAME outside
-  // one) — unchanged by the split: what matters here is that the surface is still a legal bundle target.
+  // Recording a bundle over a surface is legal in or out of a frame (contract #8 / §4: recording needs
+  // only formats) — unchanged by the split: what matters here is that the surface is a legal bundle target.
   expect(codeOf(() => frame(gpu, () => { bundle(gpu, { target: screen, label: "surfaceBundle" }, (b) => b.draw(fx)); }))).toBe("NO-THROW");
 
   expect(codeOf(() => frame(gpu, (f) => f.pass(screen, (p) => p.draw(fx)), { pendingPipelines: "throw" }))).toBe("NO-THROW");

@@ -130,19 +130,20 @@ test("the first sync replay of a cold bundle uses the sync pipeline path and rep
 // legal outside `frame()`, exactly like `prepare()`.
 // ---------------------------------------------------------------------------
 
-function bundleTestCanvas(): HTMLCanvasElement {
+function bundleTestCanvas(ledger?: { currentTextures: number }): HTMLCanvasElement {
   const canvas: Record<string, unknown> = { width: 4, height: 4 };
   canvas.getContext = (kind: string) => kind === "webgpu" ? {
     configure: () => undefined,
     unconfigure: () => undefined,
-    getCurrentTexture: () => ({ createView: () => ({}) }),
+    getCurrentTexture: () => { if (ledger) ledger.currentTextures += 1; return { createView: () => ({}) }; },
   } : null;
   return canvas as HTMLCanvasElement;
 }
 
 test("bundle(gpu, { target: surface }, ...) outside frame() is legal, exactly like prepare()", async () => {
   const gpu = await init();
-  const canvasSurface = surface(gpu, bundleTestCanvas());
+  const ledger = { currentTextures: 0 };
+  const canvasSurface = surface(gpu, bundleTestCanvas(ledger));
   const shader = effect(gpu, SOLID, { label: "outOfFrameFx" });
 
   let recorded: ReturnType<typeof bundle> | undefined;
@@ -152,6 +153,10 @@ test("bundle(gpu, { target: surface }, ...) outside frame() is legal, exactly li
   // `prepare()` materializes it — still without ever opening a frame.
   await prepare(gpu, [{ bundle: recorded! }]);
   expect(recorded!.status).toBe("ready");
+  // The clause is literal about the REASON this is legal — "needs only formats, never
+  // `getCurrentTexture()`". Without this the whole path could be re-implemented on the presentation
+  // texture and every assertion above would still pass (mutation-verified).
+  expect(ledger.currentTextures).toBe(0);
   gpu.dispose();
 });
 
