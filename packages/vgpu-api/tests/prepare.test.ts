@@ -88,7 +88,7 @@ test("contract #2: a prepared {draw, target} encodes in frame() without creating
 test("contract #2: a prepared {effect, target} encodes in frame() without creating any pipeline", async () => {
   const gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
-  const shader = effect(gpu, FRAGMENT_ONLY, { label: "preparedFx" });
+  const shader = effect(gpu, { shader: FRAGMENT_ONLY, label: "preparedFx" });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
   const prepared = await prepare(gpu, { draw: shader, target: colorTarget });
@@ -158,8 +158,8 @@ test("contract #7: the array form preserves order, and prepared.gpu is the objec
   const gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
   const first = draw(gpu, { shader: WGSL, label: "first" });
-  const second = effect(gpu, FRAGMENT_ONLY, { label: "second" });
-  const kernel = compute(gpu, COMPUTE_WGSL, { label: "kernel" });
+  const second = effect(gpu, { shader: FRAGMENT_ONLY, label: "second" });
+  const kernel = compute(gpu, { shader: COMPUTE_WGSL, label: "kernel" });
   kernel.set({ data: storage(gpu, 16) });
   const bound = recordEncodedPipelines(gpu.device.gpu);
 
@@ -282,7 +282,7 @@ test("contract #8: prepare() against a Surface outside frame() resolves with the
 // Contract #4 (the half T04-04 left open): {compute} in prepare().
 test("contract #4: prepare({ compute }) compiles with createComputePipelineAsync and dispatch reuses it", async () => {
   const gpu = await init();
-  const kernel = compute(gpu, COMPUTE_WGSL, { label: "sim" });
+  const kernel = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   kernel.set({ data: storage(gpu, 16) });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -305,7 +305,7 @@ test("contract #4: prepare({ compute }) compiles with createComputePipelineAsync
 
 test("contract #4: prepare({ compute }) does not recompile a kernel a previous dispatch already compiled", async () => {
   const gpu = await init();
-  const kernel = compute(gpu, COMPUTE_WGSL, { label: "warmed" });
+  const kernel = compute(gpu, { shader: COMPUTE_WGSL, label: "warmed" });
   kernel.set({ data: storage(gpu, 16) });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -320,7 +320,7 @@ test("contract #4: prepare({ compute }) does not recompile a kernel a previous d
 
 test("prepare() reports a failed compute combination through VGPU-PREPARE-FAILED", async () => {
   const gpu = await init();
-  const kernel = compute(gpu, COMPUTE_WGSL, { label: "brokenSim" });
+  const kernel = compute(gpu, { shader: COMPUTE_WGSL, label: "brokenSim" });
   kernel.set({ data: storage(gpu, 16) });
   const nativeError = new Error("compute compile failed");
   vi.spyOn(gpu.device.gpu, "createComputePipelineAsync").mockRejectedValue(nativeError);

@@ -134,8 +134,8 @@ test("an override without a default must be provided", async () => {
 test("compute constants reach the compute stage; @id keys and omission behave like draws", async () => {
   const gpu = await init();
 
-  const sim = compute(gpu, COMPUTE_WGSL, { label: "sim", constants: { STEP: 0.5, "3": 4 } });
-  const simAbsent = compute(gpu, COMPUTE_WGSL, { label: "sim-absent" });
+  const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim", constants: { STEP: 0.5, "3": 4 } });
+  const simAbsent = compute(gpu, { shader: COMPUTE_WGSL, label: "sim-absent" });
   // compute() no longer compiles its pipeline at construction (contract #4) — dispatch(0) is a valid,
   // no-op-workgroup call that satisfies the one active binding and triggers the lazy compile this
   // assertion inspects, without running any shader logic.
@@ -153,9 +153,9 @@ test("compute constants reach the compute stage; @id keys and omission behave li
 
 test("compute constants validate at construction with where compute", async () => {
   const gpu = await init();
-  expect(() => compute(gpu, COMPUTE_WGSL, { label: "unknown", constants: { LIMIT: 4 } })).toThrowError(/VGPU-CONSTANTS-INVALID|"STEP", "3" \(@id of LIMIT\)/);
-  expect(() => compute(gpu, COMPUTE_WGSL, { label: "nan", constants: { STEP: Number.NaN } })).toThrowError(/VGPU-CONSTANTS-INVALID|finite number or a boolean/);
-  expect(() => compute(gpu, COMPUTE_NO_DEFAULT_WGSL, { label: "missing" })).toThrowError(/VGPU-CONSTANTS-INVALID|override 'seed' has no default value/);
-  expect(() => compute(gpu, COMPUTE_NO_DEFAULT_WGSL, { label: "provided", constants: { seed: 1 } })).not.toThrow();
+  expect(() => compute(gpu, { shader: COMPUTE_WGSL, label: "unknown", constants: { LIMIT: 4 } })).toThrowError(/VGPU-CONSTANTS-INVALID|"STEP", "3" \(@id of LIMIT\)/);
+  expect(() => compute(gpu, { shader: COMPUTE_WGSL, label: "nan", constants: { STEP: Number.NaN } })).toThrowError(/VGPU-CONSTANTS-INVALID|finite number or a boolean/);
+  expect(() => compute(gpu, { shader: COMPUTE_NO_DEFAULT_WGSL, label: "missing" })).toThrowError(/VGPU-CONSTANTS-INVALID|override 'seed' has no default value/);
+  expect(() => compute(gpu, { shader: COMPUTE_NO_DEFAULT_WGSL, label: "provided", constants: { seed: 1 } })).not.toThrow();
   gpu.dispose();
 });

@@ -40,7 +40,7 @@ struct Camera { value: f32 }
 
 test("set() writes lib-owned values in-place and keeps bind group stable on mock", async () => {
   const gpu = await init();
-  const wave = effect(gpu, WAVE, { label: "wave" });
+  const wave = effect(gpu, { shader: WAVE, label: "wave" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -56,7 +56,7 @@ test("set() writes lib-owned values in-place and keeps bind group stable on mock
 
 test("creation-time set sugar is exactly an initial set()", async () => {
   const gpu = await init();
-  const wave = effect(gpu, WAVE, { label: "wave", set: { speed: 2 } });
+  const wave = effect(gpu, { shader: WAVE, label: "wave", set: { speed: 2 } });
   const colorTarget = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -70,7 +70,7 @@ test("creation-time set sugar is exactly an initial set()", async () => {
 
 test("R1 ownership flip reports canonical fix-it text", async () => {
   const gpu = await init();
-  const wave = effect(gpu, WAVE, { label: "wave" });
+  const wave = effect(gpu, { shader: WAVE, label: "wave" });
   wave.set({ speed: 2 });
   const userBuffer = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
 
@@ -83,7 +83,7 @@ test("R1 ownership flip reports canonical fix-it text", async () => {
 
 test("binding never set, including samplers, reports canonical no-phantom-resource error", async () => {
   const gpu = await init();
-  const lighting = effect(gpu, SAMPLER_SHADER, { label: "lighting" });
+  const lighting = effect(gpu, { shader: SAMPLER_SHADER, label: "lighting" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(lighting)))).toThrowError(
@@ -95,7 +95,7 @@ test("binding never set, including samplers, reports canonical no-phantom-resour
 
 test("missing texture binding reports a texture-specific fix-it", async () => {
   const gpu = await init();
-  const post = effect(gpu, TEXTURE_SHADER, { label: "post" });
+  const post = effect(gpu, { shader: TEXTURE_SHADER, label: "post" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(post)))).toThrowError(/post\.set\(\{src:scene\.color\}\)/);
@@ -104,7 +104,7 @@ test("missing texture binding reports a texture-specific fix-it", async () => {
 
 test("R2 cache hits when alternating between two user-owned resource identities", async () => {
   const gpu = await init();
-  const drawable = effect(gpu, CAMERA_SHADER, { label: "cameraPass" });
+  const drawable = effect(gpu, { shader: CAMERA_SHADER, label: "cameraPass" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const a = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
   const b = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
@@ -123,7 +123,7 @@ test("R2 cache hits when alternating between two user-owned resource identities"
 
 test("bundle back-refs stale only on identity changes, never lib-owned in-place writes", async () => {
   const gpu = await init();
-  const wave = effect(gpu, WAVE, { label: "wave", set: { speed: 2 } });
+  const wave = effect(gpu, { shader: WAVE, label: "wave", set: { speed: 2 } });
   const events: unknown[] = [];
   registerDrawBundle(effectDraw(wave), { id: "bundle", markStale: (event) => { events.push(event); } });
 
@@ -145,7 +145,7 @@ test("bundle back-refs stale only on identity changes, never lib-owned in-place 
 
 test("set() accepts Targets as texture resources and uses color texture identity", async () => {
   const gpu = await init();
-  const post = effect(gpu, TEXTURE_SHADER, { label: "post" });
+  const post = effect(gpu, { shader: TEXTURE_SHADER, label: "post" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const output = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -159,7 +159,7 @@ test("set() accepts Targets as texture resources and uses color texture identity
 
 test("plain draws sampling a resized target rebind with fresh bind groups across repeated resizes and no pipeline creates", async () => {
   const gpu = await init();
-  const post = effect(gpu, TEXTURE_SHADER, { label: "post" });
+  const post = effect(gpu, { shader: TEXTURE_SHADER, label: "post" });
   const source = target(gpu, { size: [4, 4] });
   const output = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -248,7 +248,7 @@ test("resizing a target only drawn onto does not emit bind-group stale events", 
 
 test("set() validates resource kind against reflection before WebGPU bind-group creation", async () => {
   const gpu = await init();
-  const lighting = effect(gpu, SAMPLER_SHADER, { label: "lighting" });
+  const lighting = effect(gpu, { shader: SAMPLER_SHADER, label: "lighting" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   expect(() => lighting.set({ samp: colorTarget })).toThrowError(/needs sampler/);
@@ -314,7 +314,7 @@ test("draw(gpu) and effect(gpu) resolve one lazy render service and share its pi
   expect(kernel.peekService(renderServiceToken)).toBeUndefined();
 
   const scene = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, FREE_FN_FRAGMENT, { label: "fx" });
+  const fx = effect(gpu, { shader: FREE_FN_FRAGMENT, label: "fx" });
   const service = kernel.peekService(renderServiceToken);
   expect(service).toBeDefined();
 

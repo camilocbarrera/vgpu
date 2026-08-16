@@ -212,7 +212,7 @@ test("a single .bind() never locks the legacy flat bag out of a binding it used 
   const screen = target(gpu, { size: [4, 4] });
   const first = target(gpu, { size: [4, 4] });
   const second = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, OWNERSHIP_SHADER, { label: "fx" });
+  const fx = effect(gpu, { shader: OWNERSHIP_SHADER, label: "fx" });
 
   // The flat bag latches `src` user-owned by call order (legacy behavior, alive until the cut).
   fx.set({ src: first, params: { intensity: 1 }, globals: { time: 0 } });
@@ -441,7 +441,7 @@ test("uniform() and uniforms() are the same mechanism under two spellings", asyn
 test("regression: the flat bag still sets several members at once", async () => {
   const gpu = await init();
   const screen = target(gpu, { size: [4, 4] });
-  const fx = effect(gpu, CAMERA_SHADER, { label: "cam" });
+  const fx = effect(gpu, { shader: CAMERA_SHADER, label: "cam" });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
   fx.set({ viewProjection: new Array(16).fill(0), exposure: 1 });
@@ -456,7 +456,7 @@ test("regression: the flat bag still sets several members at once", async () => 
 
 test("regression: the flat bag still reports an ambiguous member name", async () => {
   const gpu = await init();
-  const fx = effect(gpu, AMBIGUOUS_SHADER, { label: "amb" });
+  const fx = effect(gpu, { shader: AMBIGUOUS_SHADER, label: "amb" });
 
   expect(messageOf(() => fx.set({ time: 1 }))).toMatch(/ambiguous/);
   gpu.dispose();
@@ -465,7 +465,7 @@ test("regression: the flat bag still reports an ambiguous member name", async ()
 test("regression: the legacy latch still fires for the flat bag", async () => {
   const gpu = await init();
   const globals = uniform(gpu, { time: 0 });
-  const fx = effect(gpu, GLOBALS_ONLY_SHADER, { label: "fx" });
+  const fx = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx" });
 
   fx.set({ globals: { time: 1 } });
   expect(codeOf(() => fx.set({ globals }))).toBe("VGPU-R1-OWNERSHIP-FLIP");

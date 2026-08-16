@@ -116,7 +116,7 @@ test("renderOnce prepares every named draw in parallel and encodes them all in o
   try {
     const screen = target(gpu, { size: [4, 4] });
     const a = draw(gpu, { shader: WGSL, label: "a" });
-    const b = effect(gpu, FRAGMENT_ONLY, { label: "b" });
+    const b = effect(gpu, { shader: FRAGMENT_ONLY, label: "b" });
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
     const submits = countSubmits(gpu.device.gpu);
     const bound = recordEncodedPipelines(gpu.device.gpu);
@@ -198,7 +198,7 @@ test("renderOnce rejects with VGPU-PREPARE-FAILED and opens no encoder when a dr
   try {
     const screen = target(gpu, { size: [4, 4] });
     const good = draw(gpu, { shader: WGSL, label: "good" });
-    const bad = effect(gpu, FRAGMENT_ONLY, { label: "bad" });
+    const bad = effect(gpu, { shader: FRAGMENT_ONLY, label: "bad" });
     const createAsync = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
     vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockImplementation(async (desc: GPURenderPipelineDescriptor) => {
       if (String(desc.label ?? "").includes("bad")) throw new Error("boom: fragment stage");
@@ -362,7 +362,7 @@ test("renderOnce opens a frame scope around its encode and closes it after the s
   const gpu = await init();
   try {
     const screen = surface(gpu, canvasLike(), { size: [8, 4] });
-    const quad = effect(gpu, FRAGMENT_ONLY, { label: "scoped" });
+    const quad = effect(gpu, { shader: FRAGMENT_ONLY, label: "scoped" });
     let activeAtSubmit: boolean | undefined;
     const submit = gpu.device.gpu.queue.submit.bind(gpu.device.gpu.queue);
     vi.spyOn(gpu.device.gpu.queue, "submit").mockImplementation((buffers: GPUCommandBuffer[]) => { activeAtSubmit = isFrameActive(); submit(buffers); });
@@ -482,7 +482,7 @@ test("renderOnce works against a surface outside frame()", async () => {
   const gpu = await init();
   try {
     const screen = surface(gpu, canvasLike(), { size: [8, 4] });
-    const quad = effect(gpu, FRAGMENT_ONLY, { label: "surface-quad" });
+    const quad = effect(gpu, { shader: FRAGMENT_ONLY, label: "surface-quad" });
     const submits = countSubmits(gpu.device.gpu);
 
     await renderOnce(gpu, screen, (p) => p.draw(quad));

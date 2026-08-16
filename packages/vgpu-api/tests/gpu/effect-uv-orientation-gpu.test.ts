@@ -62,7 +62,8 @@ describe.skipIf(!dockerTest)("fragment-only effect UV orientation", () => {
       const source = target(gpu, { size: [SIZE, SIZE], format: "rgba8unorm" });
       const output = target(gpu, { size: [SIZE, SIZE], format: "rgba8unorm" });
       effect(gpu, UV_PATTERN).draw(source);
-      effect(gpu, IDENTITY_COPY, {
+      effect(gpu, {
+        shader: IDENTITY_COPY,
         set: {
           src: source,
           srcSampler: sampler(gpu, { minFilter: "nearest", magFilter: "nearest" }),

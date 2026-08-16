@@ -11,7 +11,7 @@ struct Params { time: f32, speed: f32 }
 export async function runFullscreenExample() {
   const gpu = await init();
   const colorTarget = target(gpu, { size: [8, 8], format: "rgba8unorm" });
-  const wave = effect(gpu, WAVE, { label: "wave", set: { speed: 2 } });
+  const wave = effect(gpu, { shader: WAVE, label: "wave", set: { speed: 2 } });
   wave.set({ time: Math.PI / 4 });
   frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
   return { gpu, target: colorTarget };

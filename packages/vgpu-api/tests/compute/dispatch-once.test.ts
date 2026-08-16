@@ -48,14 +48,14 @@ describe("compute() construction does not compile a pipeline (contract #4)", () 
   test("neither createComputePipeline nor createComputePipelineAsync run in the constructor", async () => {
     gpu = await init();
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
-    compute(gpu, SHADER, { label: "ctor-only" });
+    compute(gpu, { shader: SHADER, label: "ctor-only" });
     expect(mock.calls.createComputePipeline).toBe(0);
     expect(mock.calls.createComputePipelineAsync).toBe(0);
   });
 
   test("the concrete instance exposes no public `pipeline` field at runtime", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "no-field" }) as unknown as Record<string, unknown>;
+    const sim = compute(gpu, { shader: SHADER, label: "no-field" }) as unknown as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(sim, "pipeline")).toBe(false);
     expect(sim.pipeline).toBeUndefined();
   });
@@ -67,7 +67,7 @@ describe("dispatch() lazy-sync pipeline compilation", () => {
   test("dispatch() compiles exactly once on the first call and reuses it afterwards", async () => {
     gpu = await init();
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
-    const sim = compute(gpu, SHADER, { label: "lazy" });
+    const sim = compute(gpu, { shader: SHADER, label: "lazy" });
     expect(mock.calls.createComputePipeline).toBe(0);
     sim.dispatch(1);
     expect(mock.calls.createComputePipeline).toBe(1);
@@ -84,7 +84,7 @@ describe("dispatchOnce() async pipeline readiness (contract #20)", () => {
   test("uses createComputePipelineAsync when the pipeline is not ready yet", async () => {
     gpu = await init();
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
-    const sim = compute(gpu, SHADER, { label: "once" });
+    const sim = compute(gpu, { shader: SHADER, label: "once" });
     await sim.dispatchOnce(1);
     expect(mock.calls.createComputePipelineAsync).toBe(1);
     expect(mock.calls.createComputePipeline).toBe(0);
@@ -92,7 +92,7 @@ describe("dispatchOnce() async pipeline readiness (contract #20)", () => {
 
   test("resolves right after submit and never awaits queue.onSubmittedWorkDone", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "readiness" });
+    const sim = compute(gpu, { shader: SHADER, label: "readiness" });
     const order: string[] = [];
     const onSubmittedWorkDone = vi.spyOn(gpu.device.gpu.queue, "onSubmittedWorkDone");
     const originalSubmit = gpu.device.gpu.queue.submit.bind(gpu.device.gpu.queue);
@@ -110,7 +110,7 @@ describe("dispatchOnce() async pipeline readiness (contract #20)", () => {
   test("dispatchOnce() and dispatch() interleaved on the same instance share one compiled pipeline", async () => {
     gpu = await init();
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
-    const sim = compute(gpu, SHADER, { label: "shared-async-first" });
+    const sim = compute(gpu, { shader: SHADER, label: "shared-async-first" });
     await sim.dispatchOnce(1);
     expect(mock.calls.createComputePipelineAsync).toBe(1);
     sim.dispatch(1); // legacy sync dispatch must reuse the pipeline dispatchOnce already compiled
@@ -122,7 +122,7 @@ describe("dispatchOnce() async pipeline readiness (contract #20)", () => {
   test("dispatch() first, then dispatchOnce(): the async path reuses the sync-compiled pipeline", async () => {
     gpu = await init();
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
-    const sim = compute(gpu, SHADER, { label: "shared-sync-first" });
+    const sim = compute(gpu, { shader: SHADER, label: "shared-sync-first" });
     sim.dispatch(1);
     expect(mock.calls.createComputePipeline).toBe(1);
     await sim.dispatchOnce(1);
@@ -143,7 +143,7 @@ describe("dispatchOnce() async pipeline readiness (contract #20)", () => {
     // already-bound sync one.
     gpu = await init();
     const bound = recordBoundPipelines(gpu.device.gpu);
-    const sim = compute(gpu, SHADER, { label: "race-mixed" });
+    const sim = compute(gpu, { shader: SHADER, label: "race-mixed" });
     const pending = sim.dispatchOnce(1); // kicks off createComputePipelineAsync, not yet resolved
     sim.dispatch(1); // sync compile wins the race and is bound immediately
     await pending; // async result lands afterwards
@@ -169,7 +169,7 @@ describe("a failed createComputePipelineAsync does not poison the instance", () 
       }
       return real(desc);
     });
-    const sim = compute(gpu, SHADER, { label: "poison-retry" });
+    const sim = compute(gpu, { shader: SHADER, label: "poison-retry" });
     await expect(sim.dispatchOnce(1)).rejects.toThrow(/transient compile failure/);
     // A stale rejected promise must not stay memoized in #pipelinePending: this retry has to kick off a
     // fresh createComputePipelineAsync() and actually resolve, not re-reject with the old error forever.
@@ -180,7 +180,7 @@ describe("a failed createComputePipelineAsync does not poison the instance", () 
     gpu = await init();
     const device = gpu.device.gpu;
     vi.spyOn(device, "createComputePipelineAsync").mockRejectedValue(new Error("boom"));
-    const sim = compute(gpu, SHADER, { label: "poison-sync" });
+    const sim = compute(gpu, { shader: SHADER, label: "poison-sync" });
     await expect(sim.dispatchOnce(1)).rejects.toThrow(/boom/);
     expect(() => sim.dispatch(1)).not.toThrow();
   });
@@ -191,7 +191,7 @@ describe("a failed createComputePipelineAsync does not poison the instance", () 
 describe("dispatchOnce() re-validates writable-storage aliasing after the await", () => {
   test("aliasing introduced by a set() while the compile is in flight is rejected before encoding", async () => {
     gpu = await init();
-    const sim = compute(gpu, ALIAS_SHADER, { label: "alias-late" });
+    const sim = compute(gpu, { shader: ALIAS_SHADER, label: "alias-late" });
     const bufA = storage(gpu, 16, "read-write");
     const bufB = storage(gpu, 16, "read-write");
     sim.set({ a: bufA, b: bufB }); // not aliasing at call time
@@ -206,7 +206,7 @@ describe("dispatchOnce() re-validates writable-storage aliasing after the await"
 describe("dispatch()/dispatchOnce() reject invalid workgroup counts with a stable error code (contract #17)", () => {
   test("dispatch() throws VGPU-R1-DISPATCH-COUNT for negative, fractional, or NaN counts", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "invalid-sync" });
+    const sim = compute(gpu, { shader: SHADER, label: "invalid-sync" });
     for (const bad of [-1, 1.5, Number.NaN]) {
       expect(() => sim.dispatch(bad)).toThrowError(expect.objectContaining({ code: "VGPU-R1-DISPATCH-COUNT" }));
     }
@@ -216,7 +216,7 @@ describe("dispatch()/dispatchOnce() reject invalid workgroup counts with a stabl
 
   test("dispatchOnce() rejects with VGPU-R1-DISPATCH-COUNT for the same invalid counts", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "invalid-async" });
+    const sim = compute(gpu, { shader: SHADER, label: "invalid-async" });
     await expect(sim.dispatchOnce(-1)).rejects.toMatchObject({ code: "VGPU-R1-DISPATCH-COUNT" });
     await expect(sim.dispatchOnce(1.5)).rejects.toMatchObject({ code: "VGPU-R1-DISPATCH-COUNT" });
     await expect(sim.dispatchOnce(1, 2, -3)).rejects.toMatchObject({ code: "VGPU-R1-DISPATCH-COUNT" });
@@ -224,7 +224,7 @@ describe("dispatch()/dispatchOnce() reject invalid workgroup counts with a stabl
 
   test("valid counts (including 0) never throw", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "valid" });
+    const sim = compute(gpu, { shader: SHADER, label: "valid" });
     expect(() => sim.dispatch(0)).not.toThrow();
     await expect(sim.dispatchOnce(0, 0, 0)).resolves.toBeUndefined();
   });
@@ -235,7 +235,7 @@ describe("dispatch()/dispatchOnce() reject invalid workgroup counts with a stabl
 describe("dispose() interacting with the lazy/async pipeline paths", () => {
   test("dispatchOnce() rejects with VGPU-DEVICE-DISPOSED if the gpu was disposed before the call", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "disposed-before" });
+    const sim = compute(gpu, { shader: SHADER, label: "disposed-before" });
     gpu.dispose();
     await expect(sim.dispatchOnce(1)).rejects.toMatchObject({ code: "VGPU-DEVICE-DISPOSED" });
     gpu = undefined;
@@ -243,7 +243,7 @@ describe("dispose() interacting with the lazy/async pipeline paths", () => {
 
   test("dispatch() throws VGPU-DEVICE-DISPOSED if the gpu was disposed before the call", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "disposed-before-sync" });
+    const sim = compute(gpu, { shader: SHADER, label: "disposed-before-sync" });
     gpu.dispose();
     expect(() => sim.dispatch(1)).toThrowError(expect.objectContaining({ code: "VGPU-DEVICE-DISPOSED" }));
     gpu = undefined;
@@ -251,7 +251,7 @@ describe("dispose() interacting with the lazy/async pipeline paths", () => {
 
   test("dispatchOnce() rejects with VGPU-DEVICE-DISPOSED (not a raw WebGPU error) when disposed while the async compile is in flight", async () => {
     gpu = await init();
-    const sim = compute(gpu, SHADER, { label: "disposed-mid-flight" });
+    const sim = compute(gpu, { shader: SHADER, label: "disposed-mid-flight" });
     let resolvePipeline!: (pipeline: GPUComputePipeline) => void;
     const pending = new Promise<GPUComputePipeline>((resolve) => { resolvePipeline = resolve; });
     vi.spyOn(gpu.device.gpu, "createComputePipelineAsync").mockReturnValue(pending);

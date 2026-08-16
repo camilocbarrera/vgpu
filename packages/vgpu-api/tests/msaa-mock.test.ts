@@ -42,7 +42,7 @@ test("MSAA targets compile pipelines with sample count 4", async () => {
   const gpu = await init();
   try {
     const colorTarget = target(gpu, { size: [4, 4], depth: true, msaa: true });
-    const draw = effect(gpu, SOLID, { label: "msaa-solid" });
+    const draw = effect(gpu, { shader: SOLID, label: "msaa-solid" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(draw)));
 
@@ -69,7 +69,7 @@ test("MSAA target with blend keeps resolve descriptor and blend pipeline state",
   const renderPasses = spyRenderPassDescriptors(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, { size: [4, 4], format: "rgba8unorm", msaa: true });
-    const draw = effect(gpu, SOLID, { label: "msaa-blend", blend: "alpha" });
+    const draw = effect(gpu, { shader: SOLID, label: "msaa-blend", blend: "alpha" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(draw)));
 
@@ -94,7 +94,7 @@ test("MRT MSAA targets resolve every color and compile all color states with sam
       colors: [{ format: "rgba8unorm" }, { format: "rgba8unorm" }],
       msaa: true,
     });
-    const draw = effect(gpu, MRT, { label: "mrt-msaa" });
+    const draw = effect(gpu, { shader: MRT, label: "mrt-msaa" });
 
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (pass) => pass.draw(draw)));
 

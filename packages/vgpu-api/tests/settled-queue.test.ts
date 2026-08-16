@@ -166,7 +166,7 @@ test("regression: settled() still waits transitively on an in-flight claimed-bin
 
 test("regression: compute's synchronous dispatch never awaits queue.onSubmittedWorkDone on its own resolution path", async () => {
   const gpu = await init();
-  const sim = compute(gpu, EMPTY_COMPUTE_SHADER, { label: "settledQueueRegressionCompute" });
+  const sim = compute(gpu, { shader: EMPTY_COMPUTE_SHADER, label: "settledQueueRegressionCompute" });
   const onSubmittedWorkDone = vi.spyOn(gpu.device.gpu.queue, "onSubmittedWorkDone");
 
   const result = sim.dispatch(1);

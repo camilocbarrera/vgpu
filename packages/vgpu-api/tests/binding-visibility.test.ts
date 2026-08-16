@@ -39,7 +39,7 @@ test("render visibility unions only selected entry static uses and retains unuse
 
 test("compute visibility is selected-entry driven and leaves unused declarations at zero", async () => {
   const gpu = await init();
-  compute(gpu, COMPUTE, { label: "compute-visible" });
+  compute(gpu, { shader: COMPUTE, label: "compute-visible" });
   expect(entries(gpu, "compute-visible").map(({ binding, visibility }) => [binding, visibility])).toEqual([[0, 4]]);
   gpu.dispose();
 });

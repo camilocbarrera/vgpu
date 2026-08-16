@@ -201,7 +201,7 @@ test("the call-site policy reaches the one-shot draw()/effect draw path too", as
   const gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: WGSL, label: "oneShot" });
-  const shader = effect(gpu, FRAGMENT_ONLY, { label: "oneShotFx" });
+  const shader = effect(gpu, { shader: FRAGMENT_ONLY, label: "oneShotFx" });
 
   expect(caught(() => drawable.draw({ target: colorTarget, pendingPipelines: "throw" }))?.code).toBe("VGPU-PIPELINE-PENDING");
   expect(caught(() => shader.draw({ target: colorTarget, pendingPipelines: "throw" }))?.code).toBe("VGPU-PIPELINE-PENDING");

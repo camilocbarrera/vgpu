@@ -96,7 +96,7 @@ test("compile/compileSync/pipelineForAsync against a surface outside frame() nev
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas);
     const drawable = draw(gpu, { shader: WGSL, label: "outside" });
-    const shader = effect(gpu, FRAGMENT_ONLY, { label: "outside-effect" });
+    const shader = effect(gpu, { shader: FRAGMENT_ONLY, label: "outside-effect" });
 
     await expect(drawable.compile(canvasSurface)).resolves.toBe(drawable);
     expect(drawable.compileSync(canvasSurface)).toBe(drawable);
@@ -150,7 +150,7 @@ test("standalone draw()/effect().draw() against a surface outside frame() still 
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas);
     const drawable = draw(gpu, { shader: WGSL, label: "encode-guard" });
-    const shader = effect(gpu, FRAGMENT_ONLY, { label: "encode-guard-effect" });
+    const shader = effect(gpu, { shader: FRAGMENT_ONLY, label: "encode-guard-effect" });
 
     expectNotInFrame(() => drawable.draw(canvasSurface));
     expectNotInFrame(() => shader.draw(canvasSurface));
