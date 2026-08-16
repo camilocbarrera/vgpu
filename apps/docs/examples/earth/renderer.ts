@@ -350,35 +350,29 @@ function setFrameUniforms(
   });
   const basis = cameraBasis(position, [0, 0, 0], camera.fov);
 
-  scene.earth.set({
-    earth: {
-      viewProjection: view.viewProjection,
-      cameraPosition: position,
-      time,
-      lightDirection: light,
-      nightLights: 1,
-    },
+  scene.earth.set("earth", {
+    viewProjection: view.viewProjection,
+    cameraPosition: position,
+    time,
+    lightDirection: light,
+    nightLights: 1,
   });
-  scene.atmosphere.set({
-    atmosphere: {
-      viewProjection: view.viewProjection,
-      cameraPosition: position,
-      strength: atmosphere.strength,
-      lightDirection: light,
-      _pad: 0,
-    },
+  scene.atmosphere.set("atmosphere", {
+    viewProjection: view.viewProjection,
+    cameraPosition: position,
+    strength: atmosphere.strength,
+    lightDirection: light,
+    _pad: 0,
   });
-  scene.sky.set({
-    sky: {
-      right: basis.right,
-      tanHalfFov: basis.tanHalfFov,
-      up: basis.up,
-      aspect,
-      forward: basis.forward,
-      starBrightness: grade.starBrightness,
-      lightDirection: light,
-      sunIntensity: sun.intensity,
-    },
+  scene.sky.set("sky", {
+    right: basis.right,
+    tanHalfFov: basis.tanHalfFov,
+    up: basis.up,
+    aspect,
+    forward: basis.forward,
+    starBrightness: grade.starBrightness,
+    lightDirection: light,
+    sunIntensity: sun.intensity,
   });
 }
 

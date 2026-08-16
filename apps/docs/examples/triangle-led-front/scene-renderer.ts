@@ -203,9 +203,7 @@ export function createHeroRenderer(
       );
 
       if (currentTheme === 'light') {
-        lightFloorDraw.set({
-          lg: lightGlowUniformData(resolved.lightGlow, resolved.colorMix),
-        });
+        lightFloorDraw.set("lg", lightGlowUniformData(resolved.lightGlow, resolved.colorMix));
         currentParts.lightGlowUniformReady = true;
       }
 
@@ -225,8 +223,8 @@ export function createHeroRenderer(
         },
       );
       if (floorData) {
-        lightFloorDraw.set({ cfg: floorData });
-        darkFloorDraw.set({ cfg: floorData });
+        lightFloorDraw.set("cfg", floorData);
+        darkFloorDraw.set("cfg", floorData);
         currentParts.floorUniformReady = true;
       }
 

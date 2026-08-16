@@ -129,8 +129,8 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptio
       const displacement = graph.ifft.at(-1)!.output;
       const previewTarget = target(gpu, { size: displacement.size, format: 'rgba8unorm', label: 'fft-ocean-displacement-preview' });
       try {
-        const preview = effect(gpu, { shader: stagePreviewWgsl, label: 'fft-ocean-displacement-preview' });
-        preview.set({ u: { outputWidth: displacement.size[0], outputHeight: displacement.size[1], stage: 1, gain: 16 }, u_input: displacement });
+        const preview = effect(gpu, { shader: stagePreviewWgsl, label: 'fft-ocean-displacement-preview', bindings: { u_input: displacement } });
+        preview.set("u", { outputWidth: displacement.size[0], outputHeight: displacement.size[1], stage: 1, gain: 16 });
         await preview.compile(previewTarget);
         frame(gpu, (currentFrame) => currentFrame.pass({ target: previewTarget, clear: CLEAR }, (pass) => pass.draw(preview)));
         await gpu.gpu.queue.onSubmittedWorkDone();
@@ -171,28 +171,28 @@ async function createGraph(gpu: Gpu, output: Output, label: string): Promise<Oce
   const composite = own(target(gpu, { size: sizes[0]!, format: HDR_FORMAT, label: `${label}-composite` }));
   const samplerState = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
   const noiseEffect = effect(gpu, { shader: noiseWgsl, label: `${label}-noise` });
-  noiseEffect.set({ u: { seed: 0x6f636561, resolution } });
-  const initialSpectrum = effect(gpu, { shader: initialSpectrumWgsl, label: `${label}-initial-spectrum` });
-  initialSpectrum.set({ u: { resolution, size: OCEAN_TUNING.simulation.oceanSize, windSpeed: OCEAN_TUNING.simulation.windSpeed, windAngle: OCEAN_TUNING.simulation.windAngle, amplitude: OCEAN_TUNING.simulation.amplitude }, u_noise: noise });
-  const evolveSpectrum = effect(gpu, { shader: spectrumWgsl, label: `${label}-spectrum` });
-  evolveSpectrum.set({ u: { resolution, size: OCEAN_TUNING.simulation.oceanSize, time: 0, choppiness: OCEAN_TUNING.simulation.choppiness }, u_initialSpectrum: h0 });
+  noiseEffect.set("u", { seed: 0x6f636561, resolution });
+  const initialSpectrum = effect(gpu, { shader: initialSpectrumWgsl, label: `${label}-initial-spectrum`, bindings: { u_noise: noise } });
+  initialSpectrum.set("u", { resolution, size: OCEAN_TUNING.simulation.oceanSize, windSpeed: OCEAN_TUNING.simulation.windSpeed, windAngle: OCEAN_TUNING.simulation.windAngle, amplitude: OCEAN_TUNING.simulation.amplitude });
+  const evolveSpectrum = effect(gpu, { shader: spectrumWgsl, label: `${label}-spectrum`, bindings: { u_initialSpectrum: h0 } });
+  evolveSpectrum.set("u", { resolution, size: OCEAN_TUNING.simulation.oceanSize, time: 0, choppiness: OCEAN_TUNING.simulation.choppiness });
   const targets: Record<SimulationTargetName, Target> = { spectrum, ping, pong };
   const ifft = createIfftStageTable().map((spec) => {
-    const shader1 = effect(gpu, { shader: ifftStageWgsl, label: `${label}-ifft-${spec.index}-${spec.horizontal ? 'h' : 'v'}` });
-    shader1.set({ u: { resolution, subtransformSize: spec.subtransformSize, horizontal: spec.horizontal ? 1 : 0 }, u_input: targets[spec.input] });
+    const shader1 = effect(gpu, { shader: ifftStageWgsl, label: `${label}-ifft-${spec.index}-${spec.horizontal ? 'h' : 'v'}`, bindings: { u_input: targets[spec.input] } });
+    shader1.set("u", { resolution, subtransformSize: spec.subtransformSize, horizontal: spec.horizontal ? 1 : 0 });
     return { spec, effect: shader1, output: targets[spec.output] };
   });
   const displacement = targets[ifft.at(-1)!.spec.output];
-  const normals = effect(gpu, { shader: normalFoamWgsl, label: `${label}-normal-foam` });
-  normals.set({ u: { resolution, worldSize: OCEAN_TUNING.simulation.worldSize, displacementScale: OCEAN_TUNING.simulation.displacementScale, choppiness: OCEAN_TUNING.simulation.choppiness, foamThreshold: OCEAN_TUNING.simulation.foamThreshold }, u_displacement: displacement });
+  const normals = effect(gpu, { shader: normalFoamWgsl, label: `${label}-normal-foam`, bindings: { u_displacement: displacement } });
+  normals.set("u", { resolution, worldSize: OCEAN_TUNING.simulation.worldSize, displacementScale: OCEAN_TUNING.simulation.displacementScale, choppiness: OCEAN_TUNING.simulation.choppiness, foamThreshold: OCEAN_TUNING.simulation.foamThreshold });
   const particles = draw(gpu, {
     shader: particlesWgsl,
     vertices: 6,
     instances: resolution * resolution,
     blend: { color: { src: 'src-alpha', dst: 'one' }, alpha: { src: 'one', dst: 'one' } },
     label: `${label}-particles`,
+    bindings: { u_displacement: displacement, u_normalFoam: normalFoam },
   });
-  particles.set({ u_displacement: displacement, u_normalFoam: normalFoam });
   setParticleConstants(particles, output);
   const brightEffect = effect(gpu, { shader: bloomBrightWgsl, label: `${label}-bloom-bright` });
   brightEffect.set({ uniforms: { luminosityThreshold: OCEAN_TUNING.bloom.threshold, smoothWidth: OCEAN_TUNING.bloom.smoothWidth }, tDiffuse: scene, linearSampler: samplerState });
@@ -224,9 +224,9 @@ async function createGraph(gpu: Gpu, output: Output, label: string): Promise<Oce
 }
 
 function makeBlur(gpu: Gpu, label: string, source: Target, colorTarget: Target, samplerState: GPUSampler, direction: readonly [number, number], kernelRadius: number): Effect {
-  const shader1 = effect(gpu, { shader: bloomBlurWgsl, label });
+  const shader1 = effect(gpu, { shader: bloomBlurWgsl, label, bindings: { colorTexture: source, linearSampler: samplerState } });
   const c = gaussianCoefficients(kernelRadius);
-  shader1.set({ uniforms: { direction, invSize: colorTarget.texelSize, gaussianCoefficients0: c.slice(0, 4), gaussianCoefficients1: c.slice(4, 8), gaussianCoefficients2: c.slice(8, 12), gaussianCoefficients3: c.slice(12, 16), gaussianCoefficients4: c.slice(16, 20), gaussianCoefficients5: c.slice(20, 24) }, colorTexture: source, linearSampler: samplerState });
+  shader1.set("uniforms", { direction, invSize: colorTarget.texelSize, gaussianCoefficients0: c.slice(0, 4), gaussianCoefficients1: c.slice(4, 8), gaussianCoefficients2: c.slice(8, 12), gaussianCoefficients3: c.slice(12, 16), gaussianCoefficients4: c.slice(16, 20), gaussianCoefficients5: c.slice(20, 24) });
   return shader1;
 }
 
@@ -240,7 +240,7 @@ async function prewarm(g: OceanGraph, output: Output): Promise<void> {
 }
 
 function setDynamics(g: OceanGraph, timeSeconds: number): void {
-  g.evolveSpectrum.set({ u: { time: timeSeconds * OCEAN_TUNING.simulation.spectrumTimeScale } });
+  g.evolveSpectrum.set("u", { time: timeSeconds * OCEAN_TUNING.simulation.spectrumTimeScale });
 }
 function setParticleConstants(drawable: Draw, output: Output): void {
   const resolution = OCEAN_RESOLUTION;
@@ -292,7 +292,7 @@ function resizeOutputGraph(g: OceanGraph, output: Output): void {
   g.compositeEffect.set({ blurTexture1: g.levels[0]!.vertical, blurTexture2: g.levels[1]!.vertical, blurTexture3: g.levels[2]!.vertical, blurTexture4: g.levels[3]!.vertical, blurTexture5: g.levels[4]!.vertical });
   g.present.set({ sceneHDR: g.scene, bloomTexture: g.composite });
   const camera = oceanCamera(output.size);
-  g.particles.set({ u: { view: camera.view, projection: camera.projection, viewport: [output.size[0], output.size[1], 1, OCEAN_RESOLUTION] } });
+  g.particles.set("u", { view: camera.view, projection: camera.projection, viewport: [output.size[0], output.size[1], 1, OCEAN_RESOLUTION] });
 }
 function bloomSizes(size: readonly [number, number]): [number, number][] {
   let w = Math.max(1, Math.round(size[0] / 2)), h = Math.max(1, Math.round(size[1] / 2)); const out: [number, number][] = [];

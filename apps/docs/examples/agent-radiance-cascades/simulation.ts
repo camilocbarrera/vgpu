@@ -144,17 +144,15 @@ function buildChain(
   const scale = Math.min(size[0], size[1]);
   const passes: ChainPass[] = [];
 
-  effects.dots.set({
-    agent: {
-      size: [size[0], size[1]],
-      time,
-      spacing: scale * DOT_SPACING,
-      radius: scale * DOT_RADIUS,
-      base_radiance: BASE_RADIANCE,
-      peak_radiance: PEAK_RADIANCE,
-      edge_softness: 0.8,
-      animation_mode: AGENT_RADIANCE_ANIMATION_MODES[animation],
-    },
+  effects.dots.set("agent", {
+    size: [size[0], size[1]],
+    time,
+    spacing: scale * DOT_SPACING,
+    radius: scale * DOT_RADIUS,
+    base_radiance: BASE_RADIANCE,
+    peak_radiance: PEAK_RADIANCE,
+    edge_softness: 0.8,
+    animation_mode: AGENT_RADIANCE_ANIMATION_MODES[animation],
   });
   passes.push({ target: scene.emitter, effect: effects.dots });
   if (!resolved.needsJfa) return passes;

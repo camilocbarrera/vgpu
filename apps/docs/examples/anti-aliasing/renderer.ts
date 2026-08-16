@@ -133,9 +133,9 @@ function setStaticBindings(effects: AaEffects, targets: AaTargets): void {
 }
 
 function setResolutionBindings(effects: AaEffects, output: Surface | Target): void {
-  effects.scene.set({ logical_resolution: output.size, _pad: 0 });
-  effects.resolve.set({ resolution: output.size, _pad: 0 });
-  effects.fxaa.set({ resolution: output.size });
+  effects.scene.set("uniforms", { logical_resolution: output.size, _pad: 0 });
+  effects.resolve.set("uniforms", { resolution: output.size, _pad: 0 });
+  effects.fxaa.set("uniforms", { resolution: output.size });
 }
 
 function setModeBindings(effects: AaEffects, targets: AaTargets, mode: AaMode): void {
@@ -154,7 +154,7 @@ function renderMode(
   mode: AaMode,
   time: number,
 ): void {
-  effects.scene.set({ time });
+  effects.scene.set("uniforms", { time });
 
   if (mode === AA_MODE_OFF) {
     currentFrame.pass({ target: output, clear: CLEAR_BLACK }, (pass) => pass.draw(effects.scene));

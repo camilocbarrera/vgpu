@@ -41,7 +41,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
 
   const renderOnce = () => {
     if (disposed || !gpu || !canvasSurface || !effects || !targets) return;
-    effects.scene.set({ params: orbit });
+    effects.scene.set("params", orbit);
     frame(gpu, (currentFrame) => renderChain(currentFrame, effects!, targets!, canvasSurface!));
   };
   const applyResize = () => {
@@ -137,10 +137,10 @@ export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: Thumb
     await reportVariant(opts, 'static-repeat', colorTarget);
     await renderAndWait(gpu, effects, targets, colorTarget, ALTERNATE);
     await reportVariant(opts, 'alternate-orbit', colorTarget);
-    effects.composite.set({ composite: { bloomStrength: 0 } });
+    effects.composite.set("composite", { bloomStrength: 0 });
     await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
     await reportVariant(opts, 'bloom-off', colorTarget);
-    effects.composite.set({ composite: { bloomStrength: 0.65 } });
+    effects.composite.set("composite", { bloomStrength: 0.65 });
     await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
     await gpu.settled();
   } finally {
@@ -158,7 +158,7 @@ async function reportVariant(opts: ThumbOptions, variant: Variant, colorTarget: 
   await opts.onVariantRendered(variant, new Uint8Array(pixels), colorTarget.size);
 }
 async function renderAndWait(gpu: Gpu, effects: Effects, targets: Targets, output: Target, orbit: Readonly<Orbit>) {
-  effects.scene.set({ params: orbit });
+  effects.scene.set("params", orbit);
   frame(gpu, (currentFrame) => renderChain(currentFrame, effects, targets, output));
   await gpu.gpu.queue.onSubmittedWorkDone();
 }
@@ -191,14 +191,14 @@ function createTargets(gpu: Gpu, size: readonly [number, number], label: string)
   }
 }
 function setConstants(e: Effects): void {
-  e.scene.set({ params: { resolution: [1, 1], ...POSTER } });
+  e.scene.set("params", { resolution: [1, 1], ...POSTER });
   e.brightPass.set({ samp: e.sampler, bright: { threshold: 1, knee: 0.25 } });
   e.blurH.set({ samp: e.sampler, blur: { direction: [1, 0], radius: 1.6 } });
   e.blurV.set({ samp: e.sampler, blur: { direction: [0, 1], radius: 1.6 } });
   e.composite.set({ samp: e.sampler, composite: { exposure: 1.05, bloomStrength: 0.65 } });
 }
 function setBindings(e: Effects, t: Targets): void {
-  e.scene.set({ params: { resolution: t.scene.size } });
+  e.scene.set("params", { resolution: t.scene.size });
   e.brightPass.set({ src: t.scene });
   e.blurH.set({ src: t.bloomA, blur: { texelSize: t.bloomA.texelSize } });
   e.blurV.set({ src: t.bloomB, blur: { texelSize: t.bloomB.texelSize } });
