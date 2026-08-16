@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { Worker } from "node:worker_threads";
 import { describe, expect, test } from "vitest";
 import { init, effect, frame, surface, target } from "../../src/node.ts";
@@ -31,7 +35,7 @@ const YELLOW = `
 
 describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Surface Docker GPU acceptance", () => {
   test("§7.14 surface render, resize, re-render, and readback use the new physical size", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const canvas = gpuCanvasLike(8, 8, true);
       const canvasSurface = surface(gpu, canvas, { dpr: 1, autoResize: false, label: "gpuSurface" });
@@ -54,6 +58,10 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Surface Docker GPU accept
     }
   });
 
+  // This one is worth a warning to whoever edits it next: it runs its scenario in a worker thread,
+  // so a sandbox where the worker cannot acquire an adapter fails it BEFORE the scenario executes.
+  // That is how T04-21 first mis-filed it as pre-existing environmental noise -- the local run never
+  // reached the encode that CI hit. A local red here means nothing until you know WHERE it went red.
   test("§7.15 worker-style OffscreenCanvas surface resizes manually and updates a derived target", async () => {
     const result = await runWorkerSurfaceScenario();
     expect(result).toMatchObject({ initial: [16, 8], resized: [20, 10], half: [10, 5] });
@@ -62,7 +70,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Surface Docker GPU accept
   });
 
   test("§7.16 multi-canvas surfaces render and read back independently", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const a = surface(gpu, gpuCanvasLike(6, 6, true), { dpr: 1, label: "surfaceA" });
       const b = surface(gpu, gpuCanvasLike(5, 5, true), { dpr: 1, label: "surfaceB" });
@@ -132,7 +140,10 @@ async function runWorkerSurfaceScenario(): Promise<{ initial: number[]; resized:
     const { parentPort } = require("node:worker_threads");
     (async () => {
       const { init, surface: createSurface, target, effect: createEffect, frame } = await import(${JSON.stringify(new URL("../../dist/node.js", import.meta.url).href)});
-      const gpu = await init();
+      // "sync" for the same reason as its siblings in this file (T04-21): the subject is the resize
+      // of a worker-style surface and of the target derived from it, not readiness. Note this worker
+      // imports the BUILT dist, so it runs whatever default tsc last emitted.
+      const gpu = await init({ pendingPipelines: "sync" });
       try {
         const canvas = (${workerCanvasSource()})(16, 8);
         const surface = createSurface(gpu, canvas);

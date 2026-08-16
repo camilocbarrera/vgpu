@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { init, bundle, draw, frame, storage, target } from "../src/mock.ts";
 
@@ -50,7 +55,7 @@ struct VertexOut {
 `;
 
 test("draw(gpu, opts) records storage-driven vertices and instances without vertex buffers", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const count = 8;
@@ -69,7 +74,7 @@ test("draw(gpu, opts) records storage-driven vertices and instances without vert
 });
 
 test("instances zero is a valid no-instance draw", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const dots = draw(gpu, { shader: INSTANCED_SHADER, label: "zero-dots", instances: 0, vertices: 6 });
@@ -85,7 +90,7 @@ test("instances zero is a valid no-instance draw", async () => {
 });
 
 test("per-call instances override draw defaults while vertices fall back to draw options", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const dots = draw(gpu, { shader: INSTANCED_SHADER, label: "dots", instances: 10, vertices: 6, firstInstance: 2 });
@@ -101,7 +106,7 @@ test("per-call instances override draw defaults while vertices fall back to draw
 });
 
 test("geometry vertexCount wins over DrawOptions.vertices unless call vertices override it", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const geometry = { vertexCount: 5 };
@@ -124,7 +129,7 @@ test("geometry vertexCount wins over DrawOptions.vertices unless call vertices o
 });
 
 test("bundle recording preserves per-call instance counts and replays the bundle", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const bundleDrawCalls = spyRenderBundleDraws(gpu.device.gpu);
   const bundleExecutions = spyRenderPassBundleExecutions(gpu.device.gpu);
   try {
@@ -160,7 +165,7 @@ test("draw count options reject negative and non-integer values with VGPU errors
   ];
 
   for (const testCase of cases) {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const colorTarget = target(gpu, { size: [4, 4] });
       const drawable = draw(gpu, { shader: INSTANCED_SHADER, label: testCase.name, vertices: 6, ...testCase.drawOpts });

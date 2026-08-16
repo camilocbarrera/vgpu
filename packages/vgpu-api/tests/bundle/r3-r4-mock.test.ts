@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { bind, createBindGroup, createBindGroupLayout } from "@vgpu/core";
 import { UniformPool } from "../../src/core.ts";
@@ -29,7 +34,7 @@ struct Obj { value: f32 }
 `;
 
 test("R3 bundle replay stays valid after JS value writes and stales on bind-group identity changes", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const tex1 = target(gpu, { size: [4, 4] });
   const tex2 = target(gpu, { size: [4, 4] });
@@ -62,7 +67,7 @@ test("R3 bundle replay stays valid after JS value writes and stales on bind-grou
 });
 
 test("R3 bundle sampling a repeatedly resized target stales through binding identity each time", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const source = target(gpu, { size: [4, 4] });
   const post = effect(gpu, { shader: WALLS, label: "post", set: { detail: source } });
@@ -95,7 +100,7 @@ test("R3 bundle sampling a repeatedly resized target stales through binding iden
 });
 
 test("R4 raw claim validation stays attributed when frames overlap", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const popResolvers: ((error: GPUError | null) => void)[] = [];
   const gpuDevice = gpu.device.gpu as GPUDevice & {
@@ -166,7 +171,7 @@ function rawClaimedDraw(gpu: Awaited<ReturnType<typeof init>>, label: string) {
 }
 
 test("R4 claimed groups reject set() and per-draw offsets reach setBindGroup", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const cube = draw(gpu, { shader: OBJECTS, label: "cube", set: { globals: { tint: 1 } } });
   const offsets: readonly number[][] = [];

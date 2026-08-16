@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation, init, draw, geometry, target } from "../src/mock.ts";
 import { pipelineKeyOf } from "../src/pipeline-store.ts";
@@ -18,7 +23,7 @@ const MESHLESS_WGSL = `
 `;
 
 test("topology and stripIndexFormat participate in pipeline descriptors and keys while ranges do not", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2] });
     const a = geometry(gpu, { topology: "triangle-strip", buffers: [{ data: new Float32Array([0, 0, 1, 0]), attributes: { position: { format: "float32x2", location: 0 } } }], indices: new Uint16Array([0, 1]) });
@@ -43,7 +48,7 @@ test("topology and stripIndexFormat participate in pipeline descriptors and keys
 });
 
 test("cull and frontFace participate in pipeline descriptors and keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2] });
     draw(gpu, { shader: MESHLESS_WGSL, label: "cull-back", cull: "back", frontFace: "cw" }).draw(colorTarget);
@@ -66,7 +71,7 @@ test("cull and frontFace participate in pipeline descriptors and keys", async ()
 });
 
 test("invalid cull and frontFace options fail at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     expect(() => draw(gpu, { shader: MESHLESS_WGSL, label: "badCull", cull: "backwards" as never })).toThrowError(/VGPU-CULL-INVALID|Invalid cull/);
     expect(() => draw(gpu, { shader: MESHLESS_WGSL, label: "badFace", frontFace: "clockwise" as never })).toThrowError(/VGPU-FRONTFACE-INVALID|Invalid frontFace/);
@@ -76,7 +81,7 @@ test("invalid cull and frontFace options fail at draw construction", async () =>
 });
 
 test("indexed draw ranges and instance counts use draw options over slice over geometry", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const indexedCalls = spyIndexedDraws(gpu.device.gpu);
   try {
     const geo = geometry(gpu, {
@@ -107,7 +112,7 @@ test("indexed draw ranges and instance counts use draw options over slice over g
 });
 
 test("structural GeometryLike ranges remain a native-validation escape hatch", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2] });
     const vertexBuffer = gpu.device.gpu.createBuffer({ size: 64, usage: 32 });
@@ -121,7 +126,7 @@ test("structural GeometryLike ranges remain a native-validation escape hatch", a
 });
 
 test("non-indexed draw overrides validate absolute intervals against the parent geometry", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const geo = geometry(gpu, { buffers: [{ data: new Float32Array([0, 0, 1, 0, 0, 1, 1, 1, 2, 1, 1, 2]), attributes: { position: { format: "float32x2", location: 0 } } }] });
     const slice = geo.slice({ firstVertex: 2, vertexCount: 2 });

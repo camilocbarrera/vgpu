@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { describe, expect, test } from "vitest";
 import { init, effect, frame, target } from "../../src/mock.ts";
@@ -55,7 +60,7 @@ struct Globals { time: f32, mouse: vec2f }
 
 describe("uniforms(gpu) shared uniforms", () => {
   test("defers layout adoption and allocates only on first bind", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
@@ -70,7 +75,7 @@ describe("uniforms(gpu) shared uniforms", () => {
   });
 
   test("rejects incompatible later structs with the canonical fix-it text", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
 
     effect(gpu, { shader: WAVE_WGSL, label: "WAVE_WGSL", set: { globals } });
@@ -83,7 +88,7 @@ describe("uniforms(gpu) shared uniforms", () => {
   });
 
   test("rejects same named members when reflected byte layout differs", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
 
     effect(gpu, { shader: PADDED_WGSL, label: "PADDED_WGSL", set: { globals } });
@@ -96,7 +101,7 @@ describe("uniforms(gpu) shared uniforms", () => {
   });
 
   test("one in-place write is visible to both consumers without reallocating buffers or bind groups", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
     const wave = effect(gpu, { shader: WAVE_WGSL, label: "WAVE_WGSL", set: { globals } });
     const blur = effect(gpu, { shader: BLUR_WGSL, label: "BLUR_WGSL", set: { globals } });
@@ -134,7 +139,7 @@ describe("uniforms(gpu) shared uniforms", () => {
   });
 
   test("set() batches a partial update into one writeBuffer call", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
     effect(gpu, { shader: WAVE_WGSL, label: "WAVE_WGSL", set: { globals } });
     let writes = 0;
@@ -151,7 +156,7 @@ describe("uniforms(gpu) shared uniforms", () => {
   });
 
   test("ignores unsafe keys from parsed updates without polluting Object.prototype", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms<Record<string, unknown>>(gpu, { time: 0, mouse: [0, 0] });
     const pollutionKey = "__vgpuPrototypePollutionTest";
     const update = JSON.parse(`{
@@ -172,7 +177,7 @@ describe("uniforms(gpu) shared uniforms", () => {
   });
 
   test("binding name is chosen by each shader", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
     const wave = effect(gpu, { shader: WAVE_WGSL, label: "WAVE_WGSL", set: { globals } });
     const override = effect(gpu, { shader: OVERRIDE_NAME_WGSL, label: "OVERRIDE_WGSL", set: { g: globals } });
@@ -184,7 +189,7 @@ describe("uniforms(gpu) shared uniforms", () => {
   });
 
   test("storage address-space uses the same deferred-layout shared resource path", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
     const storage = effect(gpu, { shader: STORAGE_WGSL, label: "STORAGE_WGSL", set: { globals } });
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -199,7 +204,7 @@ describe("uniforms(gpu) shared uniforms", () => {
 
 describe("uniforms(gpu, values)", () => {
   test("adopts the layout of the first shader that binds it and shares one buffer across effects", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
     const before = mock.createBufferDescriptors.length;
@@ -220,7 +225,7 @@ describe("uniforms(gpu, values)", () => {
   });
 
   test("the adopted buffer is destroyed by gpu.dispose(), and a disposed gpu is refused up front", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });
     effectDraw(effect(gpu, { shader: WAVE_WGSL, set: { globals } }));
     expect(() => globals.set({ time: 1 })).not.toThrow();
@@ -233,7 +238,7 @@ describe("uniforms(gpu, values)", () => {
   });
 
   test("uniforms(gpu) never allocates for a value bag no shader binds", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
     const before = mock.createBufferDescriptors.length;
     const unused = uniforms(gpu, { time: 0, mouse: [0, 0] });

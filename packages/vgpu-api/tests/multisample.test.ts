@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, draw, frame, target } from "../src/mock.ts";
@@ -11,7 +16,7 @@ const SOLID = `
 `;
 
 test("alphaToCoverage and mask reach the render pipeline multisample state", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4], msaa: true });
 
   draw(gpu, { shader: SOLID, label: "a2c", multisample: { alphaToCoverage: true, mask: 0b0101 } }).draw(colorTarget);
@@ -22,7 +27,7 @@ test("alphaToCoverage and mask reach the render pipeline multisample state", asy
 });
 
 test("unset multisample fields stay omitted; absent option keeps byte-identical descriptors", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const msaa = target(gpu, { size: [4, 4], msaa: true });
   const plain = target(gpu, { size: [4, 4] });
 
@@ -41,7 +46,7 @@ test("unset multisample fields stay omitted; absent option keeps byte-identical 
 });
 
 test("invalid multisample options fail at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => draw(gpu, { shader: SOLID, label: "not-object", multisample: "msaa" as never })).toThrowError(/VGPU-MULTISAMPLE-INVALID|expected \{ alphaToCoverage\?, mask\? \}/);
   expect(() => draw(gpu, { shader: SOLID, label: "array", multisample: [true] as never })).toThrowError(/VGPU-MULTISAMPLE-INVALID|expected \{ alphaToCoverage\?, mask\? \}/);
   expect(() => draw(gpu, { shader: SOLID, label: "bad-a2c", multisample: { alphaToCoverage: "yes" } as never })).toThrowError(/VGPU-MULTISAMPLE-INVALID|alphaToCoverage must be a boolean/);
@@ -52,7 +57,7 @@ test("invalid multisample options fail at draw construction", async () => {
 });
 
 test("alphaToCoverage requires an MSAA target signature", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const msaa = target(gpu, { size: [4, 4], msaa: true });
   const plain = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: SOLID, label: "needs-msaa", multisample: { alphaToCoverage: true } });
@@ -67,7 +72,7 @@ test("alphaToCoverage requires an MSAA target signature", async () => {
 });
 
 test("alphaToCoverage disabled explicitly compiles against non-MSAA targets", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const plain = target(gpu, { size: [4, 4] });
 
   draw(gpu, { shader: SOLID, label: "a2c-off", multisample: { alphaToCoverage: false, mask: 1 } }).draw(plain);
@@ -78,7 +83,7 @@ test("alphaToCoverage disabled explicitly compiles against non-MSAA targets", as
 });
 
 test("MSAA target with alphaToCoverage renders through a frame pass with resolve intact", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4], depth: true, msaa: true });
   const drawable = draw(gpu, { shader: SOLID, label: "msaa-a2c", multisample: { alphaToCoverage: true } });
 

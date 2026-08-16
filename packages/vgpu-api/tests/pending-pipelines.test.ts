@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { draw, effect, frame, init, prepare, target } from "../src/mock.ts";
+import { DEFAULT_PENDING_PIPELINES } from "../src/pending-pipelines.ts";
 
 const WGSL = `
 @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
@@ -46,12 +47,33 @@ function boundPipelines(device: GPUDevice): GPURenderPipeline[] {
   return bound;
 }
 
-// The train's invariant 2: the mechanism is complete, but the effective default stays "sync" until
-// the cut wave, so every unmigrated call site keeps compiling inline exactly like today.
-test("the effective default with no policy anywhere is \"sync\": an unprepared draw compiles inline", async () => {
+// AC #3 of the frozen design, in its final form (T04-21 flipped the constant): with no policy named
+// anywhere, an unprepared encode throws and compiles NOTHING. Pinned on the exported constant AND on
+// behavior, because either one alone can go green for the wrong reason -- a constant nobody reads,
+// or a throw that some other guard produced.
+test("the default with no policy anywhere is \"throw\": an unprepared draw raises and compiles nothing", async () => {
+  expect(DEFAULT_PENDING_PIPELINES).toBe("throw");
   const gpu = await init();
   const colorTarget = target(gpu, { size: [4, 4] });
-  const drawable = draw(gpu, { shader: WGSL, label: "defaultSync" });
+  const drawable = draw(gpu, { shader: WGSL, label: "defaultThrow" });
+  const bound = boundPipelines(gpu.device.gpu);
+
+  const error = caught(() => frame(gpu, (f) => f.pass(colorTarget, (p) => p.draw(drawable))));
+
+  expect(error?.code).toBe("VGPU-PIPELINE-PENDING");
+  expect(countPipelines(gpu)).toEqual({ sync: 0, async: 0 });
+  expect(bound).toHaveLength(0);
+  gpu.dispose();
+});
+
+// The other half of the flip, and the one that keeps "sync" covered forever: it stopped being the
+// default, it did not stop being a value. This is the verbatim body of the pre-T04-21 default test,
+// with the policy now named explicitly at init() -- so the eager compile-on-encode path every
+// pre-flip program relied on still has a test that fails if it regresses.
+test("\"sync\" is still a first-class opt-in: init({ pendingPipelines: \"sync\" }) compiles inline", async () => {
+  const gpu = await init({ pendingPipelines: "sync" });
+  const colorTarget = target(gpu, { size: [4, 4] });
+  const drawable = draw(gpu, { shader: WGSL, label: "optInSync" });
   const bound = boundPipelines(gpu.device.gpu);
 
   expect(() => frame(gpu, (f) => f.pass(colorTarget, (p) => p.draw(drawable)))).not.toThrow();

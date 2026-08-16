@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { createMockAdapter, init, draw, frame, target, timer, visibility } from "../src/mock.ts";
 
@@ -100,7 +105,7 @@ test("a failed attach drops every telemetry instance of that frame, not only its
 });
 
 test("a throwing pass callback leaves no phantom visibility result", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyFrameEncoders(gpu.device.gpu);
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });

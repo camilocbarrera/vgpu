@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { init, effect, frame, target } from "../../src/node.ts";
+import { init, effect, frame, prepare, target } from "../../src/node.ts";
 
 const WAVE = `
 struct Params { time: f32, speed: f32 }
@@ -34,6 +34,10 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
       const colorTarget = target(gpu, { size: [8, 8], format: "rgba8unorm" });
       const wave = effect(gpu, { shader: WAVE, label: "wave", set: { speed: 2 } });
       wave.set("params", { time: Math.PI / 4 });
+      // No policy is named in this file: these run under the shipped `"throw"` default, on a real
+      // Dawn device, which is the only place `prepare()`'s async pipeline creation is exercised
+      // against a driver rather than against the mock. That is the point of keeping it here (T04-21).
+      await prepare(gpu, [{ draw: wave, target: colorTarget }]);
       frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
       const pixels = await colorTarget.read();
       const pixel = [...pixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
@@ -56,6 +60,13 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
       const output = target(gpu, { size: [8, 8], format: "rgba8unorm", label: "output" });
       const solid = effect(gpu, { shader: SOLID, label: "solid" });
       const post = effect(gpu, { shader: POST, label: "post" });
+      // Three combinations, and `solid` into two DIFFERENT target signatures (rgba8unorm:depth:4
+      // and rgba16float:depth:1) is exactly the pair the pipeline cache must keep apart.
+      await prepare(gpu, [
+        { draw: solid, target: msaaScene },
+        { draw: solid, target: scene },
+        { draw: post, target: output },
+      ]);
       frame(gpu, (currentFrame) => {
         currentFrame.pass({ target: msaaScene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
         currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
@@ -87,6 +98,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
       const output = target(gpu, { size: [8, 8], format: "rgba8unorm", label: "outputHdrMsaa" });
       const solid = effect(gpu, { shader: SOLID, label: "solidHdrMsaa" });
       const post = effect(gpu, { shader: POST, label: "postHdrMsaa" });
+      await prepare(gpu, [{ draw: solid, target: scene }, { draw: post, target: output }]);
       frame(gpu, (currentFrame) => {
         currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
         currentFrame.pass({ target: output }, (p) => { post.set({ src: scene, texel: scene.texelSize }); p.draw(post); });

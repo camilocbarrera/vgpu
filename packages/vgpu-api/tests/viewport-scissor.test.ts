@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { init, draw, frame, target } from "../src/mock.ts";
 
@@ -10,7 +15,7 @@ const DRAW_SHADER = `
 `;
 
 test("viewport is emitted once at pass open with defaults filled", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: DRAW_SHADER, label: "vp" });
@@ -24,7 +29,7 @@ test("viewport is emitted once at pass open with defaults filled", async () => {
 });
 
 test("viewport passes all fields through and allows fractional floats", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [4, 4] });
 
@@ -37,7 +42,7 @@ test("viewport passes all fields through and allows fractional floats", async ()
 });
 
 test("scissor is emitted once at pass open", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: DRAW_SHADER, label: "sc" });
@@ -50,7 +55,7 @@ test("scissor is emitted once at pass open", async () => {
 });
 
 test("viewport and scissor together emit viewport first", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [4, 4] });
 
@@ -62,7 +67,7 @@ test("viewport and scissor together emit viewport first", async () => {
 });
 
 test("passes without viewport or scissor emit neither", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: DRAW_SHADER, label: "plain" });
@@ -78,7 +83,7 @@ test("passes without viewport or scissor emit neither", async () => {
 });
 
 test("invalid viewport shapes and values fail at pass open", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const expectInvalid = (viewport: unknown): void => {
     expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, viewport: viewport as never }, () => undefined))).toThrowError(/VGPU-PASS-VIEWPORT-INVALID|Invalid viewport/);
@@ -97,7 +102,7 @@ test("invalid viewport shapes and values fail at pass open", async () => {
 });
 
 test("viewport bounds mirror device limits, not the target size", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const max = gpu.device.gpu.limits.maxTextureDimension2D;
   const maxViewportRange = max * 2;
@@ -116,7 +121,7 @@ test("viewport bounds mirror device limits, not the target size", async () => {
 });
 
 test("out-of-limit viewport errors report the target's current pixel size", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [6, 3] });
   const max = gpu.device.gpu.limits.maxTextureDimension2D;
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, viewport: { width: max + 1, height: 2 } }, () => undefined))).toThrowError(/6x3px/);
@@ -124,7 +129,7 @@ test("out-of-limit viewport errors report the target's current pixel size", asyn
 });
 
 test("invalid scissor shapes and values fail at pass open", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const expectInvalid = (scissor: unknown): void => {
     expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, scissor: scissor as never }, () => undefined))).toThrowError(/VGPU-PASS-SCISSOR-INVALID|Invalid scissor/);
@@ -141,7 +146,7 @@ test("invalid scissor shapes and values fail at pass open", async () => {
 });
 
 test("out-of-bounds scissor errors report the target's current pixel size", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 2] });
   const expectOutOfBounds = (scissor: readonly [number, number, number, number]): void => {
     expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, scissor }, () => undefined))).toThrowError(/VGPU-PASS-SCISSOR-INVALID.*4x2px|4x2px/);
@@ -154,7 +159,7 @@ test("out-of-bounds scissor errors report the target's current pixel size", asyn
 });
 
 test("scissor bounds re-validate against the target's current size after resize", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const opts = { target: colorTarget, scissor: [0, 0, 4, 4] } as const;
 
@@ -167,7 +172,7 @@ test("scissor bounds re-validate against the target's current size after resize"
 });
 
 test("scissor does not affect the clear; the pass still clears the full attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors: GPURenderPassDescriptor[] = [];
   const ops = spyRenderPassOps(gpu.device.gpu, descriptors);
   const colorTarget = target(gpu, { size: [4, 4], depth: true });

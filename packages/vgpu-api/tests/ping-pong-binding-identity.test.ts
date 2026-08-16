@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 // Does the construction form the by-example ping-pong sample SHIPS bind the same half the flat bag
 // bound? Runs on the mock adapter, so it guards a GPU-only behaviour without a GPU.
 //
@@ -61,7 +66,7 @@ function shippedShape() {
 
 async function runCopyPass(mode: "flat-bag" | "as-shipped") {
   const shape = shippedShape();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const buf = pingPong(gpu, 8, 8, { format: "rgba8unorm", label: "buf" });
   tagHalves(buf);
   const fill = effect(gpu, { shader: FILL, label: "fill" });

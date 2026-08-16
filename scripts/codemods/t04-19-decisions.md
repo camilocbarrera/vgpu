@@ -228,7 +228,7 @@ Fixing it revealed a **layered** failure: the live `createRenderer` path never p
   anything could possibly be prepared, since a constructor cannot await. Moved into `prewarm()`,
   after the prepare that already covered the combination.
 
-### Class C — re-record inside the sync callback (unchanged, T04-21 input)
+### Class C — re-record inside the sync callback (RESOLVED by T04-21)
 
 `apps/docs/examples/triangle-led-front/light-sources-raw.ts`: `clearBundle` is re-recorded inside
 `encode()` whenever the bake key changes (occluder toggle / clip-inset tunable). Its birth cannot be
@@ -242,8 +242,22 @@ has — nothing is broken by this ticket. Under `"throw"` it will raise on the f
 The fix is a frame-level policy or hoisting the re-record; both are *behaviour* changes to the
 example, which a purely-additive ticket does not make.
 
-**T04-21 inherits: one class-C site, and the standing instruction to run the extended docs harness
-rather than trust `--verify` alone.**
+**T04-21 inherited exactly this: one class-C site, and the standing instruction to run the extended
+docs harness rather than trust `--verify` alone.** It needed NEITHER of the two options sketched above,
+and finding that out is the useful part of the record: `recordClearBundle()` took no arguments and
+closed only over draws created once, so every recording it produced was identical. The bake key
+never travelled through the recording — it travels through `.set("cfg", ...)` on the two draws,
+rewritten on every `encode()` before either branch, which a replayed bundle picks up. The
+re-record was already a no-op under `"sync"` (an invisible recompile of a byte-identical bundle);
+`"throw"` only made it visible, as a crash. T04-21 deleted it: on a key change the bundle prepared
+at construction is replayed, in the same frame, with no new pipeline and no new recording. A
+readiness gate would have bought a frame of latency and a dropped-toggle window to protect a
+recording that never becomes unprepared.
+
+Executed, not asserted: `apps/docs/examples/triangle-led-front/light-sources-bake.test.ts` toggles
+the key (including a per-frame clip-inset drag) under the real default and pins the conduct — no
+throw, and the bake lands in the SAME frame. Both the pre-fix re-record and a deferred-bake gate
+fail it.
 
 ## Verification, restated honestly
 
@@ -272,9 +286,36 @@ list from what seemed relevant instead of from what CI actually runs.**
 3. The vacuous s05 assertion above, which is the same disease in a third form: a check that cannot
    fail is a gate that does not exist.
 
-**Two rules this earns, for T04-21 and the rest of the train:**
+**Four rules this earns, for T04-21 and the rest of the train:**
 
-- Derive the local gate list from the CI workflow, not from memory.
+- Derive the local gate list from the CI workflow, not from memory — **and that list INCLUDES the
+  conditional jobs.** `docker-gpu` runs vitest with `VGPU_DOCKER_TEST=1`, so a plain `vitest run`
+  SKIPS every `skipIf(process.env.VGPU_DOCKER_TEST !== "1")` suite and reports green over a hole.
+  A local sweep must be `VGPU_DOCKER_TEST=1 npx vitest run`, and a blast radius measured without it
+  is not a blast radius. T04-21 learned this from the PR: its 173-failure inventory was complete
+  for the un-gated suite and missed 26 GPU-gated failures, which CI found instead. When the env var
+  changes what runs, run it BOTH ways and diff against the same two-way run on the base commit —
+  the base run is what separates your regressions from the environment's pre-existing noise (in the
+  sandbox: 7 snapshot/adapter failures that have nothing to do with the change).
+- **A test you classified "pre-existing environmental noise" is NOT verified — it is unread.** The
+  base-vs-branch diff that separates your regressions from the environment's own failures answers
+  "did this test's STATUS change", which is a different question from "did this test's SUBJECT run".
+  A test that dies before reaching the code under test has an identical status on both commits and
+  a regression hiding behind it. T04-21 shipped exactly that: `surface-gpu.test.ts` §7.15 runs its
+  scenario in a worker thread, the worker acquires no adapter in the sandbox, so it went red at
+  `requestAdapter` on both sides of the diff and was filed as environmental. In Docker the adapter
+  exists, the scenario advances, and it hit VGPU-PIPELINE-PENDING on an unprepared `effect` — a
+  third red CI for a one-line fix. **Read the failure's LOCATION, not its status:** red at
+  acquisition/setup means unverified (decide the treatment by reading the code), red at the
+  assertion the test exists for means the subject did run. Applied to the other six of that diff:
+  the wireframe and primitive batteries went red at `pixelmatch`, so they had already encoded under
+  `"throw"`, and reading confirms why they can — `primitive-renderer.ts` and the inspect helpers
+  drive raw `device.gpu.createRenderPipeline`, never the pipeline store. `minify-execution` went
+  red in an `inspect()` callback that runs BEFORE `requestDevice()` — unverified by execution, so
+  read: it imports only `@vgpu/adapter-node` and `@vgpu/wgsl/runtime` and issues raw compute, so
+  `pendingPipelines` is not in its path either. When the environment blocks execution, a
+  main-thread transcription of the scenario is usually enough to execute the claim anyway; that is
+  how §7.15's fix was verified here without a worker-capable adapter.
 - **A new test must run in CI's ENVIRONMENT, not just the author's.** If it needs a real adapter it
   is either hermetic by mock or it lives in the GPU-gated suite behind
   `skipIf(process.env.VGPU_DOCKER_TEST !== "1")` — the convention `examples/*/example.test.ts`

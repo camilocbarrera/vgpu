@@ -113,9 +113,15 @@ test("contract #6: preparing {draw, a} does not prepare {draw, b}", async () => 
   const preparedA = await prepare(gpu, { draw: drawable, target: plain });
   expect(mock.calls.createRenderPipelineAsync).toBe(1);
 
-  // The other combination is NOT ready: encoding it with the default "sync" policy has to compile.
-  frame(gpu, (f) => f.pass(depthTarget, (p) => p.draw(drawable)));
-  expect(mock.calls.createRenderPipeline).toBe(1);
+  // The other combination is NOT ready, and since T04-21 the default policy is "throw": encoding it
+  // raises VGPU-PIPELINE-PENDING and creates no pipeline at all. Before the flip this same scope was
+  // proven by the inline compile the "sync" default performed here (createRenderPipeline === 1); the
+  // throw is the sharper statement of the same contract -- {draw, a} left {draw, b} untouched.
+  let pending: { code?: string } | undefined;
+  try { frame(gpu, (f) => f.pass(depthTarget, (p) => p.draw(drawable))); }
+  catch (error) { pending = error as { code?: string }; }
+  expect(pending?.code).toBe("VGPU-PIPELINE-PENDING");
+  expect(mock.calls.createRenderPipeline).toBe(0);
 
   const preparedB = await prepare(gpu, { draw: drawable, target: depthTarget });
   expect(preparedB.gpu).not.toBe(preparedA.gpu);

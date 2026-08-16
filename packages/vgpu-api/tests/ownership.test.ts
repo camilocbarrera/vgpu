@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { bundle } from "../src/bundle.ts";
@@ -83,7 +88,7 @@ function groupLabels(mock: ReturnType<typeof getMockGPUDeviceInstrumentation>): 
 // ---------------------------------------------------------------------------
 
 test("contract #9: .set() on a value-owned binding never rebuilds a bind group", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
   const screen = target(gpu, { size: [4, 4] });
@@ -108,7 +113,7 @@ test("contract #9: .set() on a value-owned binding never rebuilds a bind group",
 });
 
 test("contract #9: .bind() rebuilds exactly the affected group", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const next = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
@@ -128,7 +133,7 @@ test("contract #9: .bind() rebuilds exactly the affected group", async () => {
 });
 
 test("contract #9: .bind() dedupes by identity", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
   const screen = target(gpu, { size: [4, 4] });
@@ -146,7 +151,7 @@ test("contract #9: .bind() dedupes by identity", async () => {
 });
 
 test("contract #9: .set() of an externally-bound name fails with VGPU-R1-EXTERNAL-BINDING", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const other = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
@@ -161,7 +166,7 @@ test("contract #9: .set() of an externally-bound name fails with VGPU-R1-EXTERNA
 });
 
 test("external ownership comes from the constructor, not from .bind(): a binding absent from bindings refuses .bind()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
   // `src` is not declared anywhere, so it is value-owned by default — its storage is merely lazy.
@@ -176,7 +181,7 @@ test("external ownership comes from the constructor, not from .bind(): a binding
 });
 
 test("ownership is fixed at construction: .bind() on a virgin binding never promotes it", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: OWNERSHIP_SHADER, label: "fx" });
 
@@ -190,7 +195,7 @@ test("ownership is fixed at construction: .bind() on a virgin binding never prom
 });
 
 test("ownership is order-independent: bind-then-set and set-then-bind give the same verdicts", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const shader = GLOBALS_ONLY_SHADER;
 
@@ -208,7 +213,7 @@ test("ownership is order-independent: bind-then-set and set-then-bind give the s
 });
 
 test("a single .bind() never locks the legacy flat bag out of a binding it used to own", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4] });
   const first = target(gpu, { size: [4, 4] });
   const second = target(gpu, { size: [4, 4] });
@@ -225,7 +230,7 @@ test("a single .bind() never locks the legacy flat bag out of a binding it used 
 });
 
 test("the flat bag also refuses an externally declared binding", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const other = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
@@ -236,7 +241,7 @@ test("the flat bag also refuses an externally declared binding", async () => {
 });
 
 test("owned -> external is not supported: .bind() on a value-owned binding throws", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const globals = uniform(gpu, { time: 0 });
   const fx = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx" });
 
@@ -246,7 +251,7 @@ test("owned -> external is not supported: .bind() on a value-owned binding throw
 });
 
 test("a binding declared in values is value-owned from construction and refuses .bind()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const globals = uniform(gpu, { time: 0 });
   const fx = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx", values: { globals: { time: 0 } } });
 
@@ -255,7 +260,7 @@ test("a binding declared in values is value-owned from construction and refuses 
 });
 
 test("declaring the same binding in values and bindings fails at construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const globals = uniform(gpu, { time: 0 });
 
   const construct = () => effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx", values: { globals: { time: 0 } }, bindings: { globals } });
@@ -267,7 +272,7 @@ test("declaring the same binding in values and bindings fails at construction", 
 });
 
 test("the scoped set() refuses a resource on a value-owned binding and points at .bind()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: OWNERSHIP_SHADER, label: "fx" });
 
@@ -278,7 +283,7 @@ test("the scoped set() refuses a resource on a value-owned binding and points at
 });
 
 test("a binding declared in bindings never latches ownership: VGPU-R1-OWNERSHIP-FLIP is unreachable for it", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const globals = uniform(gpu, { time: 0 });
   const fx = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx", bindings: { globals } });
 
@@ -295,7 +300,7 @@ test("a binding declared in bindings never latches ownership: VGPU-R1-OWNERSHIP-
 // ---------------------------------------------------------------------------
 
 test("contract #10: a non-struct binding accepts its complete value", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: MAT_SHADER, label: "mat" });
   const writeBuffer = vi.spyOn(gpu.device.gpu.queue, "writeBuffer");
@@ -313,7 +318,7 @@ test("contract #10: a non-struct binding accepts its complete value", async () =
 });
 
 test("contract #10: one call carrying N fields of a struct produces exactly one buffer write", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const fx = effect(gpu, { shader: CAMERA_SHADER, label: "cam" });
   const writeBuffer = vi.spyOn(gpu.device.gpu.queue, "writeBuffer");
 
@@ -325,7 +330,7 @@ test("contract #10: one call carrying N fields of a struct produces exactly one 
 });
 
 test("contract #10: the binding-scoped form has no member-name shortcut", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const fx = effect(gpu, { shader: CAMERA_SHADER, label: "cam" });
 
   // `exposure` is a member of `camera`; the scoped form only accepts binding names and says so.
@@ -334,7 +339,7 @@ test("contract #10: the binding-scoped form has no member-name shortcut", async 
 });
 
 test("contract #10: a struct binding merges partials on the CPU and rewrites the complete struct", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const fx = effect(gpu, { shader: CAMERA_SHADER, label: "cam" });
 
   fx.set("camera", { viewProjection: new Array(16).fill(7), exposure: 2 });
@@ -354,7 +359,7 @@ test("contract #10: a struct binding merges partials on the CPU and rewrites the
 });
 
 test("a binding absent from bindings is value-owned by default and takes .set() with no values declared", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4] });
   const cube = draw(gpu, { shader: CAMERA_SHADER, label: "cube", vertices: 3 });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -371,7 +376,7 @@ test("a binding absent from bindings is value-owned by default and takes .set() 
 });
 
 test("values declared at construction are written once, before any draw", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const writeBuffer = vi.spyOn(gpu.device.gpu.queue, "writeBuffer");
   const fx = effect(gpu, { shader: CAMERA_SHADER, label: "cam", values: { camera: { exposure: 4 } } });
 
@@ -388,7 +393,7 @@ test("values declared at construction are written once, before any draw", async 
 // ---------------------------------------------------------------------------
 
 test("contract #11: uniform() shared across two pipelines updates both with one write", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, { time: 0 });
   const a = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "a", bindings: { globals } });
@@ -410,7 +415,7 @@ test("contract #11: uniform() shared across two pipelines updates both with one 
 });
 
 test("contract #11: uniform() storage is zero-initialized", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4] });
   const globals = uniform(gpu, {});
   const fx = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx", bindings: { globals } });
@@ -426,7 +431,7 @@ test("contract #11: uniform() storage is zero-initialized", async () => {
 });
 
 test("uniform() and uniforms() are the same mechanism under two spellings", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const singular = uniform(gpu, { time: 1 });
   const plural = uniforms(gpu, { time: 1 });
 
@@ -439,7 +444,7 @@ test("uniform() and uniforms() are the same mechanism under two spellings", asyn
 // ---------------------------------------------------------------------------
 
 test("regression: the flat bag still sets several members at once", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: CAMERA_SHADER, label: "cam" });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -455,7 +460,7 @@ test("regression: the flat bag still sets several members at once", async () => 
 });
 
 test("regression: the flat bag still reports an ambiguous member name", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const fx = effect(gpu, { shader: AMBIGUOUS_SHADER, label: "amb" });
 
   expect(messageOf(() => fx.set({ time: 1 }))).toMatch(/ambiguous/);
@@ -463,7 +468,7 @@ test("regression: the flat bag still reports an ambiguous member name", async ()
 });
 
 test("regression: the legacy latch still fires for the flat bag", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const globals = uniform(gpu, { time: 0 });
   const fx = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx" });
 
@@ -477,7 +482,7 @@ test("regression: the legacy latch still fires for the flat bag", async () => {
 // ---------------------------------------------------------------------------
 
 test("compute accepts values/bindings and the binding-scoped set()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const particles = storage(gpu, 64);
   const sim = compute(gpu, { shader: SIM_SHADER, label: "sim", values: { sim: { dt: 0.016 } }, bindings: { particles } });
   const writeBuffer = vi.spyOn(gpu.device.gpu.queue, "writeBuffer");
@@ -492,7 +497,7 @@ test("compute accepts values/bindings and the binding-scoped set()", async () =>
 });
 
 test("compute .bind() swaps a storage buffer identity", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const first = storage(gpu, 64);
   const second = storage(gpu, 64);
   const sim = compute(gpu, { shader: SIM_SHADER, label: "sim", values: { sim: { dt: 0.016 } }, bindings: { particles: first } });
@@ -515,7 +520,7 @@ test("compute .bind() swaps a storage buffer identity", async () => {
 // ---------------------------------------------------------------------------
 
 test(".set() and .bind() reject a name that is not a binding", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const globals = uniform(gpu, { time: 0 });
   const fx = effect(gpu, { shader: GLOBALS_ONLY_SHADER, label: "fx" });
 
@@ -534,7 +539,7 @@ const TEXTURE_SHADER = `
 `;
 
 test(".bind() to a different resource marks a recorded bundle stale", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const first = target(gpu, { size: [4, 4] });
   const second = target(gpu, { size: [4, 4] });
@@ -554,7 +559,7 @@ test(".bind() to a different resource marks a recorded bundle stale", async () =
 });
 
 test(".bind() to the same resource leaves a recorded bundle replayable", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const screen = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const source = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: TEXTURE_SHADER, label: "fx", bindings: { src: source } });
@@ -568,7 +573,7 @@ test(".bind() to the same resource leaves a recorded bundle replayable", async (
 });
 
 test(".bind() of an unchanged resource does not re-normalize it", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const source = target(gpu, { size: [4, 4] });
   const other = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: TEXTURE_SHADER, label: "fx", bindings: { src: source } });

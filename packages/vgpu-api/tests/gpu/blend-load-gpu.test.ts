@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { expect, test } from "vitest";
 import { init, effect, frame, target } from "../../src/node.ts";
 
@@ -17,7 +21,7 @@ const HALF_GREEN = `
 `;
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("additive blend accumulates repeated fullscreen draws", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm" });
     const additive = effect(gpu, { shader: FULLSCREEN_RED, label: "additive", blend: "additive" });
@@ -38,7 +42,7 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("additive blend accumulates re
 });
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("writeMask can preserve alpha while writing rgb", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm" });
     const rgbOnly = effect(gpu, { shader: FULLSCREEN_ALPHA, label: "rgb-only", writeMask: ["r", "g", "b"] });
@@ -57,7 +61,7 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("writeMask can preserve alpha 
 });
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("MSAA target resolves additive blend", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm", msaa: true });
     const additive = effect(gpu, { shader: FULLSCREEN_RED, label: "msaa-additive", blend: "additive" });
@@ -78,7 +82,7 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("MSAA target resolves additive
 });
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("clear false preserves offscreen target contents across passes and frames", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [4, 2], format: "rgba8unorm" });
     const halfGreen = effect(gpu, { shader: HALF_GREEN, label: "half-green" });

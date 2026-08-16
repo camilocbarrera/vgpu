@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { compute, draw, effect, init, storage, target } from "../src/mock.ts";
@@ -15,7 +20,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) { data[id.x] = 1.0; }
 `;
 
 test("effect(gpu, { shader, ... }) shares the exact pipeline of effect(gpu, source, opts)", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
 
   const fromTwoArgs = effect(gpu, EFFECT_SHADER, { blend: "additive" });
@@ -35,7 +40,7 @@ test("effect(gpu, { shader, ... }) shares the exact pipeline of effect(gpu, sour
 });
 
 test("compute(gpu, { shader, entry }) produces a Compute equivalent to compute(gpu, source, { entry })", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const instrumentation = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
   // compute() no longer compiles a pipeline at construction (contract #4, next/0.4 compute-async);
@@ -60,7 +65,7 @@ test("compute(gpu, { shader, entry }) produces a Compute equivalent to compute(g
 });
 
 test("effect(gpu, { shader, version, wgsl, blend }) picks shader over a spurious version/wgsl and honors sibling options", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const shaderWithBinding = `
 struct Params { value: f32 }
@@ -87,7 +92,7 @@ struct Params { value: f32 }
 });
 
 test("compute(gpu, { shader, version, wgsl, entry, label }) picks shader over a spurious version/wgsl and honors entry/label", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   // The decoy has no `main` entry point: if `version`/`wgsl` won over `shader`, requesting `entry:
   // "main"` against the decoy would fail to resolve an entry point at construction time.
   const decoyWithoutMainEntry = `
@@ -109,7 +114,7 @@ test("compute(gpu, { shader, version, wgsl, entry, label }) picks shader over a 
 });
 
 test("effect(gpu, { blend }) without options.shader throws an actionable error, not malformedShaderSourceError", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   expect(() => effect(gpu, { blend: "additive" } as never)).toThrowError(
     /effect\(gpu, options\) requires options\.shader; use effect\(gpu, source, opts\) for the two-argument form, or effect\(gpu, \{ shader, \.\.\. \}\)\./,
@@ -118,7 +123,7 @@ test("effect(gpu, { blend }) without options.shader throws an actionable error, 
 });
 
 test("compute(gpu, { entry }) without options.shader throws an actionable error, not malformedShaderSourceError", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   expect(() => compute(gpu, { entry: "main" } as never)).toThrowError(
     /compute\(gpu, options\) requires options\.shader; use compute\(gpu, source, opts\) for the two-argument form, or compute\(gpu, \{ shader, \.\.\. \}\)\./,
@@ -127,7 +132,7 @@ test("compute(gpu, { entry }) without options.shader throws an actionable error,
 });
 
 test("effect(gpu, shaderSourceArtifact) still works as a shorthand, not confused with the options-object form", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
 
   const shorthand = effect(gpu, { version: 1, wgsl: EFFECT_SHADER });

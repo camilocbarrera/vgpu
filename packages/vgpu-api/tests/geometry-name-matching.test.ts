@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation, init, VGPUError, geometry, draw, target } from "../src/mock.ts";
 
@@ -9,7 +14,7 @@ function errorOf(fn: () => unknown): VGPUError {
 }
 
 test("named geometry attributes resolve to reflected vertex locations at draw(gpu, opts) construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const geo = geometry(gpu, { buffers: [{ data: new Float32Array(15), attributes: {
       uv: "float32x2",
@@ -30,7 +35,7 @@ test("named geometry attributes resolve to reflected vertex locations at draw(gp
 });
 
 test("explicit locations win over attribute names", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const geo = geometry(gpu, { buffers: [{ data: new Float32Array(2), attributes: { label_only: { format: "float32x2", location: 3 } } }] });
     const shader = `@vertex fn vs_main(@location(3) actual_name: vec2f) -> @builtin(position) vec4f { return vec4f(actual_name, 0.0, 1.0); } ${FS}`;
@@ -42,7 +47,7 @@ test("explicit locations win over attribute names", async () => {
 });
 
 test("draw construction reports unmatched, ambiguous, missing, and format mismatch geometry inputs", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const named = (attributes: Record<string, GPUVertexFormat | { format: GPUVertexFormat; location?: number }>) => geometry(gpu, { buffers: [{ data: new Float32Array(4), stride: 16, attributes }] });
     const unmatched = errorOf(() => draw(gpu, { shader: `@vertex fn vs_main(@location(0) position: vec2f) -> @builtin(position) vec4f { return vec4f(position, 0.0, 1.0); } ${FS}`, geometry: named({ color: "float32x4" }) }));
@@ -55,7 +60,7 @@ test("draw construction reports unmatched, ambiguous, missing, and format mismat
 });
 
 test("structural GeometryLike escape hatches skip name and format checks", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     expect(() => draw(gpu, { shader: `@vertex fn vs_main(@location(7) anything: vec4u) -> @builtin(position) vec4f { return vec4f(anything); } ${FS}`, geometry: {
       vertexCount: 1,

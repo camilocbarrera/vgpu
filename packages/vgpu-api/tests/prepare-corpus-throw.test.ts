@@ -1,20 +1,13 @@
-// T04-19's completeness criterion, executed rather than asserted on paper.
+// T04-19's completeness criterion, executed rather than asserted on paper — now under the REAL
+// default.
 //
-// This ticket inserts `prepare()` while the `pendingPipelines` default is still `"sync"`, which
-// makes every insertion SEMANTICALLY INERT today: the corpus behaves identically with or without
-// it. That is the whole safety property of the additive phase — and it is also what makes the work
-// unverifiable by the normal suite. A missing `prepare()` looks exactly like a present one until
-// T04-21 flips the default, at which point it becomes a crash in an example nobody re-ran.
-//
-// So the criterion is not "the examples still pass". It is: **under the default T04-21 will ship,
-// every example runs without `VGPU-PIPELINE-PENDING`.** This file simulates that flip by mocking
-// the one constant T04-21 will edit (`DEFAULT_PENDING_PIPELINES` in `pending-pipelines.ts`), then
-// runs the real, shipped example modules against it. No hand-written re-implementation of an
-// example: the module under test is the file the repo publishes, imported through the same
-// `vgpu/node` alias it uses in production.
-//
-// When T04-21 lands, this mock becomes a no-op and the file keeps passing — it is a regression
-// gate for both sides of the flip, not scaffolding to delete.
+// While `pendingPipelines` defaulted to `"sync"` every `prepare()` insertion was semantically inert
+// and a missing one was invisible, so this file forced the future default by mocking the one
+// constant T04-21 would edit (`DEFAULT_PENDING_PIPELINES`). T04-21 edited it: the default IS
+// `"throw"`, the mock would now be a no-op asserting nothing, and the guard "is the mocked flip in
+// effect?" is replaced below by an assertion on the shipped constant itself. What the file does has
+// not changed — run the real, shipped example modules and require that none of them raises
+// `VGPU-PIPELINE-PENDING` — except that it is no longer a simulation.
 //
 // HERMETICITY (fixed after CI, second lesson of the same shape). The first version of this file
 // acquired a device through the REAL `vgpu/node`, i.e. Dawn via `@vgpu/adapter-node`. It passed
@@ -35,11 +28,6 @@
 // existing convention for work that needs an adapter, and those run in ci.yml's `docker-gpu`.
 import { expect, test, vi } from "vitest";
 
-vi.mock("../src/pending-pipelines.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/pending-pipelines.ts")>();
-  return { ...actual, DEFAULT_PENDING_PIPELINES: "throw" as const };
-});
-
 // The device boundary, and only it. `src/mock.ts` re-exports the same modules `src/node.ts` does.
 vi.mock("vgpu/node", async () => await import("../src/mock.ts"));
 
@@ -58,16 +46,17 @@ const RUNNERS: readonly { name: string; run: () => Promise<{ gpu: { dispose(): v
   { name: "s13-headless", run: async () => (await import("../../../examples/by-example-s13-headless/src/example.ts")).renderGradientHeadless() },
 ];
 
-test("the mocked flip is actually in effect", async () => {
+test("the shipped default is the one this file runs the corpus under", async () => {
   const { DEFAULT_PENDING_PIPELINES } = await import("../src/pending-pipelines.ts");
-  // Guards the guard: if the mock silently stopped applying, every assertion below would pass for
-  // the wrong reason (the corpus is green under "sync" by construction).
+  // Guards the guard, exactly as the mock-detection assertion it replaces did: if the default ever
+  // went back to "sync", every runner below would go green for the wrong reason (the corpus is
+  // green under "sync" by construction), so the premise of the whole file is pinned first.
   expect(DEFAULT_PENDING_PIPELINES).toBe("throw");
 });
 
 // The second half of that guard, and the one the adapter swap makes necessary. The constant being
-// "throw" proves the mock applied; it does NOT prove the throw still REACHES an encode once the
-// device is a mock. If the mock adapter resolved pipelines eagerly, or never consulted the policy,
+// "throw" proves the policy; it does NOT prove the throw still REACHES an encode once the device is
+// a mock. If the mock adapter resolved pipelines eagerly, or never consulted the policy,
 // all twelve runners below would go green by construction and this file would be decoration.
 //
 // So: a combination that nobody prepared, over the very same mock gpu the runners use, must still

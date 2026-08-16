@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 /**
  * Motivation #1 of the rev6.1 design, verified rather than asserted (T04-18's DoD).
  *
@@ -113,7 +118,7 @@ function executionOrder(timeline: readonly string[]): string[] {
 // --- the fft-ocean-surface shape: computes, then the render that consumes them -------------------
 
 test("legacy dispatch() in a frame callback costs one extra submit per dispatch (the fft-ocean shape)", async () => {
-  gpu = await init();
+  gpu = await init({ pendingPipelines: "sync" });
   const hdr = target(gpu, { size: [4, 4] });
   const rowPass = compute(gpu, { shader: COMPUTE_WGSL, label: "fft-row" });
   const colPass = compute(gpu, { shader: COMPUTE_WGSL, label: "fft-col" });
@@ -142,7 +147,7 @@ test("legacy dispatch() in a frame callback costs one extra submit per dispatch 
 });
 
 test("f.compute() collapses the same frame to one encoder and one submit, in program order (contract #1)", async () => {
-  gpu = await init();
+  gpu = await init({ pendingPipelines: "sync" });
   const hdr = target(gpu, { size: [4, 4] });
   const rowPass = compute(gpu, { shader: COMPUTE_WGSL, label: "fft-row" });
   const colPass = compute(gpu, { shader: COMPUTE_WGSL, label: "fft-col" });
@@ -168,7 +173,7 @@ test("f.compute() collapses the same frame to one encoder and one submit, in pro
 // --- the inverted shape: this is where the legacy form is actually WRONG --------------------------
 
 test("legacy dispatch() AFTER a pass inverts execution order against program order (motivation #1)", async () => {
-  gpu = await init();
+  gpu = await init({ pendingPipelines: "sync" });
   const hdr = target(gpu, { size: [4, 4] });
   const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const ocean = draw(gpu, { shader: RENDER_WGSL, label: "ocean" });
@@ -193,7 +198,7 @@ test("legacy dispatch() AFTER a pass inverts execution order against program ord
 });
 
 test("f.compute() in the same position keeps program order and execution order identical", async () => {
-  gpu = await init();
+  gpu = await init({ pendingPipelines: "sync" });
   const hdr = target(gpu, { size: [4, 4] });
   const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim" });
   const ocean = draw(gpu, { shader: RENDER_WGSL, label: "ocean" });

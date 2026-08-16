@@ -402,14 +402,15 @@ test('a failed bundle under "skip" is reported once through gpu.onError and keep
 });
 
 test('a pending-pipelines bundle under "sync" is compiled and encoded inline, which is the legacy eager behavior', async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, { shader: SOLID, label: "syncPendingFx" });
   const recorded = bundle(gpu, { target: scene, label: "syncPendingBundle" }, (b) => b.draw(fx));
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
-  // No prepare() anywhere: the default policy of the train is "sync", so this is what every
-  // existing program does today.
+  // No prepare() anywhere. Since T04-21 that is a throw by default, so this suite names the policy
+  // at init(): "sync" is a permanent opt-in and this row of the BundleStatus x pendingPipelines
+  // table (pending-pipelines + "sync" -> compile + encode inline) has to keep its test.
   expect(() => frame(gpu, (f) => f.pass(scene, (p) => p.bundles(recorded)))).not.toThrow();
 
   expect(recorded.status).toBe("ready");

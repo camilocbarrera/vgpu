@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { createMockAdapter, init, draw, target } from "../src/mock.ts";
@@ -11,7 +16,7 @@ const SOLID = `
 `;
 
 function initWithDepthClipControl() {
-  return init({ adapter: createMockAdapter({ features: ["depth-clip-control"] }), requiredFeatures: ["depth-clip-control"] });
+  return init({ adapter: createMockAdapter({ features: ["depth-clip-control"] }), requiredFeatures: ["depth-clip-control"], pendingPipelines: "sync" });
 }
 
 test("unclippedDepth reaches the render pipeline primitive state", async () => {
@@ -63,7 +68,7 @@ test("non-boolean unclippedDepth fails at draw construction", async () => {
 });
 
 test("unclippedDepth: true without the depth-clip-control feature throws with the init guidance", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(gpu.device.features.has("depth-clip-control")).toBe(false);
   let error: unknown;
   try { draw(gpu, { shader: SOLID, label: "no-feature", unclippedDepth: true }); }

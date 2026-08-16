@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, draw, effect, frame, surface, target } from "../src/mock.ts";
@@ -91,7 +96,7 @@ function expectNotInFrame(fn: () => unknown): void {
 
 // Contract #8 (half "resolves"): compiling against a surface outside frame() is legal.
 test("compile/compileSync/pipelineForAsync against a surface outside frame() never throw VGPU-SURFACE-NOT-IN-FRAME", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas);
@@ -113,7 +118,7 @@ test("compile/compileSync/pipelineForAsync against a surface outside frame() nev
 
 // Contract #8 (half "signature equals"): the signature resolved outside a frame is the encoding one.
 test("the surface signature resolved outside frame() equals the one used encoding inside frame()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas);
@@ -145,7 +150,7 @@ test("the surface signature resolved outside frame() equals the one used encodin
 
 // Encode still needs the current texture: the standalone one-shot draw keeps the guard.
 test("standalone draw()/effect().draw() against a surface outside frame() still throws VGPU-SURFACE-NOT-IN-FRAME", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas);
@@ -162,7 +167,7 @@ test("standalone draw()/effect().draw() against a surface outside frame() still 
 
 // Design rule: depth on surface() resolves through the shared depthFormatFor.
 test("surface({ depth: true }) owns a depth attachment resolved through depthFormatFor, like target({ depth: true })", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas, { depth: true });
@@ -189,7 +194,7 @@ test("surface({ depth: true }) owns a depth attachment resolved through depthFor
 
 // Design rule: MSAA resolves into the presentation texture.
 test("surface({ sampleCount: 4 }) renders into an internal multisample attachment and resolves into the canvas texture", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas, { sampleCount: 4, depth: true });
@@ -218,7 +223,7 @@ test("surface({ sampleCount: 4 }) renders into an internal multisample attachmen
 
 // Contract #23 (partial): resize invalidates by signature, not identity.
 test("a resize that preserves format, depth and sample count keeps the signature and creates no pipeline", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas, { depth: true, sampleCount: 4 });
@@ -245,7 +250,7 @@ test("a resize that preserves format, depth and sample count keeps the signature
 
 // Zero regression: a plain surface behaves exactly as in 0.3.0.
 test("surface(gpu, canvas) without the new options stays color-only, sampleCount 1, and allocates no textures", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -272,7 +277,7 @@ test("surface(gpu, canvas) without the new options stays color-only, sampleCount
 
 // A frame-independent signature is not a lifetime-independent one: disposal still wins.
 test("a disposed surface rejects every signature consumer, compile included", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas, { depth: true });
@@ -292,7 +297,7 @@ test("a disposed surface rejects every signature consumer, compile included", as
 
 // The attachments a consumer caches views over are recreated by BOTH resize paths, so both announce it.
 test("onTexturesRecreated fires when the canvas is resized behind the surface's back, not only through resize()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe();
     const canvasSurface = surface(gpu, probe.canvas, { depth: true });
@@ -318,7 +323,7 @@ test("onTexturesRecreated fires when the canvas is resized behind the surface's 
 
 // Attachment sizes obey the same 1×1 floor every other size on this surface does.
 test("a zero-sized canvas still allocates a valid 1x1 attachment and does not re-create it on every read", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const probe = canvasProbe(0, 0);
     const canvasSurface = surface(gpu, probe.canvas, { depth: true });
@@ -333,7 +338,7 @@ test("a zero-sized canvas still allocates a valid 1x1 attachment and does not re
 
 // frame.ts branches that a Surface could never reach before it owned depth/MSAA.
 test("pass options that depend on depth and MSAA now apply to surfaces exactly as they do to targets", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const msaaDepth = surface(gpu, canvasProbe().canvas, { depth: true, sampleCount: 4 });
     const plainDepth = surface(gpu, canvasProbe().canvas, { depth: true });
@@ -368,7 +373,7 @@ test("pass options that depend on depth and MSAA now apply to surfaces exactly a
 // Donated from the independent QA probe suite (M7): the DoD's dispose clause, previously uncaught by
 // any test in this branch — mutating #destroyAttachments to a no-op survived the whole suite.
 test("dispose destroys the attachments the surface owns exactly once, and stays idempotent", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const ledger = textureLedger(gpu);
     const canvasSurface = surface(gpu, canvasProbe().canvas, { depth: true, sampleCount: 4 });
@@ -388,7 +393,7 @@ test("dispose destroys the attachments the surface owns exactly once, and stays 
 // Donated from the independent QA probe suite (A6): every recreate must destroy the pair it replaced,
 // through both resize paths, or a long-lived canvas leaks a texture per resize.
 test("repeated resizes and canvas drift never leak an attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const ledger = textureLedger(gpu);
     const probe = canvasProbe();
@@ -412,7 +417,7 @@ test("repeated resizes and canvas drift never leak an attachment", async () => {
 // Donated from the independent QA probe suite (M10): the duck-typed branch must hand out a fresh
 // signature, never the surface's own state, and must still normalize a plain TargetSignature.
 test("normalizeSignature returns a non-aliased signature a caller cannot use to poison the surface", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const canvasSurface = surface(gpu, canvasProbe().canvas, { depth: true, sampleCount: 4 });
     const first = normalizeSignature(canvasSurface);

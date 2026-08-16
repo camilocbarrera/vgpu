@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { init, bundle, draw, effect, frame, target } from "../src/mock.ts";
 
@@ -19,7 +24,7 @@ const DEPTH_SAMPLING_SHADER = `
 `;
 
 test("depthReadOnly marks the depth attachment read-only and omits its ops", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
 
@@ -39,7 +44,7 @@ test("depthReadOnly marks the depth attachment read-only and omits its ops", asy
 });
 
 test("depthReadOnly on combined formats marks the stencil aspect read-only too", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
 
@@ -57,7 +62,7 @@ test("depthReadOnly on combined formats marks the stencil aspect read-only too",
 });
 
 test("color attachments still clear normally alongside depthReadOnly", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
 
@@ -74,7 +79,7 @@ test("color attachments still clear normally alongside depthReadOnly", async () 
 });
 
 test("depthReadOnly false behaves like a normal writable pass", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
 
@@ -87,7 +92,7 @@ test("depthReadOnly false behaves like a normal writable pass", async () => {
 });
 
 test("a depth-writing draw is rejected in a depthReadOnly pass", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   const defaultDepth = draw(gpu, { shader: DRAW_SHADER, label: "writes-by-default" });
   const explicitWrite = draw(gpu, { shader: DRAW_SHADER, label: "writes-explicitly", depth: { write: true, compare: "greater" } });
@@ -100,7 +105,7 @@ test("a depth-writing draw is rejected in a depthReadOnly pass", async () => {
 });
 
 test("non-writing draws encode in a depthReadOnly pass", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   const testOnly = draw(gpu, { shader: DRAW_SHADER, label: "test-only", depth: { write: false, compare: "less-equal" } });
   const depthOff = draw(gpu, { shader: DRAW_SHADER, label: "depth-off", depth: false });
@@ -113,7 +118,7 @@ test("non-writing draws encode in a depthReadOnly pass", async () => {
 });
 
 test("stencil-writing draws are rejected on combined formats, keep-only draws encode", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   const writes = draw(gpu, { shader: DRAW_SHADER, label: "stencil-writes", depth: { write: false }, stencil: { front: { pass: "replace" } } });
   const comparesOnly = draw(gpu, { shader: DRAW_SHADER, label: "stencil-compares", depth: { write: false }, stencil: { front: { compare: "equal" }, ref: 1 } });
@@ -130,7 +135,7 @@ test("stencil-writing draws are rejected on combined formats, keep-only draws en
 });
 
 test("culled stencil faces do not count as stencil writes", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   // Only the front face has writing ops and it is culled; the explicit back face keeps everything.
   const culledFront = draw(gpu, { shader: DRAW_SHADER, label: "culled-front", cull: "front", depth: { write: false }, stencil: { front: { pass: "replace" }, back: {} } });
@@ -144,7 +149,7 @@ test("culled stencil faces do not count as stencil writes", async () => {
 });
 
 test("depthReadOnly contradiction rules throw at pass open", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const depthTarget = target(gpu, { size: [2, 2], depth: true });
   const stencilTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   const colorOnly = target(gpu, { size: [2, 2] });
@@ -163,7 +168,7 @@ test("depthReadOnly contradiction rules throw at pass open", async () => {
 });
 
 test("depthReadOnly is rejected on an MSAA target", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const msaa = target(gpu, { size: [2, 2], depth: true, msaa: true });
   expect(msaa.sampleCount).toBe(4);
 
@@ -180,7 +185,7 @@ test("depthReadOnly is rejected on an MSAA target", async () => {
 });
 
 test("clearDepth on a target without depth throws instead of being silently dropped", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorOnly = target(gpu, { size: [2, 2] });
   const depthTarget = target(gpu, { size: [2, 2], depth: true });
 
@@ -194,7 +199,7 @@ test("clearDepth on a target without depth throws instead of being silently drop
 });
 
 test("bundles cannot replay into a depthReadOnly pass", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   const drawable = draw(gpu, { shader: DRAW_SHADER, label: "bundled", depth: { write: false } });
   const recorded = bundle(gpu, { target: colorTarget }, (recorder) => recorder.draw(drawable));
@@ -206,7 +211,7 @@ test("bundles cannot replay into a depthReadOnly pass", async () => {
 });
 
 test("the pass target's depth texture can be sampled inside its own depthReadOnly pass", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   expect(colorTarget.depth?.usage).toContain("texture_binding");
@@ -220,7 +225,7 @@ test("the pass target's depth texture can be sampled inside its own depthReadOnl
 });
 
 test("effects keep the default depth write and are rejected in depthReadOnly passes", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   const shader1 = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1.0); }`);
 

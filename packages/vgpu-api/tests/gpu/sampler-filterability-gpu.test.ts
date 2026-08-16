@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { bindGroupLayoutMetadata } from "@vgpu/core";
 import { describe, expect, test } from "vitest";
 import { init, draw, frame, sampler, target } from "../../src/node.ts";
@@ -43,7 +47,7 @@ const dockerOnly = process.env.VGPU_DOCKER_TEST !== "1";
 
 describe.skipIf(dockerOnly)("sampler filterability real-world Docker regressions", () => {
   test("post-processing bloom shape promotes rgba8unorm textureSampleLevel and renders", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       await renderSampledFixture(gpu, BLOOM_SHAPE, "post-processing-bloom-shape", "source", "linearSampler");
     } finally {
@@ -52,7 +56,7 @@ describe.skipIf(dockerOnly)("sampler filterability real-world Docker regressions
   });
 
   test("instancing blit shape promotes fullscreen rgba8unorm textureSample and renders", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       await renderSampledFixture(gpu, INSTANCING_BLIT_SHAPE, "instancing-blit-shape", "colorTarget", "blitSampler");
     } finally {
@@ -61,7 +65,7 @@ describe.skipIf(dockerOnly)("sampler filterability real-world Docker regressions
   });
 
   test("rgba32float textureLoad remains unfilterable and renders without float32-filterable", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       expect(gpu.device.features.has("float32-filterable")).toBe(false);
       const source = target(gpu, { size: [8, 8], format: "rgba32float", label: "load-only-hdr" });

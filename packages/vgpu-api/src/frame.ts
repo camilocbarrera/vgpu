@@ -337,8 +337,8 @@ export class Frame {
    *
    * `pendingPipelines` resolves call site → frame → gpu: under `"throw"` an uncompiled kernel raises
    * `VGPU-PIPELINE-PENDING` and compiles nothing; under `"skip"` the dispatch is omitted this frame
-   * while compilation continues in the background; under `"sync"` (today's effective default) the
-   * pipeline is created inline.
+   * while compilation continues in the background; under `"sync"` the pipeline is created
+   * inline. `"throw"` is the default.
    */
   compute(compute: Compute, x: number, y?: number, z?: number, opts: FrameComputeOptions = {}): void {
     if (this.#asyncAborted) throw frameClosedError("Frame.compute");

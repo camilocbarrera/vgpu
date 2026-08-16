@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { describe, expect, test } from "vitest";
 import { init, compute, effect, frame, pingPong, pingPongStorage } from "../../src/node.ts";
 
@@ -55,7 +59,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Lane C GPU compute + ping
   });
 
   test("§8 ping-pong render feedback accumulates color on read target", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const pair = pingPong(gpu, 4, 4, { format: "rgba8unorm", label: "pingpong" });
       const feedback = effect(gpu, { shader: PING_PONG_PASS, label: "feedback" });

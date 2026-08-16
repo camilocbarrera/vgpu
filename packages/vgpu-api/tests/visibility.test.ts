@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, bundle, draw, effect, frame, target } from "../src/mock.ts";
@@ -6,7 +11,7 @@ import { visibility } from "../src/visibility.ts";
 const SOLID = `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1.0); }`;
 
 test("visibility(gpu) needs no device feature and creates one occlusion query set of the declared capacity", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(gpu.device.features.size).toBe(0);
   const vis = visibility(gpu, { capacity: 8 });
 
@@ -19,7 +24,7 @@ test("visibility(gpu) needs no device feature and creates one occlusion query se
 });
 
 test("a visibility pass carries the occlusion query set in its descriptor; other passes stay clean", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyFrameEncoders(gpu.device.gpu);
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
@@ -40,7 +45,7 @@ test("a visibility pass carries the occlusion query set in its descriptor; other
 });
 
 test("occlusion() wraps single-draw, callback, and effect bodies with contiguous indices in allocation order", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const proxy = draw(gpu, { shader: SOLID, label: "proxy" });
@@ -72,7 +77,7 @@ test("occlusion() wraps single-draw, callback, and effect bodies with contiguous
 });
 
 test("one resolve of the contiguous used range is appended before finish", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyFrameEncoders(gpu.device.gpu);
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
@@ -97,7 +102,7 @@ test("one resolve of the contiguous used range is appended before finish", async
 });
 
 test("results decode zero vs non-zero only: slot 0 confirms hidden, other slots visible, unused stays unknown", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const qHidden = vis.query("statue");
@@ -128,7 +133,7 @@ test("results decode zero vs non-zero only: slot 0 confirms hidden, other slots 
 });
 
 test("re-allocation order changes slots per frame, and newer results overwrite older ones", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const qA = vis.query("a");
@@ -153,7 +158,7 @@ test("re-allocation order changes slots per frame, and newer results overwrite o
 });
 
 test("allocation is contiguous across passes of one frame and resets on the next frame", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const sceneA = target(gpu, { size: [4, 4], depth: true });
   const sceneB = target(gpu, { size: [4, 4], depth: true });
@@ -177,7 +182,7 @@ test("allocation is contiguous across passes of one frame and resets on the next
 });
 
 test("age is Infinity before any result, 0 when a result lands, and advances with the frame counter", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const q = vis.query("statue");
@@ -200,7 +205,7 @@ test("age is Infinity before any result, 0 when a result lands, and advances wit
 });
 
 test("reset() flips state to unknown immediately and discards in-flight pre-reset readbacks", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const q = vis.query("statue");
@@ -228,7 +233,7 @@ test("reset() flips state to unknown immediately and discards in-flight pre-rese
 });
 
 test("Visibility.reset() resets every live handle", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const qA = vis.query("a");
@@ -248,7 +253,7 @@ test("Visibility.reset() resets every live handle", async () => {
 });
 
 test("bundles executed inside an occlusion scope encode between begin and end (their draws count toward the query)", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const drawable = draw(gpu, { shader: SOLID, label: "bundled" });
@@ -268,7 +273,7 @@ test("bundles executed inside an occlusion scope encode between begin and end (t
 });
 
 test("a depthReadOnly pass supports visibility and occlusion scopes", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const proxy = draw(gpu, { shader: SOLID, label: "roProxy", depth: { write: false } });
@@ -289,7 +294,7 @@ test("a depthReadOnly pass supports visibility and occlusion scopes", async () =
 });
 
 test("an MSAA depth target works with visibility", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true, msaa: true });
   const q = vis.query("statue");
@@ -302,7 +307,7 @@ test("an MSAA depth target works with visibility", async () => {
 });
 
 test("VGPU-VIS-CAPACITY-LIMIT rejects non-integer, < 1, and > 4096 capacities at visibility(gpu)", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   for (const capacity of [0, -1, 1.5, 4097, Number.NaN]) {
     expect(() => visibility(gpu, { capacity })).toThrowError(/VGPU-VIS-CAPACITY-LIMIT|expected an integer in \[1, 4096\]/);
   }
@@ -311,7 +316,7 @@ test("VGPU-VIS-CAPACITY-LIMIT rejects non-integer, < 1, and > 4096 capacities at
 });
 
 test("VGPU-VIS-CAPACITY throws at the occlusion() call that overflows the declared capacity", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu, { capacity: 2 });
   const scene = target(gpu, { size: [4, 4], depth: true });
   const queries = [vis.query("a"), vis.query("b"), vis.query("c")];
@@ -332,7 +337,7 @@ test("VGPU-VIS-CAPACITY throws at the occlusion() call that overflows the declar
 });
 
 test("VGPU-VIS-LABEL-DUPLICATE rejects a live label; dispose() frees it for reuse", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const q = vis.query("statue");
 
@@ -344,7 +349,7 @@ test("VGPU-VIS-LABEL-DUPLICATE rejects a live label; dispose() frees it for reus
 });
 
 test("a disposed handle's in-flight readback is skipped, and a new same-label handle never receives it", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const q = vis.query("statue");
@@ -363,7 +368,7 @@ test("a disposed handle's in-flight readback is skipped, and a new same-label ha
 });
 
 test("VGPU-VIS-DISPOSED covers disposed handles and disposed visibility instances", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4], depth: true });
   const vis = visibility(gpu);
   const q = vis.query("statue");
@@ -388,7 +393,7 @@ test("VGPU-VIS-DISPOSED covers disposed handles and disposed visibility instance
 });
 
 test("VGPU-VIS-NO-DEPTH rejects visibility on a pass whose target has no depth attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const flat = target(gpu, { size: [4, 4] });
 
@@ -399,7 +404,7 @@ test("VGPU-VIS-NO-DEPTH rejects visibility on a pass whose target has no depth a
 });
 
 test("VGPU-QUERY-NO-VISIBILITY rejects occlusion() in a pass opened without visibility", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const q = vis.query("statue");
@@ -411,7 +416,7 @@ test("VGPU-QUERY-NO-VISIBILITY rejects occlusion() in a pass opened without visi
 });
 
 test("VGPU-QUERY-NESTED rejects occlusion() inside an active occlusion() body", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const qA = vis.query("a");
@@ -431,7 +436,7 @@ test("VGPU-QUERY-NESTED rejects occlusion() inside an active occlusion() body", 
 });
 
 test("VGPU-QUERY-DUPLICATE rejects reusing a handle within one frame, across passes too", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   const scene = target(gpu, { size: [4, 4], depth: true });
   const q = vis.query("statue");
@@ -454,8 +459,8 @@ test("VGPU-QUERY-DUPLICATE rejects reusing a handle within one frame, across pas
 });
 
 test("mismatched instances are rejected: foreign handles, foreign gpus, and non-visibility values", async () => {
-  const gpuA = await init();
-  const gpuB = await init();
+  const gpuA = await init({ pendingPipelines: "sync" });
+  const gpuB = await init({ pendingPipelines: "sync" });
   const visA = visibility(gpuA);
   const visA2 = visibility(gpuA);
   const sceneA = target(gpuA, { size: [4, 4], depth: true });
@@ -481,7 +486,7 @@ test("mismatched instances are rejected: foreign handles, foreign gpus, and non-
 });
 
 test("invalid query labels fail at query()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu);
   for (const label of ["", 1, null, undefined, {}]) {
     expect(() => vis.query(label as never)).toThrowError(/VGPU-VIS-INVALID|non-empty string/);
@@ -491,7 +496,7 @@ test("invalid query labels fail at query()", async () => {
 });
 
 test("canonical usage: stable handles created once, proxies always drawn, real draws conditioned on q.hidden", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [8, 8], depth: true });
   const world = effect(gpu, SOLID);
   const statue = draw(gpu, { shader: SOLID, label: "statue" });
@@ -526,7 +531,7 @@ test("canonical usage: stable handles created once, proxies always drawn, real d
 });
 
 test("dispose() mid-frame keeps the occlusion query set alive until the frame is submitted", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const destroyed: number[] = [];
   spyQuerySetDestroys(gpu.device.gpu, destroyed);
   const vis = visibility(gpu, { capacity: 4 });
@@ -548,7 +553,7 @@ test("dispose() mid-frame keeps the occlusion query set alive until the frame is
 });
 
 test("a readback that fails is reported on gpu.onError and leaves handles untouched", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const originalCreateBuffer = gpu.device.gpu.createBuffer.bind(gpu.device.gpu);
   vi.spyOn(gpu.device.gpu, "createBuffer").mockImplementation((descriptor: GPUBufferDescriptor) => {
     const buffer = originalCreateBuffer(descriptor);
@@ -577,7 +582,7 @@ test("a readback that fails is reported on gpu.onError and leaves handles untouc
 });
 
 test("gpu.dispose() releases visibility instances created by that gpu", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const destroyed: number[] = [];
   spyQuerySetDestroys(gpu.device.gpu, destroyed);
   const vis = visibility(gpu);
@@ -594,7 +599,7 @@ test("gpu.dispose() releases visibility instances created by that gpu", async ()
 });
 
 test("two frames open at once each retain the query set; the newest frame's results still apply", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const destroyed: number[] = [];
   spyQuerySetDestroys(gpu.device.gpu, destroyed);
   const vis = visibility(gpu, { capacity: 4 });
@@ -696,7 +701,7 @@ function spyQuerySetDestroys(device: GPUDevice, destroyed: number[]): void {
 // --- gpu-first factory (T202-03) --------------------------------------------------------------
 
 test("visibility(gpu) declares its capacity, latches results and ages through the kernel's frame clock", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const vis = visibility(gpu, { capacity: 8 });
   const scene = target(gpu, { size: [4, 4], depth: true });
   const q = vis.query("statue");
@@ -721,7 +726,7 @@ test("visibility(gpu) declares its capacity, latches results and ages through th
 });
 
 test("a visibility(gpu) left open goes down with the gpu, and disposing it first drops its registration", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const destroyed: number[] = [];
   spyQuerySetDestroys(gpu.device.gpu, destroyed);
   const owned = visibility(gpu);
@@ -737,14 +742,14 @@ test("a visibility(gpu) left open goes down with the gpu, and disposing it first
 });
 
 test("visibility(gpu) validates the gpu before touching the device", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   gpu.dispose();
   expect(thrownBy(() => visibility(gpu))).toMatchObject({ code: "VGPU-GPU-DISPOSED", where: "visibility" });
   expect(thrownBy(() => visibility({ disposed: false } as never))).toMatchObject({ code: "VGPU-GPU-FOREIGN" });
 });
 
 test("visibility(gpu) still rejects a capacity outside the WebGPU query-set limit", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(thrownBy(() => visibility(gpu, { capacity: 4097 }))).toMatchObject({ code: "VGPU-VIS-CAPACITY-LIMIT" });
   expect(thrownBy(() => visibility(gpu, { capacity: 0 }))).toMatchObject({ code: "VGPU-VIS-CAPACITY-LIMIT" });
   gpu.dispose();
