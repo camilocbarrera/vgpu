@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { afterEach, expect, test, vi } from "vitest";
 import { init, frame, target, draw, effect } from "../src/mock.ts";
 
@@ -20,7 +25,7 @@ const SIMPLE_SHADER = `
 afterEach(() => vi.restoreAllMocks());
 
 test("Draw.draw returns void while claimed group validation errors go to gpu.onError", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const { draw: drawable, popResolvers } = rawClaimedDrawWithDeferredScopes(gpu, "drawVoid");
   const errors: unknown[] = [];
@@ -43,7 +48,7 @@ test("Draw.draw returns void while claimed group validation errors go to gpu.onE
 });
 
 test("Frame.done resolves after R4 validation is delivered exactly once through gpu.onError", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const { draw: drawable, popResolvers } = rawClaimedDrawWithDeferredScopes(gpu, "frameDone");
   const errors: unknown[] = [];
@@ -68,7 +73,7 @@ test("Frame.done resolves after R4 validation is delivered exactly once through 
 });
 
 test("missing error listener reports exactly once to console.error without unhandled rejection", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const { draw: drawable, popResolvers } = rawClaimedDrawWithDeferredScopes(gpu, "noListener");
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -96,7 +101,7 @@ test("missing error listener reports exactly once to console.error without unhan
 });
 
 test("onError supports multiple listeners, unsubscribe order, and throwing listeners", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const { draw: drawable, popResolvers } = rawClaimedDrawWithDeferredScopes(gpu, "listeners");
   const listenerError = new Error("bad listener");
@@ -119,7 +124,7 @@ test("onError supports multiple listeners, unsubscribe order, and throwing liste
 });
 
 test("gpu.settled snapshots pending validation deliveries", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const errors: string[] = [];
   gpu.onError((error) => errors.push(error.detail?.drawLabel ?? "unknown"));
@@ -142,7 +147,7 @@ test("gpu.settled snapshots pending validation deliveries", async () => {
 });
 
 test("sync pipeline creation throws are delivered once through gpu.onError", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: SIMPLE_SHADER, label: "syncThrow" });
   const nativeError = new Error("native createRenderPipeline failed");
@@ -163,7 +168,7 @@ test("sync pipeline creation throws are delivered once through gpu.onError", asy
 });
 
 test("Frame.done awaits queue.onSubmittedWorkDone even without claimed groups", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const shader1 = effect(gpu, SIMPLE_SHADER);
   let resolveSubmitted!: () => void;
@@ -226,7 +231,7 @@ function rawClaimedDrawWithDeferredScopes(gpu: Awaited<ReturnType<typeof init>>,
 }
 
 test("a disposed gpu stops delivering errors and keeps settled() resolving", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const { draw: drawable, popResolvers } = rawClaimedDrawWithDeferredScopes(gpu, "afterDispose");
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -243,7 +248,7 @@ test("a disposed gpu stops delivering errors and keeps settled() resolving", asy
 });
 
 test("onError unsubscribe is idempotent and survives dispose", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const unsub = gpu.onError(() => undefined);
   gpu.dispose();
   expect(() => { unsub(); unsub(); }).not.toThrow();

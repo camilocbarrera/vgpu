@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, draw, frame, target } from "../src/mock.ts";
@@ -12,7 +17,7 @@ const DRAW_SHADER = `
 `;
 
 test("omitted depth defaults to write with less-equal on depth targets", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   draw(gpu, { shader: DRAW_SHADER, label: "depth-default" }).draw(colorTarget);
 
@@ -22,7 +27,7 @@ test("omitted depth defaults to write with less-equal on depth targets", async (
 });
 
 test("depth false disables testing via always compare without writes", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   draw(gpu, { shader: DRAW_SHADER, label: "depth-off", depth: false }).draw(colorTarget);
 
@@ -32,7 +37,7 @@ test("depth false disables testing via always compare without writes", async () 
 });
 
 test("each depth field threads into the pipeline depthStencil state", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   draw(gpu, { shader: DRAW_SHADER, label: "depth-full", depth: { write: false, compare: "greater", bias: 2, biasSlopeScale: 1.5, biasClamp: 0.25 } }).draw(colorTarget);
   draw(gpu, { shader: DRAW_SHADER, label: "depth-partial", depth: { compare: "less" } }).draw(colorTarget);
@@ -46,7 +51,7 @@ test("each depth field threads into the pipeline depthStencil state", async () =
 });
 
 test("targets without depth keep depthStencil undefined regardless of depth options", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   draw(gpu, { shader: DRAW_SHADER, label: "no-depth", depth: { compare: "greater", bias: 4 } }).draw(colorTarget);
 
@@ -63,7 +68,7 @@ test("depth participates in pipeline keys", () => {
 });
 
 test("invalid depth options fail at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const expectInvalid = (label: string, depth: unknown): void => {
     expect(() => draw(gpu, { shader: DRAW_SHADER, label, depth: depth as never })).toThrowError(/VGPU-DEPTH-INVALID|Invalid depth/);
   };
@@ -79,7 +84,7 @@ test("invalid depth options fail at draw construction", async () => {
 });
 
 test("depth bias outside the i32 range fails at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const expectInvalid = (label: string, bias: number): void => {
     expect(() => draw(gpu, { shader: DRAW_SHADER, label, depth: { bias } })).toThrowError(/VGPU-DEPTH-INVALID|Invalid depth/);
   };
@@ -93,7 +98,7 @@ test("depth bias outside the i32 range fails at draw construction", async () => 
 });
 
 test("nonzero depth bias is rejected for non-triangle topologies", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const expectInvalid = (label: string, topology: GPUPrimitiveTopology, depth: unknown): void => {
     expect(() => draw(gpu, { shader: DRAW_SHADER, label, geometry: { topology }, depth: depth as never })).toThrowError(/VGPU-DEPTH-INVALID|Invalid depth/);
   };
@@ -106,7 +111,7 @@ test("nonzero depth bias is rejected for non-triangle topologies", async () => {
 });
 
 test("frame.pass clearDepth threads into the depth attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
 
@@ -120,7 +125,7 @@ test("frame.pass clearDepth threads into the depth attachment", async () => {
 });
 
 test("frame.pass validates clearDepth range and rejects it with clear false", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clearDepth: 2 }, () => undefined))).toThrowError(/VGPU-PASS-CLEARDEPTH-INVALID|clearDepth/);
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clearDepth: -0.5 }, () => undefined))).toThrowError(/VGPU-PASS-CLEARDEPTH-INVALID|clearDepth/);
@@ -130,7 +135,7 @@ test("frame.pass validates clearDepth range and rejects it with clear false", as
 });
 
 test("combined depth-stencil formats emit stencil ops on the attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
 
@@ -145,7 +150,7 @@ test("combined depth-stencil formats emit stencil ops on the attachment", async 
 });
 
 test("depth-only formats keep stencil ops off the attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
 
@@ -158,7 +163,7 @@ test("depth-only formats keep stencil ops off the attachment", async () => {
 });
 
 test("stencil-only depth formats are rejected at target creation", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => target(gpu, { size: [2, 2], depth: "stencil8" })).toThrowError(/VGPU-TARGET-DEPTH-STENCIL-ONLY|stencil-only/);
   gpu.dispose();
 });

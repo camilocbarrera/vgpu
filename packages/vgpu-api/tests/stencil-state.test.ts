@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, bundle, draw, frame, target } from "../src/mock.ts";
@@ -14,7 +19,7 @@ const DRAW_SHADER = `
 const KEEP_FACE = { compare: "always", failOp: "keep", depthFailOp: "keep", passOp: "keep" } as const;
 
 test("stencil faces and masks thread into the pipeline depthStencil state", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   draw(gpu, {
     shader: DRAW_SHADER,
@@ -41,7 +46,7 @@ test("stencil faces and masks thread into the pipeline depthStencil state", asyn
 });
 
 test("omitted back mirrors the normalized front", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   draw(gpu, { shader: DRAW_SHADER, label: "stencil-mirror", stencil: { front: { compare: "equal", pass: "replace" } } }).draw(colorTarget);
 
@@ -53,7 +58,7 @@ test("omitted back mirrors the normalized front", async () => {
 });
 
 test("omitted front keeps spec defaults when only back is given", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   draw(gpu, { shader: DRAW_SHADER, label: "stencil-back-only", stencil: { back: { fail: "zero" } } }).draw(colorTarget);
 
@@ -65,7 +70,7 @@ test("omitted front keeps spec defaults when only back is given", async () => {
 });
 
 test("stencil merges with depth options and depth defaults", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   draw(gpu, { shader: DRAW_SHADER, label: "stencil-with-depth", depth: { write: false, compare: "greater" }, stencil: { front: {} } }).draw(colorTarget);
   draw(gpu, { shader: DRAW_SHADER, label: "stencil-depth-off", depth: false, stencil: { readMask: 1 } }).draw(colorTarget);
@@ -80,7 +85,7 @@ test("stencil merges with depth options and depth defaults", async () => {
 });
 
 test("absent stencil keeps the depthStencil descriptor free of stencil fields", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   draw(gpu, { shader: DRAW_SHADER, label: "stencil-absent" }).draw(colorTarget);
 
@@ -90,7 +95,7 @@ test("absent stencil keeps the depthStencil descriptor free of stencil fields", 
 });
 
 test("stencil ref is emitted as setStencilReference only when provided", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
 
@@ -111,7 +116,7 @@ test("stencil ref is emitted as setStencilReference only when provided", async (
 });
 
 test("stencil ref is emitted per draw inside frame passes", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   const masked = draw(gpu, { shader: DRAW_SHADER, label: "masked", stencil: { front: { compare: "equal" }, ref: 5 } });
@@ -125,7 +130,7 @@ test("stencil ref is emitted per draw inside frame passes", async () => {
 });
 
 test("bundles reject recording draws with stencil ref but record ref-less stencil", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   const withRef = draw(gpu, { shader: DRAW_SHADER, label: "with-ref", stencil: { front: { compare: "equal" }, ref: 1 } });
   const withoutRef = draw(gpu, { shader: DRAW_SHADER, label: "without-ref", stencil: { front: { compare: "equal" }, writeMask: 0xFF } });
@@ -136,7 +141,7 @@ test("bundles reject recording draws with stencil ref but record ref-less stenci
 });
 
 test("stencil requires a target signature whose depth format has a stencil aspect", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const stencilTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   const depthOnly = target(gpu, { size: [2, 2], depth: true });
   const noDepth = target(gpu, { size: [2, 2] });
@@ -157,7 +162,7 @@ test("stencil requires a target signature whose depth format has a stencil aspec
 });
 
 test("invalid stencil options fail at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const expectInvalid = (label: string, stencil: unknown): void => {
     expect(() => draw(gpu, { shader: DRAW_SHADER, label, stencil: stencil as never })).toThrowError(/VGPU-STENCIL-INVALID|Invalid stencil/);
   };
@@ -180,7 +185,7 @@ test("invalid stencil options fail at draw construction", async () => {
 });
 
 test("frame.pass clearStencil threads into the depth-stencil attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
 
@@ -194,7 +199,7 @@ test("frame.pass clearStencil threads into the depth-stencil attachment", async 
 });
 
 test("frame.pass validates clearStencil range, preserve, and stencil aspect", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   const depthOnly = target(gpu, { size: [2, 2], depth: true });
   const noDepth = target(gpu, { size: [2, 2] });

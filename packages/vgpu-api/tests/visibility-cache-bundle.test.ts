@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { bindGroupLayoutMetadata, createMockGPUDevice, Device } from "@vgpu/core";
 import { reflectSource } from "@vgpu/wgsl/reflect-source";
@@ -16,7 +21,7 @@ const fragmentShader = `
 `;
 
 test("equal visibility layouts reuse identity while distinct masks do not poison the cache", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const a = draw(gpu, { shader: vertexShader("a"), label: "cache-a" });
   const b = draw(gpu, { shader: vertexShader("b"), label: "cache-b" });
   const fragment = draw(gpu, { shader: fragmentShader, label: "cache-fragment" });
@@ -26,7 +31,7 @@ test("equal visibility layouts reuse identity while distinct masks do not poison
 });
 
 test("unused bindings may be set and are ignored by the omitted layout", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const shader = `
     @group(0) @binding(0) var<storage, read> unused: array<u32>;
     @vertex fn vs() -> @builtin(position) vec4f { return vec4f(0); }
@@ -40,7 +45,7 @@ test("unused bindings may be set and are ignored by the omitted layout", async (
 });
 
 test("changing an omitted binding does not stale a recorded bundle", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const shader = `
     @group(0) @binding(0) var<uniform> used: vec4f;
     @group(0) @binding(1) var<storage, read> unused: array<u32>;
@@ -56,7 +61,7 @@ test("changing an omitted binding does not stale a recorded bundle", async () =>
 });
 
 test("unused-only high groups require no pipeline layouts", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const shader = `
     @group(1) @binding(0) var<storage, read> unused: array<u32>;
     @vertex fn vs() -> @builtin(position) vec4f { return vec4f(0); }
@@ -69,7 +74,7 @@ test("unused-only high groups require no pipeline layouts", async () => {
 });
 
 test("equal dynamic descriptors reuse layout identity", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const a = draw(gpu, { shader: vertexShader("a"), label: "dynamic-a" });
   const b = draw(gpu, { shader: vertexShader("b"), label: "dynamic-b" });
   expect(a.layout(0, { dynamicOffsets: true })).toBe(b.layout(0, { dynamicOffsets: true }));
@@ -77,7 +82,7 @@ test("equal dynamic descriptors reuse layout identity", async () => {
 });
 
 test("bundle recording and geometry slices share narrowed pipeline layouts", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const geo = geometry(gpu, { buffers: [{ data: new Float32Array([0, 0, 1, 0, 0, 1]), attributes: { position: { format: "float32x2", location: 0 } } }] });
   const first = draw(gpu, { shader: vertexShader("first"), label: "geometry-first", geometry: geo });
   const second = draw(gpu, { shader: vertexShader("second"), label: "geometry-second", geometry: geo.slice({ firstVertex: 0, vertexCount: 3 }) });
@@ -97,7 +102,7 @@ const sampledTextureShader = (sample: boolean) => `
 `;
 
 test("ordinary sampling promotes f32 texture layouts while loads remain unfilterable", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const loaded = draw(gpu, { shader: sampledTextureShader(false), label: "loaded-f32" });
   const sampled = draw(gpu, { shader: sampledTextureShader(true), label: "sampled-f32" });
   const again = draw(gpu, { shader: sampledTextureShader(true), label: "sampled-again" });
@@ -111,7 +116,7 @@ test("ordinary sampling promotes f32 texture layouts while loads remain unfilter
 });
 
 test("known unfilterable float textures fail with an actionable structured error", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawable = draw(gpu, { shader: sampledTextureShader(true), label: "filterability" });
   const hdr = gpu.device.createTexture({ size: [1, 1], format: "rgba32float", usage: ["texture_binding"], label: "hdr-color" });
   expect(() => drawable.set({ image: hdr })).toThrow(expect.objectContaining({
@@ -141,7 +146,7 @@ test("requested float32-filterable permits promoted rgba32float facade textures"
 });
 
 test("unresolved direct and helper sampling promote the positional texture bindings", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const direct = draw(gpu, { label: "fallback-direct", shader: `
     @group(0) @binding(0) var image: texture_2d<f32>;
     @group(0) @binding(1) var samp: sampler;
@@ -166,7 +171,7 @@ test("unresolved direct and helper sampling promote the positional texture bindi
 });
 
 test("selected vertex load and fragment sample union only promotes the sampled texture", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawable = draw(gpu, { label: "mixed-entry-policy", shader: `
     @group(0) @binding(0) var sampled: texture_2d<f32>;
     @group(0) @binding(1) var samp: sampler;
@@ -183,7 +188,7 @@ test("selected vertex load and fragment sample union only promotes the sampled t
 });
 
 test("depth integer external storage and multisampled layouts are never promoted", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawable = draw(gpu, { label: "special-textures", shader: `
     @group(0) @binding(0) var depthTex: texture_depth_2d;
     @group(0) @binding(1) var comparison: sampler_comparison;
@@ -214,7 +219,7 @@ test("depth integer external storage and multisampled layouts are never promoted
 });
 
 test("equal effective descriptors are isolated across devices", async () => {
-  const firstGpu = await init(), secondGpu = await init();
+  const firstGpu = await init({ pendingPipelines: "sync" }), secondGpu = await init({ pendingPipelines: "sync" });
   const first = draw(firstGpu, { shader: sampledTextureShader(true), label: "same-label" });
   const second = draw(secondGpu, { shader: sampledTextureShader(true), label: "same-label" });
   expect(first.layout(0)).not.toBe(second.layout(0));
@@ -231,7 +236,7 @@ test("effective promotion does not mutate reflected binding layouts", () => {
 });
 
 test("opaque raw texture views skip facade format prechecks", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawable = draw(gpu, { shader: sampledTextureShader(true), label: "raw-view-fallback" });
   const raw = gpu.device.gpu.createTexture({ size: [1, 1], format: "rgba32float", usage: 4 }).createView();
   expect(() => drawable.set({ image: raw, imageSampler: sampler(gpu) })).not.toThrow();

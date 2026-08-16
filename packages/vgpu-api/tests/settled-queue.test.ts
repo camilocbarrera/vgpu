@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { afterEach, expect, test, vi } from "vitest";
 import { init, target, draw, compute } from "../src/mock.ts";
 import { kernelOf } from "../src/kernel.ts";
@@ -25,7 +30,7 @@ const EMPTY_COMPUTE_SHADER = `
 afterEach(() => vi.restoreAllMocks());
 
 test("gpu.settled awaits queue.onSubmittedWorkDone even with no validation, compilation or readback pending", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   // A standalone draw with no claimed raw groups: today it submits synchronously and never
   // registers anything with the kernel's pendingDeliveries/settledSources bookkeeping.
@@ -54,7 +59,7 @@ test("gpu.settled awaits queue.onSubmittedWorkDone even with no validation, comp
 });
 
 test("a submission made during/after a gpu.settled() call does not extend that call's wait (snapshot semantics)", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: SIMPLE_SHADER, label: "snapshotSemantics" });
   const resolvers: (() => void)[] = [];
@@ -85,7 +90,7 @@ test("a submission made during/after a gpu.settled() call does not extend that c
 });
 
 test("gpu.settled flushes pending onError deliveries before resolving", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: SIMPLE_SHADER, label: "settledFlush" });
   const nativeError = new Error("native createRenderPipeline failed");
@@ -125,7 +130,7 @@ test("gpu.settled flushes pending onError deliveries before resolving", async ()
 });
 
 test("gpu.settled never rejects even when queue completion itself reports a failed submission", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const drawable = draw(gpu, { shader: SIMPLE_SHADER, label: "neverRejects" });
   vi.spyOn(gpu.device.gpu.queue, "onSubmittedWorkDone").mockImplementation(() => Promise.reject(new Error("submission failed")));
@@ -137,7 +142,7 @@ test("gpu.settled never rejects even when queue completion itself reports a fail
 });
 
 test("regression: settled() still waits transitively on an in-flight claimed-bind-group validation", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const { draw: drawable, popResolvers } = rawClaimedDrawWithDeferredScopes(gpu, "regressionClaim");
   const errors: unknown[] = [];
@@ -165,7 +170,7 @@ test("regression: settled() still waits transitively on an in-flight claimed-bin
 });
 
 test("regression: compute's synchronous dispatch never awaits queue.onSubmittedWorkDone on its own resolution path", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const sim = compute(gpu, { shader: EMPTY_COMPUTE_SHADER, label: "settledQueueRegressionCompute" });
   const onSubmittedWorkDone = vi.spyOn(gpu.device.gpu.queue, "onSubmittedWorkDone");
 
@@ -177,7 +182,7 @@ test("regression: compute's synchronous dispatch never awaits queue.onSubmittedW
 });
 
 test("QA-A5: device without onSubmittedWorkDone (old adapter/mock) does not crash settled()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const queue = gpu.device.gpu.queue as unknown as Record<string, unknown>;
   delete queue.onSubmittedWorkDone;
   expect((gpu.device.gpu.queue as unknown as Record<string, unknown>).onSubmittedWorkDone).toBeUndefined();

@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { afterEach, expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { reflectSource } from "@vgpu/wgsl/reflect-source";
@@ -27,7 +32,7 @@ function entries(gpu: Awaited<ReturnType<typeof init>>, label: string): readonly
 }
 
 test("render visibility unions only selected entry static uses and retains unused bindings", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawable = draw(gpu, { shader: RENDER, label: "visible" });
   expect(entries(gpu, "visible").map(({ binding, visibility }) => [binding, visibility])).toEqual([[0, 2], [1, 1], [2, 3]]);
 
@@ -38,14 +43,14 @@ test("render visibility unions only selected entry static uses and retains unuse
 });
 
 test("compute visibility is selected-entry driven and leaves unused declarations at zero", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   compute(gpu, { shader: COMPUTE, label: "compute-visible" });
   expect(entries(gpu, "compute-visible").map(({ binding, visibility }) => [binding, visibility])).toEqual([[0, 4]]);
   gpu.dispose();
 });
 
 test("fragment-only storage succeeds with a zero vertex-stage storage limit", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   Object.defineProperty(gpu.device.gpu, "limits", { value: { ...gpu.device.limits, maxStorageBuffersInVertexStage: 0, maxStorageBuffersInFragmentStage: 4 } });
   draw(gpu, { shader: RENDER, label: "limit-zero" });
   expect(entries(gpu, "limit-zero")[0]?.visibility).toBe(2);
@@ -53,7 +58,7 @@ test("fragment-only storage succeeds with a zero vertex-stage storage limit", as
 });
 
 test("true vertex storage throws structured error before native BGL creation", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   Object.defineProperty(gpu.device.gpu, "limits", { value: { ...gpu.device.limits, maxStorageBuffersInVertexStage: 0, maxStorageBuffersInFragmentStage: 4 } });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
   const shader = `
@@ -71,7 +76,7 @@ test("true vertex storage throws structured error before native BGL creation", a
 });
 
 test("unused declarations stay reflected but are omitted from layouts and never required", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const shader = `
     @group(0) @binding(0) var<storage, read> unused: array<u32>;
     @vertex fn vs() -> @builtin(position) vec4f { return vec4f(0); }
@@ -88,7 +93,7 @@ test("unused declarations stay reflected but are omitted from layouts and never 
 });
 
 test("two used storage buffers exceed a limit of one while unused storage does not count", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   Object.defineProperty(gpu.device.gpu, "limits", { value: { ...gpu.device.limits, maxStorageBuffersInVertexStage: 1 } });
   const shader = `
     @group(0) @binding(0) var<storage, read> a: array<vec4f>;
@@ -109,7 +114,7 @@ test("two used storage buffers exceed a limit of one while unused storage does n
 });
 
 test("stage-specific missing limits fall back to maxStorageBuffersPerShaderStage", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   Object.defineProperty(gpu.device.gpu, "limits", { value: { maxStorageBuffersPerShaderStage: 0 } });
   expect(() => draw(gpu, { shader: RENDER, label: "fallback-limit" })).toThrow(expect.objectContaining({
     code: "VGPU-LIMIT-STORAGE-FRAGMENT",
@@ -119,7 +124,7 @@ test("stage-specific missing limits fall back to maxStorageBuffersPerShaderStage
 });
 
 test("fragment storage limit reports the fragment sibling code", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   Object.defineProperty(gpu.device.gpu, "limits", { value: { ...gpu.device.limits, maxStorageBuffersInVertexStage: 8, maxStorageBuffersInFragmentStage: 0 } });
   expect(() => draw(gpu, { shader: RENDER, label: "fragment-limit" })).toThrow(expect.objectContaining({
     code: "VGPU-LIMIT-STORAGE-FRAGMENT",

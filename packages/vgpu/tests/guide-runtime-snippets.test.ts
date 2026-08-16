@@ -48,6 +48,12 @@ test("corrected playbook and post-processing patterns run against vgpu/mock", as
   } });
 
   wave.set("params", { time: clock(gpu).time });
+  // The playbook these snippets mirror warms its combinations before encoding, because the
+  // `pendingPipelines` default is `"throw"`: an encode never compiles inline unless it was asked to.
+  await prepare(gpu, [
+    { draw: wave, target: colorTarget },
+    { draw: post, target: output },
+  ]);
   frame(gpu, (currentFrame) => {
     currentFrame.pass(colorTarget, wave);
     currentFrame.pass(output, post);
@@ -66,6 +72,7 @@ test("corrected playbook and post-processing patterns run against vgpu/mock", as
     bloom.resize([width / 2, height / 2]);
     bright.set("params", { resolution: bloom.size });
   });
+  await prepare(gpu, [{ draw: bright, target: bloom }]);
   frame(gpu, (currentFrame) => currentFrame.pass(bloom, bright));
   gpu.dispose();
 });

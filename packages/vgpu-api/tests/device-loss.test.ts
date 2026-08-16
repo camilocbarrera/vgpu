@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 /**
  * Contract #19 + design rule §9 "Device loss is terminal".
  *
@@ -35,7 +40,7 @@ afterEach(() => {
 // --- gpu.lost: resolves only on a real loss ------------------------------------------------------
 
 test("gpu.lost resolves with the loss info after a real device loss, with no intermediate operation", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   void loseMockGPUDevice(gpu.gpu, { reason: "unknown", message: "simulated loss" });
   const info = await gpu.lost;
@@ -47,7 +52,7 @@ test("gpu.lost resolves with the loss info after a real device loss, with no int
 });
 
 test("gpu.dispose() never resolves gpu.lost; it only flips gpu.disposed", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   gpu.dispose();
 
@@ -57,7 +62,7 @@ test("gpu.dispose() never resolves gpu.lost; it only flips gpu.disposed", async 
 });
 
 test("dispose() after a real loss stays idempotent, and gpu.disposed only tracks dispose()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   await lose(gpu);
 
   expect(gpu.disposed).toBe(false);
@@ -72,7 +77,7 @@ test("dispose() after a real loss stays idempotent, and gpu.disposed only tracks
 
 test("a real device loss stops every frame loop the gpu owns, without disposing it", async () => {
   const callbacks = mockAnimationFrames();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, SOLID);
 
@@ -95,7 +100,7 @@ test("a real device loss stops every frame loop the gpu owns, without disposing 
 
 test("the loops are stopped before anyone awaiting gpu.lost observes the loss", async () => {
   const callbacks = mockAnimationFrames();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   frameLoop(gpu, () => undefined);
   fire(callbacks, 1, 0);
   expect(callbacks.size).toBe(1);
@@ -109,7 +114,7 @@ test("the loops are stopped before anyone awaiting gpu.lost observes the loss", 
 // --- Every object of the graph is terminal -------------------------------------------------------
 
 test("surface operations throw VGPU-DEVICE-LOST naming the surface method, not an internal device call", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const canvas = canvasLike(8, 4);
   const view = surface(gpu, canvas, { depth: true });
   await lose(gpu);
@@ -123,7 +128,7 @@ test("surface operations throw VGPU-DEVICE-LOST naming the surface method, not a
 });
 
 test("an offscreen target is terminal too, naming the target method", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   await lose(gpu);
 
@@ -134,7 +139,7 @@ test("an offscreen target is terminal too, naming the target method", async () =
 });
 
 test("a recorded bundle refuses to prepare, replay or rebuild after a real loss", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, SOLID);
   const recorded = bundle(gpu, { target: scene }, (r) => r.draw(fx));
@@ -150,7 +155,7 @@ test("a recorded bundle refuses to prepare, replay or rebuild after a real loss"
 });
 
 test("draw, compute-style set/bind, frame() and prepare() stay terminal after a loss (regression of the 34 existing guards)", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, SOLID);
   await lose(gpu);
@@ -164,12 +169,12 @@ test("draw, compute-style set/bind, frame() and prepare() stay terminal after a 
 });
 
 test("nothing is ever re-pointed: objects of a lost gpu stay terminal next to a brand new gpu", async () => {
-  const lost = await init();
+  const lost = await init({ pendingPipelines: "sync" });
   const oldScene = target(lost, { size: [4, 4] });
   const oldEffect = effect(lost, SOLID);
   await lose(lost);
 
-  const fresh = await init();
+  const fresh = await init({ pendingPipelines: "sync" });
   // No restore(), no reattach(), no generation proxy: the old objects belong to the dead device forever.
   expect(Object.keys(lost)).not.toContain("restore");
   expect(() => frame(fresh, (f) => f.pass(oldScene, oldEffect))).toThrow(expect.objectContaining({ code: "VGPU-DEVICE-LOST" }));
@@ -181,7 +186,7 @@ test("nothing is ever re-pointed: objects of a lost gpu stay terminal next to a 
 
 test("dispose() winning the race suppresses the loss the destroy itself causes", async () => {
   const callbacks = mockAnimationFrames();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   let calls = 0;
   frameLoop(gpu, () => { calls += 1; });
 
@@ -199,7 +204,7 @@ test("dispose() winning the race suppresses the loss the destroy itself causes",
 });
 
 test("a prepare() in flight when the loss lands rejects with VGPU-DEVICE-LOST instead of encoding", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, SOLID);
   const gate = deferred();
@@ -221,7 +226,7 @@ test("a prepare() in flight when the loss lands rejects with VGPU-DEVICE-LOST in
 });
 
 test("the bundle host guard is a capability, not a requirement: a host without it still records and replays", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4] });
   const fx = effect(gpu, SOLID);
   // The reduced host shape (`render-service.ts` builds one) defines no assertDeviceUsable: calling it

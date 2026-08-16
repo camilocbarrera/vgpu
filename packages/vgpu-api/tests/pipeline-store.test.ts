@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { afterEach, expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { createMockAdapter, init, draw, target } from "../src/mock.ts";
@@ -42,7 +47,7 @@ const VERTEX_LAYOUT_B: GPUVertexBufferLayout = {
 afterEach(() => vi.restoreAllMocks());
 
 test("device store dedupes byte-identical WGSL, layout, and signature across draws", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const a = draw(gpu, { shader: WGSL, label: "dedupe-a" });
   const b = draw(gpu, { shader: WGSL, label: "dedupe-b" });
@@ -59,7 +64,7 @@ test("device store dedupes byte-identical WGSL, layout, and signature across dra
 });
 
 test("different vertex buffer layouts do not collide", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const a = draw(gpu, { shader: VERTEX_WGSL, label: "layout-a", geometry: { vertexBufferLayouts: [VERTEX_LAYOUT_A] } });
   const b = draw(gpu, { shader: VERTEX_WGSL, label: "layout-b", geometry: { vertexBufferLayouts: [VERTEX_LAYOUT_B] } });
@@ -75,7 +80,7 @@ test("different vertex buffer layouts do not collide", async () => {
 });
 
 test("dynamic layout swap changes the pipeline key without clearing the store", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const drawable = draw(gpu, { shader: GROUP_WGSL, label: "dynamic-layout" }) as InternalDraw;
 
@@ -89,7 +94,7 @@ test("dynamic layout swap changes the pipeline key without clearing the store", 
 });
 
 test("blend and writeMask participate in shared pipeline cache keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const a = draw(gpu, { shader: WGSL, label: "blend-a", blend: "alpha" });
   const b = draw(gpu, { shader: WGSL, label: "blend-b", blend: "additive" });
@@ -108,7 +113,7 @@ test("blend and writeMask participate in shared pipeline cache keys", async () =
 });
 
 test("strip geometries that derive stripIndexFormat from indexFormat do not collide in the cache", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   // Neither geometry spells stripIndexFormat out: the descriptor derives it from indexFormat, so the key must too.
   const a = draw(gpu, { shader: WGSL, label: "strip-uint16", geometry: { topology: "triangle-strip", indexFormat: "uint16" } });
@@ -128,7 +133,7 @@ test("strip geometries that derive stripIndexFormat from indexFormat do not coll
 });
 
 test("an explicit stripIndexFormat and the derived one share a pipeline", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const derived = draw(gpu, { shader: WGSL, label: "derived", geometry: { topology: "line-strip", indexFormat: "uint16" } });
   const explicitFormat = draw(gpu, { shader: WGSL, label: "explicit", geometry: { topology: "line-strip", stripIndexFormat: "uint16", indexFormat: "uint16" } });
@@ -142,7 +147,7 @@ test("an explicit stripIndexFormat and the derived one share a pipeline", async 
 });
 
 test("cull and frontFace participate in shared pipeline cache keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const a = draw(gpu, { shader: WGSL, label: "cull-a", cull: "back" });
   const b = draw(gpu, { shader: WGSL, label: "cull-b", cull: "front" });
@@ -161,7 +166,7 @@ test("cull and frontFace participate in shared pipeline cache keys", async () =>
 });
 
 test("depth participates in shared pipeline cache keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   const a = draw(gpu, { shader: WGSL, label: "depth-a", depth: { compare: "greater" } });
   const b = draw(gpu, { shader: WGSL, label: "depth-b", depth: false });
@@ -180,7 +185,7 @@ test("depth participates in shared pipeline cache keys", async () => {
 });
 
 test("stencil participates in shared pipeline cache keys; ref stays out", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], depth: "depth24plus-stencil8" });
   const a = draw(gpu, { shader: WGSL, label: "st-a", stencil: { front: { compare: "equal", pass: "replace" } } });
   const b = draw(gpu, { shader: WGSL, label: "st-b", stencil: { front: { compare: "equal", pass: "replace" }, writeMask: 0xFF } });
@@ -204,7 +209,7 @@ test("stencil participates in shared pipeline cache keys; ref stays out", async 
 });
 
 test("multisample participates in shared pipeline cache keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], msaa: true });
   const a = draw(gpu, { shader: WGSL, label: "ms-a", multisample: { alphaToCoverage: true } });
   const b = draw(gpu, { shader: WGSL, label: "ms-b", multisample: { mask: 0b0101 } });
@@ -226,7 +231,7 @@ test("multisample participates in shared pipeline cache keys", async () => {
 });
 
 test("unclippedDepth participates in shared pipeline cache keys", async () => {
-  const gpu = await init({ adapter: createMockAdapter({ features: ["depth-clip-control"] }), requiredFeatures: ["depth-clip-control"] });
+  const gpu = await init({ adapter: createMockAdapter({ features: ["depth-clip-control"] }), requiredFeatures: ["depth-clip-control"], pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const a = draw(gpu, { shader: WGSL, label: "unclipped-a", unclippedDepth: true });
   const b = draw(gpu, { shader: WGSL, label: "unclipped-b" });
@@ -246,7 +251,7 @@ test("unclippedDepth participates in shared pipeline cache keys", async () => {
 });
 
 test("constants participate in shared pipeline cache keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const OVERRIDE_WGSL = `
 override SCALE: f32 = 1.0;
@@ -271,7 +276,7 @@ ${WGSL}`;
 });
 
 test("entry points participate in shared pipeline cache keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const TWO_FRAGMENT_WGSL = `${WGSL}
 @fragment fn fs_alt() -> @location(0) vec4f { return vec4f(0.5); }`;
@@ -305,7 +310,7 @@ test("pipelineKeyOf appends fragmentKey only when present", () => {
 });
 
 test("sync pipeline creation wins a pending async create and suppresses late native rejection", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const store = createPipelineStore(gpu.device);
   const modules = createShaderModuleCache(gpu.device);
@@ -341,7 +346,7 @@ test("sync pipeline creation wins a pending async create and suppresses late nat
 });
 
 test("disposing the store rejects pending async compiles with VGPU-COMPILE-DISPOSED", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const store = createPipelineStore(gpu.device);
   const modules = createShaderModuleCache(gpu.device);
@@ -357,7 +362,7 @@ test("disposing the store rejects pending async compiles with VGPU-COMPILE-DISPO
 });
 
 test("signatureKeyOf matches the pre-store draw key", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm", depth: "depth24plus", msaa: true });
   expect(signatureKeyOf({ colors: colorTarget.colors.map((color) => color.format), depth: colorTarget.depth?.format, sampleCount: colorTarget.sampleCount }))
     .toBe(`${colorTarget.colors.map((color) => color.format).join(",")}:${colorTarget.depth?.format ?? "none"}:${colorTarget.sampleCount}`);

@@ -11,7 +11,7 @@ struct Params { value: f32 }
 `;
 
 test("test-utils mock helper runs vgpu without loading Dawn", async () => {
-  const gpu = await createMockGpu({ size: [4, 4] });
+  const gpu = await createMockGpu({ size: [4, 4], pendingPipelines: "sync" });
   try {
     const shader = effect(gpu, { shader: SHADER, label: "mock-helper", set: { value: 1 } });
     const colorTarget = target(gpu, { size: [4, 4], format: "rgba8unorm" });

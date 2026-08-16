@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, draw, target } from "../src/mock.ts";
@@ -20,7 +25,7 @@ const ALPHA_BLEND = { color: { srcFactor: "src-alpha", dstFactor: "one-minus-src
 const ADDITIVE_BLEND = { color: { srcFactor: "one", dstFactor: "one", operation: "add" }, alpha: { srcFactor: "one", dstFactor: "one", operation: "add" } } as const;
 
 test("per-color-target blend and writeMask reach each render pipeline target by index", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], colors: [{ format: "rgba8unorm" }, { format: "rgba16float" }] });
 
   draw(gpu, {
@@ -41,7 +46,7 @@ test("per-color-target blend and writeMask reach each render pipeline target by 
 });
 
 test("null, missing, and empty entries inherit the top-level blend and writeMask per field", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], colors: [{ format: "rgba8unorm" }, { format: "rgba8unorm" }, { format: "rgba8unorm" }] });
 
   draw(gpu, {
@@ -63,7 +68,7 @@ test("null, missing, and empty entries inherit the top-level blend and writeMask
 });
 
 test("absent colors keeps the uniform top-level state on every attachment", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], colors: [{ format: "rgba8unorm" }, { format: "rgba16float" }] });
 
   draw(gpu, { shader: MRT_SHADER, label: "uniform", blend: "additive", writeMask: ["r"] }).draw(colorTarget);
@@ -79,7 +84,7 @@ test("absent colors keeps the uniform top-level state on every attachment", asyn
 });
 
 test("writeMask [] silences one attachment without touching its siblings", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], colors: [{ format: "rgba8unorm" }, { format: "rgba8unorm" }] });
 
   draw(gpu, { shader: MRT_SHADER, label: "silence", colors: [null, { writeMask: [] }] }).draw(colorTarget);
@@ -93,7 +98,7 @@ test("writeMask [] silences one attachment without touching its siblings", async
 });
 
 test("colors length must match the target signature's color attachment count", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const single = target(gpu, { size: [2, 2] });
   const mrt = target(gpu, { size: [2, 2], colors: [{ format: "rgba8unorm" }, { format: "rgba8unorm" }] });
   const drawable = draw(gpu, { shader: MRT_SHADER, label: "mismatch", colors: [{ writeMask: [] }] });
@@ -107,7 +112,7 @@ test("colors length must match the target signature's color attachment count", a
 });
 
 test("invalid colors options fail at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => draw(gpu, { shader: MRT_SHADER, label: "not-array", colors: "rgba" as never })).toThrowError(/VGPU-COLORS-INVALID|must be an array/);
   expect(() => draw(gpu, { shader: MRT_SHADER, label: "bad-entry", colors: [42] as never })).toThrowError(/VGPU-COLORS-INVALID|colors\[0\]/);
   expect(() => draw(gpu, { shader: MRT_SHADER, label: "array-entry", colors: [["r"]] as never })).toThrowError(/VGPU-COLORS-INVALID|colors\[0\]/);
@@ -117,7 +122,7 @@ test("invalid colors options fail at draw construction", async () => {
 });
 
 test("colors participate in shared pipeline cache keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2], colors: [{ format: "rgba8unorm" }, { format: "rgba8unorm" }] });
   const a = draw(gpu, { shader: MRT_SHADER, label: "colors-a", blend: "alpha", colors: [null, { writeMask: [] }] });
   const b = draw(gpu, { shader: MRT_SHADER, label: "colors-b", blend: "alpha", colors: [{ writeMask: [] }, null] });

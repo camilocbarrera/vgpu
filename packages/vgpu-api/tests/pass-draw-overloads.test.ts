@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { init, draw, effect, frame, target } from "../src/mock.ts";
 
@@ -27,7 +32,7 @@ struct VertexOut {
 `;
 
 test("frame.pass accepts a bare target with a callback", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, { size: [4, 4] });
@@ -43,7 +48,7 @@ test("frame.pass accepts a bare target with a callback", async () => {
 });
 
 test("frame.pass routes Effect and Draw shortcut bodies through FramePass.draw", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const effectTarget = target(gpu, { size: [4, 4] });
@@ -65,7 +70,7 @@ test("frame.pass routes Effect and Draw shortcut bodies through FramePass.draw",
 });
 
 test("frame.pass keeps option bags and honors clear with an Effect shortcut", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const renderPasses = spyRenderPassDescriptors(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, { size: [4, 4] });
@@ -81,7 +86,7 @@ test("frame.pass keeps option bags and honors clear with an Effect shortcut", as
 });
 
 test("effect.draw accepts a bare target and keeps DrawCallOptions bags", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, { size: [4, 4] });
@@ -101,7 +106,7 @@ test("effect.draw accepts a bare target and keeps DrawCallOptions bags", async (
 });
 
 test("draw.draw accepts a bare target and keeps DrawCallOptions bags", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const drawCalls = spyRenderPassDraws(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, { size: [4, 4] });
@@ -122,7 +127,7 @@ test("draw.draw accepts a bare target and keeps DrawCallOptions bags", async () 
 });
 
 test("frame.pass overloads preserve existing target and drawable validation errors", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [4, 4] });
 

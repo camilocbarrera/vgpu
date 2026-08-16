@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, bundle, draw, frame, target } from "../src/mock.ts";
@@ -13,7 +18,7 @@ const DRAW_SHADER = `
 const CONSTANT_BLEND = { color: { src: "constant", dst: "one-minus-constant" } } as const;
 
 test("blendConstant is emitted after setPipeline and before the one-shot draw", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2] });
 
@@ -25,7 +30,7 @@ test("blendConstant is emitted after setPipeline and before the one-shot draw", 
 });
 
 test("blendConstant is emitted per draw inside frame passes", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2] });
   const constant = draw(gpu, { shader: DRAW_SHADER, label: "constant", blend: CONSTANT_BLEND, blendConstant: [2, -1, 0.5, 1] });
@@ -40,7 +45,7 @@ test("blendConstant is emitted per draw inside frame passes", async () => {
 });
 
 test("constant blend factors without blendConstant draw with no setBlendConstant call", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2] });
 
@@ -52,7 +57,7 @@ test("constant blend factors without blendConstant draw with no setBlendConstant
 });
 
 test("invalid blendConstant shapes fail at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const expectInvalid = (label: string, blendConstant: unknown): void => {
     expect(() => draw(gpu, { shader: DRAW_SHADER, label, blend: CONSTANT_BLEND, blendConstant: blendConstant as never })).toThrowError(/VGPU-BLEND-CONSTANT-INVALID|Invalid blendConstant/);
   };
@@ -67,7 +72,7 @@ test("invalid blendConstant shapes fail at draw construction", async () => {
 });
 
 test("blendConstant without a constant blend factor fails at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const expectDead = (label: string, opts: object): void => {
     expect(() => draw(gpu, { shader: DRAW_SHADER, label, blendConstant: [0, 0, 0, 1], ...opts })).toThrowError(/VGPU-BLEND-CONSTANT-INVALID|no effect/);
   };
@@ -82,7 +87,7 @@ test("blendConstant without a constant blend factor fails at draw construction",
 });
 
 test("a constant factor reached only through colors[i].blend keeps blendConstant live", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ops = spyRenderPassOps(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2] });
 
@@ -95,7 +100,7 @@ test("a constant factor reached only through colors[i].blend keeps blendConstant
 });
 
 test("blendConstant validates against the effective blend state of each color target", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const expectDead = (label: string, opts: object): void => {
     expect(() => draw(gpu, { shader: DRAW_SHADER, label, blendConstant: [0, 0, 0, 1], ...opts })).toThrowError(/VGPU-BLEND-CONSTANT-INVALID|no effect/);
   };
@@ -113,7 +118,7 @@ test("blendConstant validates against the effective blend state of each color ta
 });
 
 test("bundles reject recording draws with blendConstant", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const constant = draw(gpu, { shader: DRAW_SHADER, label: "constant", blend: CONSTANT_BLEND, blendConstant: [0.5, 0.5, 0.5, 1] });
   const plain = draw(gpu, { shader: DRAW_SHADER, label: "plain-constant-factors", blend: CONSTANT_BLEND });
@@ -124,7 +129,7 @@ test("bundles reject recording draws with blendConstant", async () => {
 });
 
 test("blendConstant is encoder state and does not split pipelines", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const a = draw(gpu, { shader: DRAW_SHADER, label: "bc-a", blend: CONSTANT_BLEND, blendConstant: [1, 0, 0, 1] });
   const b = draw(gpu, { shader: DRAW_SHADER, label: "bc-b", blend: CONSTANT_BLEND, blendConstant: [0, 1, 0, 1] });

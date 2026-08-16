@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { createMockAdapter, init, bundle, draw, effect, frame, surface, target } from "../src/mock.ts";
@@ -23,7 +28,7 @@ test("blend presets are emitted on render pipeline targets", async () => {
   ] as const;
 
   for (const [preset, expected] of cases) {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const colorTarget = target(gpu, { size: [2, 2] });
     draw(gpu, { shader: DRAW_SHADER, blend: preset }).draw(colorTarget);
     const desc = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors.at(-1);
@@ -33,7 +38,7 @@ test("blend presets are emitted on render pipeline targets", async () => {
 });
 
 test("custom blend defaults op and alpha; writeMask normalizes arrays", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   draw(gpu, { shader: DRAW_SHADER, label: "custom", blend: { color: { src: "one", dst: "zero" } }, writeMask: ["r", "g", "b"] }).draw(colorTarget);
   draw(gpu, { shader: DRAW_SHADER, label: "empty-mask", writeMask: [] }).draw(colorTarget);
@@ -50,7 +55,7 @@ test("custom blend defaults op and alpha; writeMask normalizes arrays", async ()
 });
 
 test("invalid blend and writeMask options fail at draw construction", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => draw(gpu, { shader: DRAW_SHADER, label: "badBlend", blend: "screen" as never })).toThrowError(/VGPU-BLEND-INVALID|Invalid blend/);
   expect(() => draw(gpu, { shader: DRAW_SHADER, label: "badObject", blend: { alpha: { src: "one", dst: "zero" } } as never })).toThrowError(/VGPU-BLEND-INVALID|Invalid blend/);
   expect(() => draw(gpu, { shader: DRAW_SHADER, label: "badMask", writeMask: "rgb" as never })).toThrowError(/VGPU-WRITEMASK-INVALID|Invalid writeMask/);
@@ -59,7 +64,7 @@ test("invalid blend and writeMask options fail at draw construction", async () =
 });
 
 test("effect options pass blend and writeMask through to the fullscreen draw", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   effect(gpu, { shader: EFFECT_SHADER, blend: "additive", writeMask: ["a"] }).draw(colorTarget);
   const desc = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors.at(-1);
@@ -71,7 +76,7 @@ test("effect options pass blend and writeMask through to the fullscreen draw", a
 });
 
 test("frame.pass clear false preserves color and depth attachments", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
 
@@ -86,14 +91,14 @@ test("frame.pass clear false preserves color and depth attachments", async () =>
 });
 
 test("frame.pass rejects clear false with MSAA targets", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const msaa = target(gpu, { size: [2, 2], msaa: true });
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: msaa, clear: false }, () => undefined))).toThrowError(/VGPU-PASS-PRESERVE-MSAA|preserve MSAA/);
   gpu.dispose();
 });
 
 test("clear color precedence: pass color > target.clearColor > built-in", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const descriptors = spyRenderPassDescriptors(gpu.device.gpu);
   const builtIn = target(gpu, { size: [2, 2] });
   const tinted = target(gpu, { size: [2, 2], clearColor: { r: 0.25, g: 0.5, b: 0.75, a: 1 } });
@@ -151,7 +156,7 @@ test("surface render pass descriptors honor clear false within a frame", async (
 });
 
 test("bundles record and replay draws with blend without extending the replay signature", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [2, 2] });
   const drawable = draw(gpu, { shader: DRAW_SHADER, blend: "alpha" });
 
@@ -187,7 +192,7 @@ function canvasLike(): HTMLCanvasElement {
 }
 
 test("target clear colors defensively copy inputs and outputs", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const input = [0.1, 0.2, 0.3, 1] as [number, number, number, number];
   const first = target(gpu, { size: [2, 2], clearColor: input });
   const second = target(gpu, { size: [2, 2] });

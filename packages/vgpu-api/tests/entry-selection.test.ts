@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, compute, draw, geometry, storage, target } from "../src/mock.ts";
@@ -51,7 +56,7 @@ function layoutEntries(gpu: Awaited<ReturnType<typeof init>>, label: string): re
 }
 
 test("entry selects the named fragment entry point in the pipeline descriptor", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   draw(gpu, { shader: TWO_FRAGMENT_WGSL, label: "pick-b", entry: { fragment: "fs_b" }, set: { tintB: [1, 0, 0, 1] } }).draw(colorTarget);
@@ -63,7 +68,7 @@ test("entry selects the named fragment entry point in the pipeline descriptor", 
 });
 
 test("entry selects the named vertex entry point; its inputs feed the geometry layout resolver", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const geo = geometry(gpu, { buffers: [{ data: new Float32Array(9), attributes: { position: "float32x3" } }] });
 
@@ -78,7 +83,7 @@ test("entry selects the named vertex entry point; its inputs feed the geometry l
 });
 
 test("binding visibility follows the selected fragment entry point", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   draw(gpu, { shader: TWO_FRAGMENT_WGSL, label: "vis-a" });
   // Default first-of-stage selection: only tintA (binding 0) is statically used, with fragment visibility.
@@ -91,7 +96,7 @@ test("binding visibility follows the selected fragment entry point", async () =>
 });
 
 test("storage-stage limits validate against the selected vertex entry point", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   Object.defineProperty(gpu.device.gpu, "limits", { value: { ...gpu.device.limits, maxStorageBuffersInVertexStage: 0, maxStorageBuffersInFragmentStage: 4 } });
 
   // The first vertex entry uses no storage, so the zero limit is fine by default.
@@ -105,7 +110,7 @@ test("storage-stage limits validate against the selected vertex entry point", as
 });
 
 test("unknown and wrong-stage entry names fail at construction listing the available entry points", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => draw(gpu, { shader: TWO_FRAGMENT_WGSL, label: "unknown", entry: { fragment: "fs_c" } })).toThrowError(/VGPU-ENTRY-INVALID|"vs_main" \(@vertex\), "fs_a" \(@fragment\), "fs_b" \(@fragment\)/);
   expect(() => draw(gpu, { shader: TWO_FRAGMENT_WGSL, label: "wrong-stage", entry: { vertex: "fs_a" } })).toThrowError(/VGPU-ENTRY-INVALID|is a @fragment entry point, not @vertex/);
   expect(() => draw(gpu, { shader: TWO_FRAGMENT_WGSL, label: "not-object", entry: "fs_b" as never })).toThrowError(/VGPU-ENTRY-INVALID|expected \{ vertex\?, fragment\? \}/);
@@ -114,7 +119,7 @@ test("unknown and wrong-stage entry names fail at construction listing the avail
 });
 
 test("absent entry keeps descriptors byte-identical to first-of-stage selection", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   draw(gpu, { shader: TWO_FRAGMENT_WGSL, label: "absent", set: { tintA: [0, 1, 0, 1] } }).draw(colorTarget);
@@ -126,7 +131,7 @@ test("absent entry keeps descriptors byte-identical to first-of-stage selection"
 });
 
 test("compute entry selects the named @compute entry point and its binding visibility", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   const pickB = compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "pick-cs-b", entry: "cs_b" });
   const csDefault = compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "cs-default" });
@@ -148,7 +153,7 @@ test("compute entry selects the named @compute entry point and its binding visib
 });
 
 test("compute entry validates at construction with where compute", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "unknown", entry: "cs_c" })).toThrow(expect.objectContaining({ code: "VGPU-ENTRY-INVALID", where: "compute" }));
   expect(() => compute(gpu, { shader: TWO_COMPUTE_WGSL, label: "unknown-list", entry: "cs_c" })).toThrowError(/"cs_a" \(@compute\), "cs_b" \(@compute\)/);
   expect(() => compute(gpu, { shader: MIXED_STAGE_COMPUTE_WGSL, label: "wrong-stage", entry: "vs_main" })).toThrowError(/VGPU-ENTRY-INVALID|is a @vertex entry point, not @compute/);

@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, compute, draw, storage, target } from "../src/mock.ts";
@@ -55,7 +60,7 @@ override seed: u32;
 `;
 
 test("constants reach both render stages; @id overrides are keyed by the decimal id string", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   draw(gpu, { shader: OVERRIDE_WGSL, label: "consts", constants: { SCALE: 2, "7": 4 } }).draw(colorTarget);
@@ -69,7 +74,7 @@ test("constants reach both render stages; @id overrides are keyed by the decimal
 });
 
 test("an override used only by the fragment entry point is still valid for both stages", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   draw(gpu, { shader: FRAGMENT_ONLY_WGSL, label: "frag-only", constants: { SHADE: 0.25 } }).draw(colorTarget);
@@ -81,7 +86,7 @@ test("an override used only by the fragment entry point is still valid for both 
 });
 
 test("boolean values are allowed and convert to 1/0 doubles", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   draw(gpu, { shader: BOOL_WGSL, label: "bool-consts", constants: { USE_LIGHT: false } }).draw(colorTarget);
@@ -93,7 +98,7 @@ test("boolean values are allowed and convert to 1/0 doubles", async () => {
 });
 
 test("absent constants and an empty record keep descriptors byte-identical", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
 
   draw(gpu, { shader: OVERRIDE_WGSL, label: "absent" }).draw(colorTarget);
@@ -107,7 +112,7 @@ test("absent constants and an empty record keep descriptors byte-identical", asy
 });
 
 test("unknown constants keys fail at construction listing the available overrides", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => draw(gpu, { shader: OVERRIDE_WGSL, label: "unknown", constants: { NOPE: 1 } })).toThrowError(/VGPU-CONSTANTS-INVALID|"SCALE", "7" \(@id of SAMPLES\)/);
   // An @id override is identified only by the decimal id string, never by its name.
   expect(() => draw(gpu, { shader: OVERRIDE_WGSL, label: "id-by-name", constants: { SAMPLES: 4 } })).toThrowError(/VGPU-CONSTANTS-INVALID|available overrides/);
@@ -116,7 +121,7 @@ test("unknown constants keys fail at construction listing the available override
 });
 
 test("non-finite values fail at construction; strings are rejected", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, "2"]) {
     expect(() => draw(gpu, { shader: FRAGMENT_ONLY_WGSL, label: "bad-value", constants: { SHADE: value } as never })).toThrowError(/VGPU-CONSTANTS-INVALID|finite number or a boolean/);
   }
@@ -124,7 +129,7 @@ test("non-finite values fail at construction; strings are rejected", async () =>
 });
 
 test("an override without a default must be provided", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => draw(gpu, { shader: NO_DEFAULT_WGSL, label: "missing" })).toThrowError(/VGPU-CONSTANTS-INVALID|override 'gain' has no default value/);
   expect(() => draw(gpu, { shader: NO_DEFAULT_WGSL, label: "still-missing", constants: {} })).toThrowError(/VGPU-CONSTANTS-INVALID|override 'gain' has no default value/);
   expect(() => draw(gpu, { shader: NO_DEFAULT_WGSL, label: "provided", constants: { gain: 0.5 } })).not.toThrow();
@@ -132,7 +137,7 @@ test("an override without a default must be provided", async () => {
 });
 
 test("compute constants reach the compute stage; @id keys and omission behave like draws", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   const sim = compute(gpu, { shader: COMPUTE_WGSL, label: "sim", constants: { STEP: 0.5, "3": 4 } });
   const simAbsent = compute(gpu, { shader: COMPUTE_WGSL, label: "sim-absent" });
@@ -152,7 +157,7 @@ test("compute constants reach the compute stage; @id keys and omission behave li
 });
 
 test("compute constants validate at construction with where compute", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   expect(() => compute(gpu, { shader: COMPUTE_WGSL, label: "unknown", constants: { LIMIT: 4 } })).toThrowError(/VGPU-CONSTANTS-INVALID|"STEP", "3" \(@id of LIMIT\)/);
   expect(() => compute(gpu, { shader: COMPUTE_WGSL, label: "nan", constants: { STEP: Number.NaN } })).toThrowError(/VGPU-CONSTANTS-INVALID|finite number or a boolean/);
   expect(() => compute(gpu, { shader: COMPUTE_NO_DEFAULT_WGSL, label: "missing" })).toThrowError(/VGPU-CONSTANTS-INVALID|override 'seed' has no default value/);

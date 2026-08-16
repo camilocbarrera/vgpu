@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, bundle, effect, frame, prepare, surface, target } from "../src/mock.ts";
@@ -17,7 +22,7 @@ const TEXTURE = `
 `;
 
 test("bundle(gpu, ...) can record against a target signature and replay on a compatible target", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const shader = effect(gpu, { shader: SOLID, label: "signatureFx" });
 
@@ -28,7 +33,7 @@ test("bundle(gpu, ...) can record against a target signature and replay on a com
 });
 
 test("bundle replay target signature mismatches throw R3 stale with recorded and actual keys", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4], format: "bgra8unorm" });
   const shader = effect(gpu, { shader: SOLID, label: "mismatchFx" });
   const recorded = bundle(gpu, { target: { colors: ["rgba8unorm"] }, label: "signatureMismatch" }, (b) => b.draw(shader));
@@ -44,7 +49,7 @@ test("bundle replay target signature mismatches throw R3 stale with recorded and
 });
 
 test("bundle(gpu, ...) validates malformed signatures at record time", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const shader = effect(gpu, SOLID);
 
   expect(() => bundle(gpu, { target: { colors: [] }, label: "badSignature" }, (b) => b.draw(shader))).toThrowError(/VGPU-COMPILE-SIGNATURE-INVALID|colors/);
@@ -52,7 +57,7 @@ test("bundle(gpu, ...) validates malformed signatures at record time", async () 
 });
 
 test("bundle replay survives resize of the replay target when the signature is unchanged", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const shader = effect(gpu, { shader: SOLID, label: "resizeFx" });
   const recorded = bundle(gpu, { target: scene, label: "resizeBundle" }, (b) => b.draw(shader));
@@ -64,7 +69,7 @@ test("bundle replay survives resize of the replay target when the signature is u
 });
 
 test("precompiled draws record into signature bundles without sync pipeline creation", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const shader = effect(gpu, { shader: SOLID, label: "precompiledFx" });
   const signature = { colors: ["rgba8unorm"] as const };
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
@@ -81,7 +86,7 @@ test("precompiled draws record into signature bundles without sync pipeline crea
 });
 
 test("a bundle recording still requires draw resources to be set, at the moment it is encoded", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const post = effect(gpu, { shader: TEXTURE, label: "post" });
 
@@ -96,7 +101,7 @@ test("a bundle recording still requires draw resources to be set, at the moment 
 });
 
 test("the first sync replay of a cold bundle uses the sync pipeline path and reports failures through gpu.onError", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const scene = target(gpu, { size: [4, 4], format: "rgba8unorm" });
   const shader = effect(gpu, { shader: SOLID, label: "coldFailure" });
   const nativeError = new Error("sync pipeline failed during bundle recording");
@@ -141,7 +146,7 @@ function bundleTestCanvas(ledger?: { currentTextures: number }): HTMLCanvasEleme
 }
 
 test("bundle(gpu, { target: surface }, ...) outside frame() is legal, exactly like prepare()", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const ledger = { currentTextures: 0 };
   const canvasSurface = surface(gpu, bundleTestCanvas(ledger));
   const shader = effect(gpu, { shader: SOLID, label: "outOfFrameFx" });
@@ -161,7 +166,7 @@ test("bundle(gpu, { target: surface }, ...) outside frame() is legal, exactly li
 });
 
 test("Frame.pass() over a surface, called through an escaped Frame after its callback already submitted, still throws VGPU-SURFACE-NOT-IN-FRAME", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const canvasSurface = surface(gpu, bundleTestCanvas());
   const shader = effect(gpu, { shader: SOLID, label: "escapedFramePassFx" });
   let escaped: Frame | undefined;
@@ -178,7 +183,7 @@ test("Frame.pass() over a surface, called through an escaped Frame after its cal
 });
 
 test("bundle(gpu, { target: disposedSurface }, ...) still throws — VGPU-SURFACE-DISPOSED, not the removed frame guard", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const canvasSurface = surface(gpu, bundleTestCanvas());
   const shader = effect(gpu, { shader: SOLID, label: "disposedSurfaceFx" });
   canvasSurface.dispose();

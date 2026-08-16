@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
 import { init, effect, frame, target } from "../src/mock.ts";
@@ -17,7 +22,7 @@ struct Out { @location(0) a: vec4f, @location(1) b: vec4f }
 `;
 
 test("MSAA render pass descriptors resolve color and discard transient attachments while non-MSAA stores", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const msaa = target(gpu, { size: [4, 4], depth: true, msaa: true });
     const plain = target(gpu, { size: [4, 4], depth: true });
@@ -39,7 +44,7 @@ test("MSAA render pass descriptors resolve color and discard transient attachmen
 });
 
 test("MSAA targets compile pipelines with sample count 4", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [4, 4], depth: true, msaa: true });
     const draw = effect(gpu, { shader: SOLID, label: "msaa-solid" });
@@ -54,7 +59,7 @@ test("MSAA targets compile pipelines with sample count 4", async () => {
 });
 
 test("invalid runtime msaa values throw VGPU-TARGET-MSAA-INVALID", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     for (const msaa of [2, 8]) {
       expectThrown(() => target(gpu, { size: [4, 4], msaa } as never), { code: "VGPU-TARGET-MSAA-INVALID" });
@@ -65,7 +70,7 @@ test("invalid runtime msaa values throw VGPU-TARGET-MSAA-INVALID", async () => {
 });
 
 test("MSAA target with blend keeps resolve descriptor and blend pipeline state", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const renderPasses = spyRenderPassDescriptors(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, { size: [4, 4], format: "rgba8unorm", msaa: true });
@@ -86,7 +91,7 @@ test("MSAA target with blend keeps resolve descriptor and blend pipeline state",
 });
 
 test("MRT MSAA targets resolve every color and compile all color states with sample count 4", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const renderPasses = spyRenderPassDescriptors(gpu.device.gpu);
   try {
     const colorTarget = target(gpu, {

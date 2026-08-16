@@ -1,3 +1,8 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): this suite encodes without `prepare()`
+// on purpose -- its subject is the descriptor/encoder behavior asserted below, not readiness -- so
+// it takes the permanent `"sync"` opt-in, which is exactly the eager compile-on-encode these
+// assertions were written against. The default itself is covered by pending-pipelines.test.ts,
+// prepare.test.ts and prepare-corpus-throw.test.ts, which run under it.
 import { afterEach, expect, test, vi } from "vitest";
 import { FrameRunner } from "../src/frame.ts";
 import { init, effect, frame, frameLoop, target } from "../src/mock.ts";
@@ -46,7 +51,7 @@ test("FrameRunner.loop caps callbacks to the requested fps", () => {
 
 test("gpu.dispose() stops the render loops that gpu started", async () => {
   const callbacks = mockAnimationFrames();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const colorTarget = target(gpu, { size: [4, 4] });
   const shader = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
 
@@ -71,7 +76,7 @@ test("gpu.dispose() stops the render loops that gpu started", async () => {
 
 test("a loop stopped by hand is untracked, so gpu.dispose() has nothing left to stop", async () => {
   const callbacks = mockAnimationFrames();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   let calls = 0;
   const handle = frameLoop(gpu, () => { calls += 1; });
@@ -85,7 +90,7 @@ test("a loop stopped by hand is untracked, so gpu.dispose() has nothing left to 
 
 test("disposing the gpu inside its loop callback does not enqueue one final tick", async () => {
   const callbacks = mockAnimationFrames();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
 
   frameLoop(gpu, () => { gpu.dispose(); });
   fire(callbacks, 1, 0);
@@ -114,7 +119,7 @@ function fire(callbacks: Map<number, RafCallback>, id: number, timestamp: number
 
 test("dispose stops the loops before the device goes down, then tears down once", async () => {
   const callbacks = mockAnimationFrames();
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   const order: string[] = [];
 
   const handle = frameLoop(gpu, () => undefined);
