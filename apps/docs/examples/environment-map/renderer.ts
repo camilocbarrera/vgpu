@@ -9,7 +9,7 @@ import skyWgsl from './sky.wgsl';
 import blurWgsl from './blur.wgsl';
 import metalWgsl from './metal.wgsl';
 import presentWgsl from './present.wgsl';
-import { clock, draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, geometry, prepare, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -221,7 +221,13 @@ async function createScene(gpu: Gpu, output: Output): Promise<Scene> {
 
   const present = effect(gpu, { shader: presentWgsl, label: 'environment-map-present', bindings: { env_tex: env, env_samp: envSampler, scene_tex: hdr, scene_samp: sceneSampler } });
 
-  await Promise.all([cube.compile(hdr), present.compile({ colors: [output.format] })]);
+  // Was two legacy `compile()` calls; one `prepare()` states the same two combinations. `output`
+  // replaces the `{ colors: [output.format] }` literal — the encode path derives its signature
+  // from that same object, so naming it is what makes prepare and encode provably agree.
+  await prepare(gpu, [
+    { draw: cube, target: hdr },
+    { draw: present, target: output },
+  ]);
   return { env, hdr, geometry: geo, cube, present };
 }
 
@@ -256,7 +262,13 @@ async function bakeEnvironment(gpu: Gpu, samplerState: GPUSampler): Promise<Text
   const blur = effect(gpu, { shader: blurWgsl, label: 'environment-map-blur' });
 
   let source = target(gpu, { size: [...ENV_SIZE], format: HDR_FORMAT, label: 'environment-map-level0' });
-  await Promise.all([sky.compile(source), blur.compile(source)]);
+  // `source` is rebound to a new, smaller target on every pyramid level below, but every level
+  // shares one format, so one signature covers the whole chain: preparing against level 0 warms
+  // the pipeline every later level reuses.
+  await prepare(gpu, [
+    { draw: sky, target: source },
+    { draw: blur, target: source },
+  ]);
   frame(gpu, (currentFrame) => currentFrame.pass({ target: source }, (pass) => pass.draw(sky)));
   copyIntoLevel(gpu, source, env, 0);
 

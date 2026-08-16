@@ -3,7 +3,7 @@ import { perspectiveCamera } from 'vgpu/scene';
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
 import { DEFAULT_INSTANCED_RENDERING_CONTROLS, type InstanceCount, type InstancedRenderingControls } from './types';
 import sceneWgsl from './scene.wgsl'; import blitWgsl from './blit.wgsl';
-import { bundle, clock, draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
+import { bundle, clock, draw, effect, frame, frameLoop, geometry, prepare, sampler, surface, target } from "vgpu";
 type Output = Surface | Target; interface ThumbOptions extends ThumbnailOptions {} interface Scene { geometry: Geometry; draw: Draw; bundle: Bundle; extent: number }
 const CLEAR = [0.008, 0.014, 0.035, 1] as const;
 const validCount = (count: number): count is InstanceCount => count === 50 || count === 100;
@@ -28,7 +28,7 @@ export function createRenderer(options: BrowserRendererOptions<InstancedRenderin
 export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptions = {}): Promise<void> {
  let colorTarget: Target | undefined; let scene: Scene | undefined;
  try {
-  colorTarget = target(gpu, { size: output.size, format: 'rgba8unorm', depth: true }); const blit = createBlit(gpu, colorTarget, output); scene = await createScene(gpu, colorTarget, DEFAULT_INSTANCED_RENDERING_CONTROLS.count); await blit.compile(output); let time = opts.time ?? 2.4;
+  colorTarget = target(gpu, { size: output.size, format: 'rgba8unorm', depth: true }); const blit = createBlit(gpu, colorTarget, output); scene = await createScene(gpu, colorTarget, DEFAULT_INSTANCED_RENDERING_CONTROLS.count); await prepare(gpu, [{ draw: blit, target: output }]); let time = opts.time ?? 2.4;
   for (let i = 0; i < (opts.warmupFrames ?? 3); i++) { time += opts.dt ?? 1 / 60; frame(gpu, (currentFrame) => render(currentFrame, scene!, blit, colorTarget!, output, time)); }
  } finally {
   await Promise.allSettled([gpu.gpu.queue.onSubmittedWorkDone(), gpu.settled()]); scene?.geometry.destroy(); (colorTarget as (Target & { destroy?: () => void }) | undefined)?.destroy?.();
@@ -46,7 +46,9 @@ async function createScene(gpu: Gpu, colorTarget: Target, n: number): Promise<Sc
   const drawable = draw(gpu, { shader: sceneWgsl, geometry: geo, label: `instanced-cubes-${n}` });
   drawable.set("uniforms", { light: [-0.45, -0.75, -0.35] });
   try {
-    await drawable.compile(colorTarget);
+    // Prepared before `bundle()` records it: the recording needs the pipeline, so this await
+    // cannot move below the construction on the next line.
+    await prepare(gpu, [{ draw: drawable, target: colorTarget }]);
     const recorded = bundle(gpu, { target: colorTarget, label: `instanced-cubes-${n}` }, (b) => b.draw(drawable));
     return { geometry: geo, draw: drawable, bundle: recorded, extent: n * 0.64 };
   } catch (error) {

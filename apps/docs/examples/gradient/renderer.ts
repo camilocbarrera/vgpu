@@ -1,7 +1,7 @@
 import type { Gpu, Surface, Target } from 'vgpu';
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
 import fragment from './shader.wgsl';
-import { clock, effect, frame, frameLoop, surface } from "vgpu";
+import { clock, effect, frame, frameLoop, prepare, surface } from "vgpu";
 
 export function createRenderer(options: BrowserRendererOptions): ExampleRenderer {
   let disposed = false;
@@ -79,6 +79,11 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     observer?.observe(options.canvas);
     window.addEventListener('resize', onWindowResize);
     measure();
+    // Setup boundary of the browser renderer: the surface exists, the effect exists, no frame has
+    // been encoded yet. `measure()` above only resizes the surface, and a resize keeps the format,
+    // so the signature this warms is the one every frame of the loop will ask for.
+    await prepare(gpu, [{ draw: shader, target: canvasSurface }]);
+    if (disposed) return;
     const gpuClock = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !canvasSurface) return;
@@ -116,6 +121,7 @@ export async function renderThumbnail(
       time: options.time ?? Math.PI / 4,
       resolution: target.size,
     });
+    await prepare(gpu, [{ draw: shader, target }]);
     frame(gpu, (currentFrame) => currentFrame.pass({ target }, (pass) => pass.draw(shader)));
   } finally {
     // Always drain and settle, including when encoding throws. allSettled keeps

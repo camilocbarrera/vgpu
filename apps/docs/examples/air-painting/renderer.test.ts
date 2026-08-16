@@ -40,6 +40,10 @@ vi.mock('vgpu', () => {
   type FakeGpu = Record<string, (...args: never[]) => unknown>;
   const delegate = (name: string) => (gpu: FakeGpu, ...args: never[]) => gpu[name]!(...args);
   return {
+    // `prepare()` is the door pipeline warming goes through since T04-19; a fake device that does
+    // not model compilation resolves it, and a test that wants to observe or fail preparation
+    // defines `prepare` on its gpu double exactly like every other delegated factory.
+    prepare: (gpu: FakeGpu, ...args: never[]) => (gpu.prepare ? gpu.prepare(...args) : Promise.resolve([])),
     compute: delegate('compute'),
     effect: delegate('effect'),
     frame: delegate('frame'),

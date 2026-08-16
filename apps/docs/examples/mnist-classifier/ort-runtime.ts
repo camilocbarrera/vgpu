@@ -254,6 +254,11 @@ export function createRenderer(options: MnistRendererOptions): MnistRenderer {
     gpu = shared.gpu;
     surface = createSurface(gpu, options.canvas, { dpr: [1, 2] });
     visualizer = createVisualizer(gpu);
+    // The surface is the only render destination this example ever draws into, and `render()` is
+    // reached from synchronous ORT completion callbacks — so the combination is prepared here, at
+    // the one async setup boundary, not at the encode site.
+    await visualizer.prepare(gpu, surface);
+    if (disposed) return;
     digitBuffer = createDigitBuffer(gpu);
     idleLogits = createIdleLogitsBuffer(gpu);
 

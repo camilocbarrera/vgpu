@@ -82,6 +82,7 @@ export async function renderThumbnail(
       }
       pipeline.consumeHandLandmarks(results, THUMB_DT);
     }
+    await pipeline.prepareVisualFrame(target);
     pipeline.renderVisualFrame(target, { dpr: 1, hasFrame: true, showCursor: true });
   } finally {
     // Always drain and settle, including when encoding throws.

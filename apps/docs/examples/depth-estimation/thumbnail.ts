@@ -37,6 +37,7 @@ export async function renderThumbnail(
   try {
     writeDepth(depth, decodeGoldenDepth());
     writeColour(colour, decodeGoldenColour());
+    await view.prepare(gpu, target);
     view.draw(gpu, target, depth, colour, model, { hasResult: true });
   } finally {
     await Promise.allSettled([

@@ -1,6 +1,6 @@
 import type { Gpu, Surface, Target } from 'vgpu';
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
-import { clock, compute, draw, effect, frame, frameLoop, geometry, sampler, storage, surface, target } from 'vgpu';
+import { clock, compute, draw, effect, frame, frameLoop, geometry, prepare, sampler, storage, surface, target } from 'vgpu';
 import { orbitControls, perspectiveCamera } from 'vgpu/scene';
 import GUI from 'lil-gui';
 import { buildOcean, type OceanApi, type OceanScene, type OceanShaders } from './scene';
@@ -134,6 +134,17 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     window.addEventListener('resize', onWindowResize);
     measure();
 
+    // Three combinations, one await. `composite` is encoded through the SHORTHAND pass form
+    // (`currentFrame.pass(<target>, scene.composite)` — a renderable instead of a callback), which
+    // is exactly as much a `{ draw, target }` combination as the callback form: the shorthand
+    // changes the spelling of the encode, not the pipeline key it needs.
+    await prepare(gpu, [
+      { draw: scene.skydome, target: scene.hdr },
+      { draw: scene.ocean, target: scene.hdr },
+      { draw: scene.composite, target: canvasSurface },
+    ]);
+    if (disposed) return;
+
     const gpuClock = clock(gpu);
     loop = frameLoop(gpu, (currentFrame) => {
       if (disposed || !canvasSurface || !scene || !camera || !controls) return;
@@ -224,6 +235,12 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbnailO
     for (let i = 0; i < warmup; i++) scene.simulate(dt);
     scene.simulate((opts.time ?? 9) - warmup * dt);
     scene.updateCamera(camera.viewProjection, camera.worldPosition);
+
+    await prepare(gpu, [
+      { draw: scene.skydome, target: scene.hdr },
+      { draw: scene.ocean, target: scene.hdr },
+      { draw: scene.composite, target: output },
+    ]);
 
     frame(gpu, (currentFrame) => {
       currentFrame.pass({ target: scene.hdr, clear: scene.clear }, (pass) => {

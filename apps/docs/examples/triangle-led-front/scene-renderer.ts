@@ -66,7 +66,7 @@ import raycastWgsl from './shaders/direct-triangle-raycast.wgsl';
 import floorNoiseWgsl from './shaders/floor-noise.wgsl';
 import darkFloorWgsl from './shaders/themes/dark/main-scene-floor.wgsl';
 import lightFloorWgsl from './shaders/themes/light/main-scene-floor.wgsl';
-import { bundle, draw, frame, sampler, storage, target } from "vgpu";
+import { bundle, draw, frame, prepare, sampler, storage, target } from "vgpu";
 
 export interface HeroRendererCss {
   width: number;
@@ -262,11 +262,29 @@ export function createHeroRenderer(
       const colorTarget = outputTarget;
       if (!colorTarget) return;
       const ready = parts.lightSourcesRaw.ready;
+      // The two floor draws keep a signature literal: which one runs is a THEME choice made per
+      // frame (`currentTheme === 'light' ? … : …`), so both must be warm and neither owns the
+      // destination object.
+      //
+      // The floor bundles were BORN LAZILY, inside the synchronous frame callback
+      // (`currentParts.floorBundles ?? recordFloorBundles(...)`). A bundle created there can never
+      // be prepared — `p.bundles()` takes no per-call policy, and the callback cannot await. So
+      // the birth moves here instead of the prepare moving there: `recordFloorBundles` memoizes
+      // into `currentParts.floorBundles`, so calling it at the async setup boundary makes the
+      // frame-callback branch a cache hit forever after, and the bundles become preparable.
+      // This is the minimum change that makes the combination reachable at all; the `??` in the
+      // frame callback stays as the fallback it always was.
+      const floorBundles = recordFloorBundles(parts, colorTarget);
       await Promise.all([
-        lightFloorDraw.compile({ colors: [colorTarget.format] }),
-        darkFloorDraw.compile({ colors: [colorTarget.format] }),
-        raycastDraw.compile(parts.raycastTarget),
-        noiseDraw.compile(noiseTarget),
+        prepare(gpu, [
+          { draw: lightFloorDraw, target: { colors: [colorTarget.format] } },
+          { draw: darkFloorDraw, target: { colors: [colorTarget.format] } },
+          { draw: raycastDraw, target: parts.raycastTarget },
+          { draw: noiseDraw, target: noiseTarget },
+          { bundle: floorBundles.light },
+          { bundle: floorBundles.dark },
+          { bundle: parts.raycastBundle },
+        ]),
         ready ?? Promise.resolve(),
       ]);
     },

@@ -461,6 +461,10 @@ export function createRenderer(options: AirPaintRendererOptions): AirPaintRender
       sourceHeight: options.camera.height,
       label: 'air-painting',
     });
+    // Setup boundary: the surface exists and the pipeline exists, nothing has been encoded.
+    // `renderVisualFrame()` is driven from hand-tracking callbacks that cannot await.
+    await pipeline.prepareVisualFrame(surface);
+    if (disposed) throw new OrtInitCancelled();
     tracker = createHandTracker({
       sourceWidth: options.camera.width,
       sourceHeight: options.camera.height,

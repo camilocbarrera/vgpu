@@ -13,7 +13,7 @@ import floorWgsl from './floor.wgsl';
 import backfaceWgsl from './backface-normal.wgsl';
 import glassWgsl from './glass.wgsl';
 import presentWgsl from './present.wgsl';
-import { draw, effect, frame, geometry, sampler, surface, target } from "vgpu";
+import { draw, effect, frame, geometry, prepare, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -343,13 +343,22 @@ async function createScene(gpu: Gpu, output: Output, label: string): Promise<Sce
   };
   bindTargets(scene);
 
-  await Promise.all([
-    background.compile(targets.hdr),
-    floor.compile(targets.hdr),
-    glass.compile(targets.hdr),
-    backface.compile(targets.backface),
-    present.compile({ colors: [output.format] }),
-    ...blurs.flatMap((pair) => [pair.horizontal.compile({ colors: [HDR_FORMAT] }), pair.vertical.compile({ colors: [HDR_FORMAT] })]),
+  // Dynamic multi-pass: `blurs` is a pyramid built by a `for` loop, so the request list is built
+  // by iterating THAT SAME array instead of being flattened into 2N hardcoded lines. Its two
+  // requests keep the `{ colors: [HDR_FORMAT] }` signature literal rather than naming
+  // `level.horizontal` / `level.vertical`: every level of the pyramid is a different size but the
+  // same format, so one signature covers all of them and the literal says so explicitly. The five
+  // fixed passes name their real destinations, `output` included.
+  await prepare(gpu, [
+    { draw: background, target: targets.hdr },
+    { draw: floor, target: targets.hdr },
+    { draw: glass, target: targets.hdr },
+    { draw: backface, target: targets.backface },
+    { draw: present, target: output },
+    ...blurs.flatMap((pair) => [
+      { draw: pair.horizontal, target: { colors: [HDR_FORMAT] } },
+      { draw: pair.vertical, target: { colors: [HDR_FORMAT] } },
+    ]),
   ]);
   return scene;
 }
@@ -376,7 +385,12 @@ async function bakeEnvironment(gpu: Gpu, samplerState: GPUSampler, label: string
   const blur = effect(gpu, { shader: blurWgsl, label: `${label}-env-blur` });
 
   let source = target(gpu, { size: [...ENV_SIZE], format: HDR_FORMAT, label: `${label}-env-level0` });
-  await Promise.all([sky.compile(source), blur.compile(source)]);
+  // Level 0 of the prefiltered pyramid; every level below shares its format, so one signature
+  // warms the whole chain.
+  await prepare(gpu, [
+    { draw: sky, target: source },
+    { draw: blur, target: source },
+  ]);
   frame(gpu, (currentFrame) => currentFrame.pass({ target: source }, (pass) => pass.draw(sky)));
   copyIntoLevel(gpu, source, env, 0, `${label}-env`);
 

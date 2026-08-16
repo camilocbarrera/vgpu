@@ -289,6 +289,9 @@ export function createDepthRenderer(options: DepthRendererOptions): DepthRendere
     gpu = session.gpu;
     surface = createSurface(gpu, options.canvas, { dpr: [1, 2] });
     view = createSideBySidePipeline(gpu);
+    // `draw()` runs from inference completion and cannot await; the surface is the only render
+    // destination, so the combination is prepared here, at the async setup boundary.
+    await view.prepare(gpu, surface);
     idleDepth = createDepthBuffer(gpu, model);
     colour = createColourBuffer(gpu, model);
     scratch ??= createPreprocessScratch(model.width, model.height);

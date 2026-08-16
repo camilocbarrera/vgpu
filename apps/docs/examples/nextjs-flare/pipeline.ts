@@ -1,4 +1,4 @@
-import { effect, frame, sampler, target, type Effect, type Gpu, type RenderDestination, type Target, type TargetSignature } from 'vgpu';
+import { effect, frame, prepare, sampler, target, type Effect, type Gpu, type RenderDestination, type Target, type TargetSignature } from 'vgpu';
 
 import blurWgsl from './blur.wgsl';
 import compositeWgsl from './composite.wgsl';
@@ -89,13 +89,23 @@ export class FlarePipeline {
       rimA: target(this.gpu, full),
       rimB: target(this.gpu, full),
     };
+    // The `needsCompile` guard is PRESERVED verbatim, and it is the whole point of this site.
+    // `resize()` re-creates all four intermediate targets on every size change, but a resize only
+    // changes their SIZE — the formats are fixed (`rgba8unorm`), and a target signature is
+    // { colors, depth, sampleCount }, so every resize after the first asks for a pipeline key that
+    // is already cached. Preparing again would be a no-op, and the guard says so out loud instead
+    // of relying on the store to swallow it. Dropping the guard while migrating the spelling was
+    // the one thing this migration had to not do.
     if (needsCompile) {
-      await Promise.all([
-        this.effects.logo.compile(this.targets.scene),
-        this.effects.rim.compile(this.targets.rim),
-        this.effects.rimBlurH.compile(this.targets.rimA),
-        this.effects.rimBlurV.compile(this.targets.rimB),
-        this.effects.composite.compile(this.outputSignature()),
+      await prepare(this.gpu, [
+        { draw: this.effects.logo, target: this.targets.scene },
+        { draw: this.effects.rim, target: this.targets.rim },
+        { draw: this.effects.rimBlurH, target: this.targets.rimA },
+        { draw: this.effects.rimBlurV, target: this.targets.rimB },
+        // The output is a `RenderDestination` the caller owns and may swap; `outputSignature()`
+        // is this class's existing answer to "what will the composite pass actually render into",
+        // so the migration keeps using it rather than inventing a second source of truth.
+        { draw: this.effects.composite, target: this.outputSignature() },
       ]);
     }
     this.bindTargets();

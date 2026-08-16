@@ -15,7 +15,7 @@ import {
   type RenderSize,
 } from './settings';
 import type { BrushState, SceneTunables as LightTunables } from './light-sources-pass';
-import { bundle, draw, geometry, target } from "vgpu";
+import { bundle, draw, geometry, prepare, target } from "vgpu";
 
 const LIGHT_SOURCES_FORMAT: GPUTextureFormat = 'rgba16float';
 
@@ -91,11 +91,6 @@ export function createLightSourcesRaw(
     set: { cfg: initialLightSourcesUniform(), leds: opts.ledStorage },
   });
 
-  const ready = Promise.all([
-    lightSourcesDraw.compile(colorTarget),
-    ledEmittersDraw.compile(colorTarget),
-  ]).then(() => undefined);
-
   const recordClearBundle = (): Bundle => bundle(gpu, { target: colorTarget, label: 'triangle-led-front-light-sources-clear' },
     (recorded) => {
       recorded.draw(lightSourcesDraw);
@@ -106,6 +101,26 @@ export function createLightSourcesRaw(
     (recorded) => recorded.draw(ledEmittersDraw),
   );
   let clearBundle = recordClearBundle();
+
+  // The two `compile()` calls this replaces ran BEFORE the bundles existed, which is why they
+  // could only warm the draws. The encode site is `pass.bundles(...)`, so the combinations that
+  // actually have to be ready are the two BUNDLES — and a bundle can only be prepared once it
+  // exists. Hence the await moved below the constructions, and the draws no longer need requests
+  // of their own: preparing a bundle warms every draw it recorded.
+  //
+  // KNOWN RESIDUAL, deliberately not papered over: `encode()` re-records `clearBundle` whenever
+  // the bake key changes (occluder toggle / clip-inset tunable), and it does so INSIDE the
+  // synchronous frame callback. `p.bundles()` takes no per-call `pendingPipelines` (frame.ts's
+  // `bundles()` says so explicitly), and the callback cannot await, so that freshly recorded
+  // bundle cannot be prepared from where it is born. Under today's "sync" default it re-encodes
+  // inline exactly as it always has. Under T04-21's "throw" default it will raise on the first
+  // bake-key change. The fix is a frame-level policy or hoisting the re-record out of the
+  // callback — both are behaviour changes to this example, which this purely-additive ticket does
+  // not make. Recorded in T04-19-DECISIONS.md as a T04-21 blocker.
+  const ready = prepare(gpu, [
+    { bundle: clearBundle },
+    { bundle: emittersBundle },
+  ]).then(() => undefined);
   let lastBakeKey: string | undefined;
 
   return {

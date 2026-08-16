@@ -9,7 +9,7 @@ import pressureWgsl from './pressure.wgsl';
 import projectWgsl from './project.wgsl';
 import advectDyeWgsl from './advect-dye.wgsl';
 import displayWgsl from './display.wgsl';
-import { bundle, compute, effect, frame, pingPongStorage, storage } from "vgpu";
+import { bundle, compute, effect, frame, pingPongStorage, prepare, storage } from "vgpu";
 
 const CELLS = GRID_WIDTH * GRID_HEIGHT;
 const DYE_WIDTH = GRID_WIDTH * 4;
@@ -98,10 +98,17 @@ export async function prepareFluid(fluid: Fluid, output: Output): Promise<void> 
   const config = { dye_size: [DYE_WIDTH, DYE_HEIGHT], output_size: output.size };
   fluid.passes.display[0].set({ config, dye: fluid.dye.read });
   fluid.passes.display[1].set({ config, dye: fluid.dye.write });
-  await Promise.all(fluid.passes.display.map((display) => display.compile({ colors: [output.format] })));
   fluid.bundles = [0, 1].map((parity) => bundle(fluid.gpu, { target: { colors: [output.format] } }, (recorded) => {
     recorded.draw(fluid.passes.display[parity]!);
   })) as [Bundle, Bundle];
+  // The encode site is `p.bundles(fluid.bundles[fluid.step & 1])`, so the combination that has to
+  // be ready is the BUNDLE, not the display effect inside it — and a `{ bundle }` request carries
+  // no target because a bundle froze its signature at construction. Preparing the bundle also
+  // warms the pipelines of every draw it recorded, which is why the two legacy
+  // `display.compile({ colors: [output.format] })` calls this replaces are not merely moved: they
+  // are subsumed. The order matters — the bundles must EXIST before they can be prepared, so this
+  // await moved below their construction.
+  await prepare(fluid.gpu, [{ bundle: fluid.bundles[0] }, { bundle: fluid.bundles[1] }]);
   fluid.output = output;
 }
 

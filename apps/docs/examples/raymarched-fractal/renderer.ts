@@ -6,7 +6,7 @@ import fractalWgsl from './fractal.wgsl';
 import brightPassWgsl from './bright-pass.wgsl';
 import blurWgsl from './blur.wgsl';
 import compositeWgsl from './composite.wgsl';
-import { effect, frame, sampler, surface, target } from "vgpu";
+import { effect, frame, prepare, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 type Variant = 'static-repeat' | 'alternate-orbit' | 'bloom-off';
@@ -104,7 +104,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     targets = createTargets(gpu, canvasSurface.size, 'raymarched-fractal-live');
     setConstants(effects);
     setBindings(effects, targets);
-    await prewarm(effects, targets, canvasSurface);
+    await prewarm(gpu, effects, targets, canvasSurface);
     if (disposed) return;
     scheduler = createRenderScheduler(renderOnce);
     disposeInput = installDragOrbit(options.canvas, orbit, scheduler.request);
@@ -131,7 +131,7 @@ export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: Thumb
   setConstants(effects);
   setBindings(effects, targets);
   try {
-    await prewarm(effects, targets, colorTarget);
+    await prewarm(gpu, effects, targets, colorTarget);
     await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
     await renderAndWait(gpu, effects, targets, colorTarget, POSTER);
     await reportVariant(opts, 'static-repeat', colorTarget);
@@ -204,10 +204,24 @@ function setBindings(e: Effects, t: Targets): void {
   e.blurV.set({ src: t.bloomB, blur: { texelSize: t.bloomB.texelSize } });
   e.composite.set({ scene: t.scene, bloom: t.bloomA });
 }
-async function prewarm(e: Effects, t: Targets, output: Output): Promise<void> {
-  await Promise.all([
-    e.scene.compile(t.scene), e.brightPass.compile(t.bloomA), e.blurH.compile(t.bloomB),
-    e.blurV.compile(t.bloomA), e.composite.compile({ colors: [output.format] }),
+/**
+ * Was a hand-rolled prewarm over the legacy per-object `compile()` spelling; T04-19 migrates it to
+ * the one spelling. Same combinations, same single await — now stated as combinations, which is
+ * what they always were.
+ *
+ * `output` replaces the `{ colors: [output.format] }` literal the legacy call had to build: 0.3.0
+ * refused to derive a `Surface` signature outside `frame()`, so the destination could not be named
+ * directly. That restriction is gone (a surface signature comes from its configuration), and
+ * naming the real destination is what makes this prepare provably match the encode path — the
+ * encode derives its signature from that same object.
+ */
+async function prewarm(gpu: Gpu, e: Effects, t: Targets, output: Output): Promise<void> {
+  await prepare(gpu, [
+    { draw: e.scene, target: t.scene },
+    { draw: e.brightPass, target: t.bloomA },
+    { draw: e.blurH, target: t.bloomB },
+    { draw: e.blurV, target: t.bloomA },
+    { draw: e.composite, target: output },
   ]);
 }
 function renderChain(currentFrame: Frame, e: Effects, t: Targets, output: Output): void {

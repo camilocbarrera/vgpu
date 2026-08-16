@@ -4,7 +4,7 @@ import sceneWgsl from './scene.wgsl';
 import blitWgsl from './blit.wgsl';
 
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
-import { bundle, clock, draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
+import { bundle, clock, draw, effect, frame, frameLoop, geometry, prepare, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 interface ThumbOptions extends ThumbnailOptions {}
@@ -119,7 +119,7 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptio
   try {
     const blit = createBlit(gpu, colorTarget, output);
     scene = await createScene(gpu, colorTarget);
-    await blit.compile(output);
+    await prepare(gpu, [{ draw: blit, target: output }]);
     let time = opts.time ?? 2.4;
     for (let i = 0; i < (opts.warmupFrames ?? 3); i++) {
       time += opts.dt ?? 1 / 60;
@@ -154,7 +154,11 @@ async function createScene(gpu: Gpu, colorTarget: Target): Promise<Scene> {
     const draws = slices.map((slice, i) => draw(gpu, { shader: sceneWgsl, geometry: slice, label: `batch-${i}` }));
     const initial = camera(2.4, colorTarget);
     for (const drawable of draws) drawable.set({ light: [-0.45, -0.75, -0.35], time: 2.4, viewProjection: initial });
-    await Promise.all(draws.map((drawable) => drawable.compile(colorTarget)));
+    // The four draws are built by `map` over the slice list, so their requests are too. They are
+    // prepared as `{ draw, target }` even though every encode goes through the bundle below,
+    // because `bundle()` RECORDS them at construction — the recording needs the pipelines, and it
+    // happens on the next line, before any `prepare({ bundle })` could run.
+    await prepare(gpu, draws.map((drawable) => ({ draw: drawable, target: colorTarget })));
     // Slices freeze their ranges; this bundle also captures the pyramid's equivalent call-level override.
     // A changing range would require a direct pass.draw override or re-recording the bundle.
     const recorded = bundle(gpu, { target: colorTarget, label: 'batch-rendering-primitives' }, (b) => {

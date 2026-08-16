@@ -8,6 +8,9 @@ vi.mock('vgpu', () => ({
   effect: (gpu: any, shader: any, options: any) => gpu.effect(shader, options),
   target: (gpu: any, options: any) => gpu.target(options),
   frame: (gpu: any, callback: any) => gpu.frame(callback),
+  // Since T04-19 the pipeline warms through `prepare()` instead of per-effect `compile()`; the
+  // double keeps its own hook so the failure-injection test can still make preparation reject.
+  prepare: (gpu: any, ...args: any[]) => (gpu.prepare ? gpu.prepare(...args) : Promise.resolve([])),
 }));
 vi.mock('./logo-raster', () => ({
   rasterizeLogo: vi.fn(async () => ({ width: 130, height: 156 })),
@@ -46,11 +49,12 @@ function setup(options: { failCompile?: boolean } = {}) {
     removeEventListener: vi.fn((name: string) => canvasListeners.delete(name)),
   } as unknown as HTMLCanvasElement;
 
-  const compile = options.failCompile
+  // T04-19: the pipeline warms through `prepare()`, so the failure injection moved with it.
+  const prepare = options.failCompile
     ? vi.fn(async () => {
         throw new Error('compile failed');
       })
-    : vi.fn(async () => {});
+    : vi.fn(async () => []);
   const textures: Array<{ destroy: ReturnType<typeof vi.fn> }> = [];
   const targets: Array<{ color: { destroy: ReturnType<typeof vi.fn> } }> = [];
   const surface = {
@@ -73,8 +77,9 @@ function setup(options: { failCompile?: boolean } = {}) {
         onSubmittedWorkDone: vi.fn(async () => {}),
       },
     },
+    prepare,
     sampler: vi.fn(() => ({})),
-    effect: vi.fn(() => ({ set: vi.fn(), compile })),
+    effect: vi.fn(() => ({ set: vi.fn() })),
     target: vi.fn(() => {
       const target = {
         size: [160, 90],
@@ -158,10 +163,9 @@ test('coalesces resizes into fresh targets without leaking the old ones', async 
 
 test('thumbnail destroys its pipeline when prewarm fails', async () => {
   const env = setup();
-  const failingCompile = vi.fn(async () => {
+  env.gpu.prepare.mockImplementation(async () => {
     throw new Error('compile failed');
   });
-  env.gpu.effect.mockImplementation(() => ({ set: vi.fn(), compile: failingCompile }));
   const output = {
     size: [160, 90],
     resize: vi.fn(),

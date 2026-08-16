@@ -6,7 +6,7 @@ import brightPassWgsl from './bright-pass.wgsl';
 import compositeWgsl from './composite.wgsl';
 
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
-import { clock, effect, frame, frameLoop, sampler, surface, target } from "vgpu";
+import { clock, effect, frame, frameLoop, prepare, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 type Orbit = readonly [number, number];
@@ -125,7 +125,7 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     targets = createTargets(gpu, canvasSurface.size, 'black-hole-live');
     setConstants(effects);
     setBindings(effects, targets, canvasSurface);
-    await prewarm(effects, targets, canvasSurface);
+    await prewarm(gpu, effects, targets, canvasSurface);
     if (disposed) return;
     input = installOrbitInput(options.canvas);
     observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure);
@@ -165,7 +165,7 @@ export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: Thumb
     const time = opts.time ?? 8.5;
     setConstants(effects);
     setBindings(effects, targets, colorTarget);
-    await prewarm(effects, targets, colorTarget);
+    await prewarm(gpu, effects, targets, colorTarget);
 
     renderAt(gpu, effects, targets, colorTarget, time, [0, 0.05]);
     await gpu.gpu.queue.onSubmittedWorkDone();
@@ -252,12 +252,26 @@ function setBindings(effects: Effects, targets: Targets, output: Output): void {
   void output;
 }
 
-async function prewarm(effects: Effects, targets: Targets, output: Output): Promise<void> {
-  await Promise.all([
-    effects.scene.compile(targets.scene), effects.brightPass.compile(targets.bloomA),
-    effects.blurH1.compile(targets.bloomB), effects.blurV1.compile(targets.bloomA),
-    effects.blurH2.compile(targets.bloomB), effects.blurV2.compile(targets.bloomA),
-    effects.composite.compile({ colors: [output.format] }),
+/**
+ * Was a hand-rolled prewarm over the legacy per-object `compile()` spelling; T04-19 migrates it to
+ * the one spelling. Same combinations, same single await — now stated as combinations, which is
+ * what they always were.
+ *
+ * `output` replaces the `{ colors: [output.format] }` literal the legacy call had to build: 0.3.0
+ * refused to derive a `Surface` signature outside `frame()`, so the destination could not be named
+ * directly. That restriction is gone (a surface signature comes from its configuration), and
+ * naming the real destination is what makes this prepare provably match the encode path — the
+ * encode derives its signature from that same object.
+ */
+async function prewarm(gpu: Gpu, effects: Effects, targets: Targets, output: Output): Promise<void> {
+  await prepare(gpu, [
+    { draw: effects.scene, target: targets.scene },
+    { draw: effects.brightPass, target: targets.bloomA },
+    { draw: effects.blurH1, target: targets.bloomB },
+    { draw: effects.blurV1, target: targets.bloomA },
+    { draw: effects.blurH2, target: targets.bloomB },
+    { draw: effects.blurV2, target: targets.bloomA },
+    { draw: effects.composite, target: output },
   ]);
 }
 

@@ -6,7 +6,7 @@
  * lives in `ort-runtime.ts`.
  */
 import type { Buffer, Effect, Gpu, Surface, Target } from 'vgpu';
-import { effect as createEffect, frame as runFrame } from 'vgpu';
+import { effect as createEffect, frame as runFrame, prepare as prepareCombinations } from 'vgpu';
 import type { ThumbnailOptions } from '../../lib/example-renderer';
 import { createFixtureDigit, GOLDEN_LOGITS, LOGIT_BYTES } from './fixtures';
 import { INPUT_SIZE } from './preprocess';
@@ -19,6 +19,14 @@ function asWriteData(view: Float32Array): Uint8Array<ArrayBuffer> {
 
 export interface Visualizer {
   /**
+   * Warms the pipeline for `output`'s signature. `render()` is synchronous and is called from
+   * inference completion callbacks that cannot become async, so the combination cannot be
+   * prepared where it is encoded — it is prepared where the OUTPUT is born instead (the
+   * coordinator's async `initialize()`, and `renderThumbnail()`). Idempotent: re-calling it for a
+   * signature already prepared is a cache hit, which is what makes it safe on resize.
+   */
+  prepare(gpu: Gpu, output: Surface | Target): Promise<void>;
+  /**
    * Draws one frame. `logits` may be a non-owning wrap of ORT's output buffer;
    * this function only reads it inside the submitted pass and never retains it.
    */
@@ -29,6 +37,9 @@ export interface Visualizer {
 export function createVisualizer(gpu: Gpu, label = 'mnist-classifier'): Visualizer {
   const effect: Effect = createEffect(gpu, visualizeWgsl, { label: `${label}-visualize` });
   return {
+    async prepare(currentGpu, output) {
+      await prepareCombinations(currentGpu, [{ draw: effect, target: output }]);
+    },
     render(currentGpu, output, logits, digit, hasResult) {
       effect.set({
         uniforms: {
@@ -91,6 +102,7 @@ export async function renderThumbnail(
   try {
     writeDigit(digit, createFixtureDigit());
     writeLogits(logits, GOLDEN_LOGITS);
+    await visualizer.prepare(gpu, target);
     visualizer.render(gpu, target, logits, digit, true);
   } finally {
     await Promise.allSettled([

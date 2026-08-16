@@ -4,7 +4,7 @@ import { AA_MODE_FXAA, AA_MODE_MSAA_4X, AA_MODE_OFF, AA_MODE_SSAA_2X, DEFAULT_AN
 import sceneWgsl from './scene.wgsl';
 import resolveWgsl from './resolve.wgsl';
 import fxaaWgsl from './fxaa.wgsl';
-import { clock, draw, effect, frame, frameLoop, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, prepare, sampler, surface, target } from "vgpu";
 
 interface ThumbOptions extends ThumbnailOptions { onModeRendered?: (mode: AaMode, pixels: Uint8Array, size: readonly [number, number]) => void | Promise<void> }
 interface AaEffects { readonly scene: Draw; readonly vertexBuffer: GPUBuffer; readonly resolve: Effect; readonly fxaa: Effect; readonly sampler: GPUSampler }
@@ -28,7 +28,7 @@ export function createRenderer(options: BrowserRendererOptions<AntiAliasingContr
   const setControls = (next: Readonly<AntiAliasingControls>) => { if (disposed || !isMode(next.mode) || next.mode === controls.mode) return; controls = { mode: next.mode }; if (effects && targets) setModeBindings(effects, targets, controls.mode); };
   const dispose = () => { if (disposed) return; disposed = true; loop?.stop(); loop = undefined; if (resizeFrame) cancelAnimationFrame(resizeFrame); resizeFrame = 0; pendingSize = undefined; observer?.disconnect(); observer = undefined; if (typeof window !== 'undefined') window.removeEventListener('resize', onWindowResize); if (effects) destroyEffects(effects); effects = undefined; if (targets) destroyTargets(targets); targets = undefined; canvasSurface?.dispose(); canvasSurface = undefined; gpu?.dispose(); gpu = undefined; };
   const fail = (error: unknown) => { if (disposed) return; if (!reportedError) { reportedError = true; try { options.onError?.(error); } catch {} } dispose(); };
-  const initialize = async () => { const { init } = await import('vgpu'); if (disposed) return; const nextGpu = await init(); if (disposed) { nextGpu.dispose(); return; } gpu = nextGpu; canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] }); effects = createEffects(gpu, 'anti-aliasing'); targets = createTargets(gpu, canvasSurface.size, 'anti-aliasing'); await prewarm(effects, targets, canvasSurface); if (disposed) return; setStaticBindings(effects, targets); setResolutionBindings(effects, canvasSurface); setModeBindings(effects, targets, controls.mode); observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure); observer?.observe(options.canvas); window.addEventListener('resize', onWindowResize); measure(); const time = clock(gpu); loop = frameLoop(gpu, (currentFrame) => { if (!disposed && effects && targets && canvasSurface && gpu) renderMode(currentFrame, effects, targets, canvasSurface, controls.mode, time.time); }); };
+  const initialize = async () => { const { init } = await import('vgpu'); if (disposed) return; const nextGpu = await init(); if (disposed) { nextGpu.dispose(); return; } gpu = nextGpu; canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] }); effects = createEffects(gpu, 'anti-aliasing'); targets = createTargets(gpu, canvasSurface.size, 'anti-aliasing'); await prewarm(gpu, effects, targets, canvasSurface); if (disposed) return; setStaticBindings(effects, targets); setResolutionBindings(effects, canvasSurface); setModeBindings(effects, targets, controls.mode); observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure); observer?.observe(options.canvas); window.addEventListener('resize', onWindowResize); measure(); const time = clock(gpu); loop = frameLoop(gpu, (currentFrame) => { if (!disposed && effects && targets && canvasSurface && gpu) renderMode(currentFrame, effects, targets, canvasSurface, controls.mode, time.time); }); };
   const ready = initialize().catch((error: unknown) => { if (disposed) return; fail(error); throw error; });
   return { ready, setControls, invalidate() {}, resize, dispose };
 }
@@ -36,7 +36,7 @@ export function createRenderer(options: BrowserRendererOptions<AntiAliasingContr
 export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: ThumbOptions = {}): Promise<void> {
   let effects: AaEffects | undefined; let targets: AaTargets | undefined;
   try {
-    effects = createEffects(gpu, 'anti-aliasing-thumb'); targets = createTargets(gpu, colorTarget.size, 'anti-aliasing-thumb'); await prewarm(effects, targets, colorTarget); setStaticBindings(effects, targets); setResolutionBindings(effects, colorTarget); let configuredMode: AaMode | undefined;
+    effects = createEffects(gpu, 'anti-aliasing-thumb'); targets = createTargets(gpu, colorTarget.size, 'anti-aliasing-thumb'); await prewarm(gpu, effects, targets, colorTarget); setStaticBindings(effects, targets); setResolutionBindings(effects, colorTarget); let configuredMode: AaMode | undefined;
     const configureMode = (mode: AaMode) => { if (mode !== configuredMode) { configuredMode = mode; setModeBindings(effects!, targets!, mode); } };
     const dt = opts.dt ?? 1 / 60; let time = opts.time ?? 1.2;
     for (const mode of ALL_MODES) { configureMode(mode); frame(gpu, (currentFrame) => renderMode(currentFrame, effects!, targets!, colorTarget, mode, time)); await gpu.gpu.queue.onSubmittedWorkDone(); await opts.onModeRendered?.(mode, await colorTarget.read(), colorTarget.size); }
@@ -102,18 +102,36 @@ function resizeTargets(targets: AaTargets, size: readonly [number, number]): voi
   targets.ldr.resize([width, height]);
 }
 
+/**
+ * This example already prepared by hand, with the legacy per-object `compile()` spelling and a
+ * `Promise.all` fan-out. T04-19 migrates it to the one spelling — same six combinations, same
+ * single await, now expressed as combinations instead of six independent compiles.
+ *
+ * Two deliberate changes of MEANING, both toward the encode path rather than away from it:
+ *  - `output` replaces `{ colors: [output.format] }`. The hand-rolled signature literal existed
+ *    because 0.3.0 refused to derive a `Surface` signature outside `frame()`; that restriction is
+ *    gone (a surface signature comes from its configuration), so naming the real destination is
+ *    both legal and closer to what `renderMode()` actually asks for.
+ *  - the four `scene` requests are enumerated as combinations, which is what they always were:
+ *    `scene` renders into `output`, `msaa` (4x), `ssaa` (2x) and `ldr`, and the MSAA one has a
+ *    different sampleCount, so they cannot collapse.
+ *
+ * All six modes of `renderMode()` are covered: OFF (scene->output), MSAA (scene->msaa,
+ * resolve->output), SSAA (scene->ssaa, resolve->output), FXAA (scene->ldr, fxaa->output).
+ */
 async function prewarm(
+  gpu: Gpu,
   effects: AaEffects,
   targets: AaTargets,
   output: Surface | Target,
 ): Promise<void> {
-  await Promise.all([
-    effects.scene.compile({ colors: [output.format] }),
-    effects.scene.compile(targets.msaa),
-    effects.scene.compile(targets.ssaa),
-    effects.scene.compile(targets.ldr),
-    effects.resolve.compile({ colors: [output.format] }),
-    effects.fxaa.compile({ colors: [output.format] }),
+  await prepare(gpu, [
+    { draw: effects.scene, target: output },
+    { draw: effects.scene, target: targets.msaa },
+    { draw: effects.scene, target: targets.ssaa },
+    { draw: effects.scene, target: targets.ldr },
+    { draw: effects.resolve, target: output },
+    { draw: effects.fxaa, target: output },
   ]);
 }
 

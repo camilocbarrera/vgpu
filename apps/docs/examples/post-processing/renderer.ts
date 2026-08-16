@@ -2,7 +2,7 @@ import type { Draw, Effect, Frame, Gpu, Surface, Target } from 'vgpu';
 import type { BrowserRendererOptions, ExampleRenderer, RenderSize, ThumbnailOptions } from '../../lib/example-renderer';
 import { DEFAULT_POST_PROCESSING_CONTROLS, type PostProcessingControls } from './types';
 import blurWgsl from './blur.wgsl'; import gradeWgsl from './grade.wgsl'; import sceneWgsl from './scene.wgsl'; import thresholdWgsl from './threshold.wgsl';
-import { clock, draw, effect, frame, frameLoop, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, prepare, sampler, surface, target } from "vgpu";
 type PostProcessingMode = 'all-off' | 'bloom-only' | 'ca-only';
 interface ThumbOptions extends ThumbnailOptions { onModeRendered?: (mode: PostProcessingMode, pixels: Uint8Array, size: readonly [number, number]) => void | Promise<void> }
 interface EffectChain { scene: Draw; sceneVertexBuffer: GPUBuffer; threshold: Effect; blurH: Effect; blurV: Effect; grade: Effect; sampler: GPUSampler }
@@ -21,7 +21,7 @@ export function createRenderer(options: BrowserRendererOptions<PostProcessingCon
  const setControls = (next: Readonly<PostProcessingControls>) => { const valid = { bloom: Boolean(next.bloom), ca: Boolean(next.ca) }; if (disposed || (valid.bloom === controls.bloom && valid.ca === controls.ca)) return; controls = valid; if (effects) setGradeFlags(effects.grade, controls); };
  const dispose = () => { if (disposed) return; disposed = true; loop?.stop(); loop = undefined; if (resizeFrame) cancelAnimationFrame(resizeFrame); resizeFrame = 0; pendingSize = undefined; observer?.disconnect(); observer = undefined; if (typeof window !== 'undefined') window.removeEventListener('resize', onWindowResize); if (effects) destroyEffects(effects); effects = undefined; if (targets) destroyTargets(targets); targets = undefined; canvasSurface?.dispose(); canvasSurface = undefined; gpu?.dispose(); gpu = undefined; };
  const fail = (error: unknown) => { if (disposed) return; if (!reportedError) { reportedError = true; try { options.onError?.(error); } catch {} } dispose(); };
- const initialize = async () => { const { init } = await import('vgpu'); if (disposed) return; const nextGpu = await init(); if (disposed) { nextGpu.dispose(); return; } gpu = nextGpu; canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] }); effects = createEffects(gpu, 'post-processing-live'); targets = createTargets(gpu, canvasSurface.size, 'post-processing-live'); await prewarm(effects, targets, canvasSurface); if (disposed) return; setChainConstants(effects); setChainBindings(effects, targets, canvasSurface); setGradeFlags(effects.grade, controls); observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure); observer?.observe(options.canvas); window.addEventListener('resize', onWindowResize); measure(); const time = clock(gpu); loop = frameLoop(gpu, (currentFrame) => { if (!disposed && effects && targets && canvasSurface && gpu) renderChain(currentFrame, effects, targets, canvasSurface, time.time); }); };
+ const initialize = async () => { const { init } = await import('vgpu'); if (disposed) return; const nextGpu = await init(); if (disposed) { nextGpu.dispose(); return; } gpu = nextGpu; canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] }); effects = createEffects(gpu, 'post-processing-live'); targets = createTargets(gpu, canvasSurface.size, 'post-processing-live'); await prewarm(gpu, effects, targets, canvasSurface); if (disposed) return; setChainConstants(effects); setChainBindings(effects, targets, canvasSurface); setGradeFlags(effects.grade, controls); observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure); observer?.observe(options.canvas); window.addEventListener('resize', onWindowResize); measure(); const time = clock(gpu); loop = frameLoop(gpu, (currentFrame) => { if (!disposed && effects && targets && canvasSurface && gpu) renderChain(currentFrame, effects, targets, canvasSurface, time.time); }); };
  const ready = initialize().catch((error: unknown) => { if (disposed) return; fail(error); throw error; });
  return { ready, setControls, invalidate() {}, resize, dispose };
 }
@@ -29,7 +29,7 @@ export function createRenderer(options: BrowserRendererOptions<PostProcessingCon
 export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: ThumbOptions = {}): Promise<void> {
  let effects: EffectChain | undefined; let targets: ChainTargets | undefined;
  try {
-  effects = createEffects(gpu, 'post-processing-thumb'); targets = createTargets(gpu, colorTarget.size, 'post-processing-thumb'); await prewarm(effects, targets, colorTarget); setChainConstants(effects); setChainBindings(effects, targets, colorTarget); const dt = opts.dt ?? 1 / 60; let time = opts.time ?? 2;
+  effects = createEffects(gpu, 'post-processing-thumb'); targets = createTargets(gpu, colorTarget.size, 'post-processing-thumb'); await prewarm(gpu, effects, targets, colorTarget); setChainConstants(effects); setChainBindings(effects, targets, colorTarget); const dt = opts.dt ?? 1 / 60; let time = opts.time ?? 2;
   for (const [mode, flags] of THUMB_MODES) { setGradeFlags(effects.grade, flags); frame(gpu, (currentFrame) => renderChain(currentFrame, effects!, targets!, colorTarget, time)); await gpu.gpu.queue.onSubmittedWorkDone(); await opts.onModeRendered?.(mode, await colorTarget.read(), colorTarget.size); }
   setGradeFlags(effects.grade, DEFAULT_POST_PROCESSING_CONTROLS); for (let i = 0; i < Math.max(1, opts.warmupFrames ?? 60); i++) { time += dt; frame(gpu, (currentFrame) => renderChain(currentFrame, effects!, targets!, colorTarget, time)); }
  } finally {
@@ -86,13 +86,24 @@ function createTargets(gpu: Gpu, size: readonly [number, number], label: string)
   } catch (error) { for (const colorTarget of created) (colorTarget as Target & { destroy?: () => void }).destroy?.(); throw error; }
 }
 
-async function prewarm(effects: EffectChain, targets: ChainTargets, output: Surface | Target): Promise<void> {
-  await Promise.all([
-    effects.scene.compile(targets.scene),
-    effects.threshold.compile(targets.bright),
-    effects.blurH.compile(targets.blurA),
-    effects.blurV.compile(targets.blurB),
-    effects.grade.compile({ colors: [output.format] }),
+/**
+ * Was a hand-rolled prewarm over the legacy per-object `compile()` spelling; T04-19 migrates it to
+ * the one spelling. Same combinations, same single await — now stated as combinations, which is
+ * what they always were.
+ *
+ * `output` replaces the `{ colors: [output.format] }` literal the legacy call had to build: 0.3.0
+ * refused to derive a `Surface` signature outside `frame()`, so the destination could not be named
+ * directly. That restriction is gone (a surface signature comes from its configuration), and
+ * naming the real destination is what makes this prepare provably match the encode path — the
+ * encode derives its signature from that same object.
+ */
+async function prewarm(gpu: Gpu, effects: EffectChain, targets: ChainTargets, output: Surface | Target): Promise<void> {
+  await prepare(gpu, [
+    { draw: effects.scene, target: targets.scene },
+    { draw: effects.threshold, target: targets.bright },
+    { draw: effects.blurH, target: targets.blurA },
+    { draw: effects.blurV, target: targets.blurB },
+    { draw: effects.grade, target: output },
   ]);
 }
 

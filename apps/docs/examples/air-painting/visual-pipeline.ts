@@ -30,7 +30,7 @@
  * where the hand is, it just asks for slot 0 and slot 1 to be cropped again.
  */
 import type { Buffer, Compute, Effect, Gpu, Surface, Target, Texture } from 'vgpu';
-import { compute as createCompute, effect as createEffect, frame as runFrame, sampler as createSampler, target as createTarget } from 'vgpu';
+import { compute as createCompute, effect as createEffect, frame as runFrame, prepare as prepareCombinations, sampler as createSampler, target as createTarget } from 'vgpu';
 import {
   BRUSH_BUFFER_BYTES,
   BRUSH_TUNING,
@@ -159,6 +159,22 @@ export interface VisualPipeline {
     dtSeconds: number,
     options?: ConsumeOptions,
   ): void;
+
+  /**
+   * Warms the three render combinations `renderVisualFrame()` encodes. That method is synchronous
+   * and is driven from hand-tracking completion callbacks, so its combinations cannot be prepared
+   * where they are encoded; they are prepared here, from the async setup that owns `output`.
+   *
+   * The two frost targets are re-created on resize (`createFrostTarget` again, same format), and
+   * a target signature carries no size — so one call at setup stays valid for every later size.
+   * Idempotent regardless: re-preparing a warm combination is a cache hit.
+   *
+   * The three computes (`crop`, `hand`, `paint`) are deliberately absent: they run through the
+   * legacy `dispatch()`, which compiles lazily-inline and does not consult `pendingPipelines` at
+   * all (compute.ts: "legacy dispatch() stays lazy-sync"). Preparing them would be dead weight
+   * today; migrating them off `dispatch()` belongs to the spelling retirement, not here.
+   */
+  prepareVisualFrame(output: Surface | Target): Promise<void>;
 
   /** Composites the newest frame, the persistent mask and the fixed grain. */
   renderVisualFrame(output: Surface | Target, options?: VisualFrameOptions): void;
@@ -390,6 +406,14 @@ export function createVisualPipeline(gpu: Gpu, options: VisualPipelineOptions): 
       // Submitted after the hand dispatch on the same queue, so the ordering is
       // guaranteed without an explicit barrier.
       paint.dispatch(PAINT_WORKGROUPS);
+    },
+
+    async prepareVisualFrame(output) {
+      await prepareCombinations(gpu, [
+        { draw: frostH, target: frostA },
+        { draw: frostV, target: frostB },
+        { draw: composite, target: output },
+      ]);
     },
 
     renderVisualFrame(output, frameOptions = {}) {

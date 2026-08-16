@@ -14,7 +14,7 @@ import compositeWgsl from './composite.wgsl';
 import earthWgsl from './earth.wgsl';
 import overlayWgsl from './overlay.wgsl';
 import skyWgsl from './sky.wgsl';
-import { clock, draw, effect, frame, frameLoop, geometry, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, geometry, prepare, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 
@@ -151,7 +151,7 @@ export function createRenderer(options: BrowserRendererOptions<EarthControls>): 
     scene = createScene(gpu, maps, 'earth-live');
     targets = createTargets(gpu, canvasSurface.size, 'earth-live');
     setStaticBindings(scene, maps, targets);
-    await Promise.all([bakeMaps(gpu, maps), prewarm(scene, targets, canvasSurface)]);
+    await Promise.all([bakeMaps(gpu, maps), prewarm(gpu, scene, targets, canvasSurface)]);
     if (disposed) return;
     orbit = installOrbitInput(options.canvas, {
       yaw: 0,
@@ -185,7 +185,7 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptio
   const scene = createScene(gpu, maps, 'earth-thumb');
   const targets = createTargets(gpu, output.size, 'earth-thumb');
   setStaticBindings(scene, maps, targets);
-  await Promise.all([bakeMaps(gpu, maps), prewarm(scene, targets, output)]);
+  await Promise.all([bakeMaps(gpu, maps), prewarm(gpu, scene, targets, output)]);
 
   // The poster framing is fixed; only `time` moves, and the sun angle is derived
   // from it so a given `thumb.time` always produces the same terminator.
@@ -306,25 +306,41 @@ function setSizeBindings(scene: Scene, targets: Targets): void {
 async function bakeMaps(gpu: Gpu, maps: Maps): Promise<void> {
   const canvasSurface = effect(gpu, { shader: bakeSurfaceWgsl, label: 'earth-bake-surface' });
   const clouds = effect(gpu, { shader: bakeCloudsWgsl, label: 'earth-bake-clouds' });
-  await Promise.all([canvasSurface.compile(maps.surface), clouds.compile(maps.clouds)]);
+  await prepare(gpu, [
+    { draw: canvasSurface, target: maps.surface },
+    { draw: clouds, target: maps.clouds },
+  ]);
   frame(gpu, (currentFrame) => {
     currentFrame.pass({ target: maps.surface, clear: TRANSPARENT }, (pass) => pass.draw(canvasSurface));
     currentFrame.pass({ target: maps.clouds, clear: TRANSPARENT }, (pass) => pass.draw(clouds));
   });
 }
 
-async function prewarm(scene: Scene, targets: Targets, output: Output): Promise<void> {
-  await Promise.all([
-    scene.sky.compile(targets.beauty),
-    scene.earth.compile(targets.planet),
-    scene.atmosphere.compile(targets.planet),
-    scene.overlay.compile(targets.beauty),
-    scene.bright.compile(targets.bloomA),
-    scene.blur[0].compile(targets.bloomB),
-    scene.blur[1].compile(targets.bloomA),
-    scene.blur[2].compile(targets.bloomB),
-    scene.blur[3].compile(targets.bloomA),
-    scene.composite.compile({ colors: [output.format] }),
+/**
+ * Was a hand-rolled prewarm over the legacy per-object `compile()` spelling; T04-19 migrates it to
+ * the one spelling. Same combinations, same single await — now stated as combinations, which is
+ * what they always were.
+ *
+ * `output` replaces the `{ colors: [output.format] }` literal the legacy call had to build: 0.3.0
+ * refused to derive a `Surface` signature outside `frame()`, so the destination could not be named
+ * directly. That restriction is gone (a surface signature comes from its configuration), and
+ * naming the real destination is what makes this prepare provably match the encode path — the
+ * encode derives its signature from that same object.
+ */
+async function prewarm(gpu: Gpu, scene: Scene, targets: Targets, output: Output): Promise<void> {
+  await prepare(gpu, [
+    { draw: scene.sky, target: targets.beauty },
+    { draw: scene.earth, target: targets.planet },
+    { draw: scene.atmosphere, target: targets.planet },
+    { draw: scene.overlay, target: targets.beauty },
+    { draw: scene.bright, target: targets.bloomA },
+    // The four blur passes alternate bloomB/bloomA — an explicit ping-pong written out by index,
+    // not a loop, so the request list mirrors it one-for-one rather than inventing a loop.
+    { draw: scene.blur[0], target: targets.bloomB },
+    { draw: scene.blur[1], target: targets.bloomA },
+    { draw: scene.blur[2], target: targets.bloomB },
+    { draw: scene.blur[3], target: targets.bloomA },
+    { draw: scene.composite, target: output },
   ]);
 }
 

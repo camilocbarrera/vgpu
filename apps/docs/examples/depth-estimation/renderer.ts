@@ -10,7 +10,7 @@
  * is exactly why thumbnails can be deterministic without a model.
  */
 import type { Buffer, Compute, Effect, Gpu, Surface, Target } from 'vgpu';
-import { compute as createCompute, effect as createEffect, frame as runFrame } from 'vgpu';
+import { compute as createCompute, effect as createEffect, frame as runFrame, prepare as prepareCombinations } from 'vgpu';
 import {
   depthByteLength,
   depthElementCount,
@@ -41,6 +41,14 @@ export interface SideBySidePipeline {
     model: DepthModel,
     options?: { hasResult?: boolean },
   ): void;
+  /**
+   * Warms the single render combination `draw()` encodes. `draw()` is synchronous and runs from
+   * inference completion, so the combination is prepared where the OUTPUT is born instead.
+   *
+   * `reducer` is absent on purpose: it dispatches through the legacy `dispatch()`, which compiles
+   * lazily-inline and never consults `pendingPipelines`, so it needs nothing here.
+   */
+  prepare(gpu: Gpu, output: Surface | Target): Promise<void>;
   dispose(): void;
 }
 
@@ -55,6 +63,9 @@ export function createSideBySidePipeline(gpu: Gpu, label = 'depth-estimation'): 
   });
 
   return {
+    async prepare(currentGpu, output) {
+      await prepareCombinations(currentGpu, [{ draw: effect, target: output }]);
+    },
     draw(currentGpu, output, depth, colour, model, options = {}) {
       const hasResult = options.hasResult ?? true;
       const autoRange = model.presentation.mode === 'auto-range';

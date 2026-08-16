@@ -6,7 +6,7 @@ const vgpuFns = vi.hoisted(() => Object.fromEntries(
     // Each test's gpu double carries its factory fakes in `fns`; these route the free functions to them.
     .map((name) => [name, (gpu: any, ...args: any[]) => gpu.fns[name](...args)]),
 )) as Record<string, unknown>;
-vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, clock: (gpu: any) => gpu.clock ?? { time: 0, deltaTime: 0, frameCount: 0, advance() {} } }));
+vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, prepare: (gpu: any, ...args: any[]) => (gpu?.fns?.prepare ? gpu.fns.prepare(...args) : Promise.resolve([])), clock: (gpu: any) => gpu.clock ?? { time: 0, deltaTime: 0, frameCount: 0, advance() {} } }));
 
 import { createRenderer, renderThumbnail } from './renderer';
 
@@ -47,16 +47,19 @@ function setup(options: { failCompile?: boolean } = {}) {
 
   const targetObjects: Array<{ size: number[]; texelSize: number[]; resize: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; format: string; read: ReturnType<typeof vi.fn> }> = [];
   const surface = { size: [200, 100], format: 'bgra8unorm', dispose: vi.fn() };
-  const compile = options.failCompile
+  // `prewarm()` warms through `prepare()` since T04-19, so that is where a compilation failure is
+  // injected now. The effect double no longer needs a `compile`.
+  const prepare = options.failCompile
     ? vi.fn(async () => { throw new Error('compile failed'); })
-    : vi.fn(async () => {});
-  const effect = () => ({ set: vi.fn(), compile });
+    : vi.fn(async () => []);
+  const effect = () => ({ set: vi.fn() });
   const stop = vi.fn();
   const gpu = {
     time: 0,
     gpu: { queue: { onSubmittedWorkDone: vi.fn(async () => {}) } },
     settled: vi.fn(async () => {}),
     dispose: vi.fn(), fns: {
+    prepare,
     surface: vi.fn(() => surface),
     target: vi.fn(() => {
       const target = { size: [200, 100], texelSize: [1 / 200, 1 / 100], resize: vi.fn(), destroy: vi.fn(), format: 'rgba16float', read: vi.fn(async () => new Uint8Array()) };

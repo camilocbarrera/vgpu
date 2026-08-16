@@ -14,7 +14,7 @@ import bloomBlurWgsl from './bloom-blur.wgsl';
 import bloomCompositeWgsl from './bloom-composite.wgsl';
 import presentWgsl from './present.wgsl';
 import stagePreviewWgsl from './stage-preview.wgsl';
-import { clock, draw, effect, frame, frameLoop, sampler, surface, target } from "vgpu";
+import { clock, draw, effect, frame, frameLoop, prepare, sampler, surface, target } from "vgpu";
 
 type Output = Surface | Target;
 interface ThumbOptions extends ThumbnailOptions {
@@ -131,7 +131,7 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptio
       try {
         const preview = effect(gpu, { shader: stagePreviewWgsl, label: 'fft-ocean-displacement-preview', bindings: { u_input: displacement } });
         preview.set("u", { outputWidth: displacement.size[0], outputHeight: displacement.size[1], stage: 1, gain: 16 });
-        await preview.compile(previewTarget);
+        await prepare(gpu, [{ draw: preview, target: previewTarget }]);
         frame(gpu, (currentFrame) => currentFrame.pass({ target: previewTarget, clear: CLEAR }, (pass) => pass.draw(preview)));
         await gpu.gpu.queue.onSubmittedWorkDone();
         await opts.onIntermediateRendered('displacement', await previewTarget.read(), previewTarget.size);
@@ -215,7 +215,7 @@ async function createGraph(gpu: Gpu, output: Output, label: string): Promise<Oce
   const present = effect(gpu, { shader: presentWgsl, label: `${label}-present` });
   present.set({ sceneHDR: scene, bloomTexture: composite, linearSampler: samplerState });
   const graph: OceanGraph = { noise, h0, spectrum, ping, pong, normalFoam, scene, bright, composite, levels, noiseEffect, initialSpectrum, evolveSpectrum, ifft, normals, particles, brightEffect, compositeEffect, present, needsInitialSpectrum: true };
-  await prewarm(graph, output);
+  await prewarm(gpu, graph, output);
   return graph;
   } catch (error) {
     for (let i = ownedTargets.length - 1; i >= 0; i--) ownedTargets[i]!.color.destroy();
@@ -230,12 +230,27 @@ function makeBlur(gpu: Gpu, label: string, source: Target, colorTarget: Target, 
   return shader1;
 }
 
-async function prewarm(g: OceanGraph, output: Output): Promise<void> {
-  await Promise.all([
-    g.noiseEffect.compile(g.noise), g.initialSpectrum.compile(g.h0), g.evolveSpectrum.compile(g.spectrum), ...g.ifft.map((s) => s.effect.compile(s.output)), g.normals.compile(g.normalFoam),
-    g.particles.compile(g.scene), g.brightEffect.compile(g.bright),
-    ...g.levels.flatMap((level) => [level.horizontalEffect.compile(level.horizontal), level.verticalEffect.compile(level.vertical)]),
-    g.compositeEffect.compile(g.composite), g.present.compile({ colors: [output.format] }),
+/**
+ * Dynamic multi-pass: `g.ifft` (the butterfly stages) and `g.levels` (the bloom pyramid) are both
+ * built by loops, so the request list is BUILT BY THE SAME ITERATION rather than flattened into N
+ * hardcoded lines — add a stage or a bloom level and this list follows automatically. That is the
+ * property the legacy `Promise.all` + `map`/`flatMap` had and that a naive expansion would lose.
+ */
+async function prewarm(gpu: Gpu, g: OceanGraph, output: Output): Promise<void> {
+  await prepare(gpu, [
+    { draw: g.noiseEffect, target: g.noise },
+    { draw: g.initialSpectrum, target: g.h0 },
+    { draw: g.evolveSpectrum, target: g.spectrum },
+    ...g.ifft.map((s) => ({ draw: s.effect, target: s.output })),
+    { draw: g.normals, target: g.normalFoam },
+    { draw: g.particles, target: g.scene },
+    { draw: g.brightEffect, target: g.bright },
+    ...g.levels.flatMap((level) => [
+      { draw: level.horizontalEffect, target: level.horizontal },
+      { draw: level.verticalEffect, target: level.vertical },
+    ]),
+    { draw: g.compositeEffect, target: g.composite },
+    { draw: g.present, target: output },
   ]);
 }
 
