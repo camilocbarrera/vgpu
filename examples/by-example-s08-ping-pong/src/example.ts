@@ -16,9 +16,9 @@ export async function runPingPongExample() {
   const gpu = await init();
   const buf = pingPong(gpu, 8, 8, { format: "rgba8unorm" });
   const fill = effect(gpu, { shader: FILL, label: "fill" });
-  const copy = effect(gpu, { shader: COPY, label: "copy" });
+  const copy = effect(gpu, { shader: COPY, label: "copy", bindings: { src: buf.read } });
   frame(gpu, (currentFrame) => currentFrame.pass({ target: buf.write }, (p) => p.draw(fill)));
   buf.swap();
-  frame(gpu, (currentFrame) => currentFrame.pass({ target: buf.write }, (p) => { copy.set({ src: buf.read, texel: buf.read.texelSize }); p.draw(copy); }));
+  frame(gpu, (currentFrame) => currentFrame.pass({ target: buf.write }, (p) => { copy.set("params", { texel: buf.read.texelSize }); p.draw(copy); }));
   return { gpu, target: buf.write };
 }
