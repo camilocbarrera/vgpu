@@ -46,7 +46,7 @@ test("R3 bundle replay stays valid after JS value writes and stales on bind-grou
   // `ready` bundle can be made stale by an identity change.
   await prepare(gpu, { bundle: staticScene });
 
-  floor.set({ fogDensity: 0.2 });
+  floor.set("fog", { fogDensity: 0.2 });
   expect(() => frame(gpu, (f) => f.pass({ target: scene }, (p) => p.bundles(staticScene)))).not.toThrow();
 
   walls.set({ detail: tex2 });
@@ -209,7 +209,7 @@ test("R4 claimed groups reject set() and per-draw offsets reach setBindGroup", a
   );
 
   cube.group(1, slot.bindGroup);
-  expect(() => cube.set({ obj: { value: 1 } })).toThrowError(
+  expect(() => cube.set("obj", { value: 1 })).toThrowError(
     "group 1 of 'cube' is claimed; set() cannot update it.",
   );
 

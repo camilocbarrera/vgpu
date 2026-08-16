@@ -49,7 +49,7 @@ test("compute(gpu, ...) accepts ShaderSource", async () => {
   const gpu = await init();
   const job = compute(gpu, { shader: { version: 1, wgsl: COMPUTE }, label: "artifact-compute" });
 
-  job.set({ params: { value: 1 } });
+  job.set("params", { value: 1 });
   gpu.dispose();
 });
 
