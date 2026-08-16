@@ -27,7 +27,9 @@ export async function runSceneExample() {
   const colorTarget = target(gpu, { size: [32, 32], format: "rgba8unorm", depth: true });
   const cam = perspectiveCamera({ fov: 45, aspect: 1, position: [2, 2, 3], target: [0, 0, 0] });
   const cube = draw(gpu, { shader: LIT_WGSL, geometry: geometry(gpu, box({ size: 1 })), label: "cube", targets: [colorTarget] });
-  cube.set({ camera: { viewProjection: cam.viewProjection }, model: { model: orbit(0) }, light: { direction: [-1, -1, -1], intensity: 1 } });
+  cube.set("camera", { viewProjection: cam.viewProjection });
+  cube.set("model", { model: orbit(0) });
+  cube.set("light", { direction: [-1, -1, -1], intensity: 1 });
   frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0.05, 0.05, 0.08, 1] }, (p) => p.draw(cube)));
   return { gpu, target: colorTarget };
 }

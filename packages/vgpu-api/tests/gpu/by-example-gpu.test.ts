@@ -33,7 +33,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
     try {
       const colorTarget = target(gpu, { size: [8, 8], format: "rgba8unorm" });
       const wave = effect(gpu, { shader: WAVE, label: "wave", set: { speed: 2 } });
-      wave.set({ time: Math.PI / 4 });
+      wave.set("params", { time: Math.PI / 4 });
       frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
       const pixels = await colorTarget.read();
       const pixel = [...pixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
