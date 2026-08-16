@@ -388,10 +388,10 @@ export const COVERED_INDIRECTLY = {
     "pass.effect": "prepareScene() prepares every effect by iterating scene.effects.{jfaSteps,cascade}; `pass.effect` is an element of the pass list built from those same arrays.",
   },
   "apps/docs/examples/batch-rendering/renderer.ts": {
-    "scene.bundle": "createScene() prepares all four draws against colorTarget before bundle() records them; the bundle replays only those.",
+    "scene.bundle": "createScene() prepares { bundle: recorded } AFTER bundle() records it, which is the only edge out of pending-pipelines; it warms the four recorded draws and encodes the native bundle.",
   },
   "apps/docs/examples/instanced-rendering/renderer.ts": {
-    "scene.bundle": "createScene() prepares `drawable` against colorTarget before bundle() records it.",
+    "scene.bundle": "createScene() prepares { bundle: recorded } after bundle() records it; that request subsumes the drawable and is awaited before the scene is published to the loop.",
   },
   "apps/docs/examples/environment-map/renderer.ts": {
     "scene.cube": "createScene() prepares the local `cube` against `hdr` and returns it as `scene.cube`.",
@@ -405,7 +405,7 @@ export const COVERED_INDIRECTLY = {
     "stage.effect": "prewarm() prepares `...g.ifft.map((s) => ({ draw: s.effect, target: s.output }))`; `stage` iterates that same g.ifft array.",
   },
   "apps/docs/examples/fluid/simulation.ts": {
-    "fluid.bundles![fluid.step & 1]": "Both parities are prepared explicitly as { bundle: fluid.bundles[0] } and { bundle: fluid.bundles[1] }; the index is a runtime choice between two prepared objects.",
+    "fluid.bundles![fluid.step & 1]": "Both parities are prepared as { bundle } while held in a local, and fluid.bundles is only assigned after that prepare resolves, so the index can only ever select a ready bundle.",
   },
   "apps/docs/examples/transmission/renderer.ts": {
     "scene.background": "createScene() prepares the local `background` against targets.hdr and returns it on the scene struct.",
@@ -417,8 +417,8 @@ export const COVERED_INDIRECTLY = {
     "scene.blurs[index].vertical": "createScene() prepares `...blurs.flatMap(...)` over the same pyramid array this indexes.",
   },
   "apps/docs/examples/triangle-led-front/scene-renderer.ts": {
-    "currentParts.raycastBundle": "prewarm() prepares { bundle: parts.raycastBundle } — same object, reached through the `currentParts` alias.",
-    "currentTheme === 'light' ? floorBundles.light : floorBundles.dark": "prewarm() eagerly calls recordFloorBundles() and prepares BOTH arms; the ternary picks between two prepared bundles.",
+    "currentParts.raycastBundle": "prewarm() prepares { bundle: parts.raycastBundle }, and renderFrame() is gated on preparedGeneration === sceneGeneration so a rebuild() that swaps in a new raycastBundle cannot be replayed before its prewarm resolves.",
+    "currentTheme === 'light' ? floorBundles.light : floorBundles.dark": "prewarm() eagerly calls recordFloorBundles() and prepares BOTH arms as { bundle }; renderFrame() is gated on the readiness generation, so a resize that re-records cannot be replayed before its prewarm resolves.",
   },
 };
 

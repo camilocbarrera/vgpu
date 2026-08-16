@@ -101,18 +101,19 @@ the stated focus for QA.
 | transmission | 5 + 2N (blur pyramid) + 2 (prefilter) | **dynamic**: the pyramid requests are built by `flatMap` over the same array the loop builds |
 | fft-ocean | 10 + N (ifft stages) + 2N (bloom levels) + preview | **dynamic**: `map`/`flatMap` over `g.ifft` and `g.levels`, never flattened |
 | fft-ocean-surface | `skydome→hdr`, `ocean→hdr`, `composite→surface` | **new**; `composite` is encoded through the shorthand `f.pass(target, effect)` form |
-| fluid | `{bundle: bundles[0]}`, `{bundle: bundles[1]}` | the await **moved below** the bundle construction: the encode site is `p.bundles(...)`, and a bundle must exist to be prepared. Subsumes the two display `compile()`s |
-| batch-rendering | 4 draws + blit | prepared **before** `bundle()` records them — recording needs the pipelines |
-| instanced-rendering | drawable + blit | same ordering constraint |
+| fluid | `{bundle}` ×2 | prepared into a **local**, published to `fluid.bundles` only after the await. Subsumes the two display `compile()`s |
+| batch-rendering | `{bundle}` + blit (both paths) | prepared **after** `bundle()` records — the only edge out of `pending-pipelines` |
+| instanced-rendering | `{bundle}` + blit (both paths) | same |
 | radiance-cascades | 4 + N jfa + N cascade | **dynamic**; keeps signature literals (see below) |
 | agent-radiance-cascades | 4 + N jfa + N cascade | same |
-| triangle-led-front | 4 draws + 3 bundles (scene) + 2 bundles (light-sources) | see "lazy birth" below |
+| triangle-led-front | 4 draws + 3 bundles (scene) + 2 bundles (light-sources) | see "lazy birth" and the readiness gate below |
 | nextjs-flare | 5, inside the preserved `needsCompile` guard | see below |
 | **hero** | **13 effects, ONE `prepare()`** | see below |
 
 ### Criteria that are not mechanical
 
-**`output` replaces `{ colors: [output.format] }`.** Nine files built a signature literal by hand
+**`output` replaces `{ colors: [output.format] }`.** Nine substitutions across nine files — eight
+under `apps/docs/examples` plus `apps/docs/components/hero/renderer.ts` — built a signature literal by hand
 because 0.3.0 refused to derive a `Surface` signature outside `frame()`. That restriction is gone
 (rev6.1 §0: a surface signature comes from its *configuration*). Naming the real destination is what
 makes prepare and encode **provably** agree — the encode derives its signature from that same
@@ -120,11 +121,18 @@ object. Where the two would have differed, the legacy prewarm was warming a sign
 path never asked for; this migration cannot make that worse, only better.
 
 **Signature literals that were KEPT, on purpose.** The radiance-cascades pair, the transmission blur
-pyramid, the hero bloom chain and the triangle-led-front floor draws keep `{ colors: [FMT] }`. In
-each, no single Target object is "the" destination: the passes ping-pong between two recycled
-atlases, or walk a pyramid of different sizes, or are chosen per frame by theme. One *format* is
-what they genuinely share, and a signature is exactly what the pipeline key is built from. Naming
-any one target would imply a specificity the key does not have.
+pyramid and the hero bloom chain keep `{ colors: [FMT] }`. In each, no single Target object is "the"
+destination: the passes ping-pong between two recycled atlases, or walk a pyramid of different
+sizes. One *format* is what they genuinely share, and a signature is exactly what the pipeline key
+is built from.
+
+**One of those literals is weaker than the others, and the QA was right to say so.** The
+triangle-led-front floor draws have exactly **one** stable destination (`colorTarget`) — the theme
+ternary picks between two *draws*, not two targets — so they could have been named. The literal
+produces the correct key today only because that surface carries no depth and no MSAA, which is a
+coincidence of the current configuration rather than a property of the code. Left as-is (naming it
+is a behaviour-adjacent change past a FAIL-then-fix cycle) and recorded here as the one kept literal
+that rests on a coincidence.
 
 **Dynamic multi-pass is iterated, never flattened.** `transmission`, `fft-ocean`,
 `radiance-cascades`, `agent-radiance-cascades` and `batch-rendering` build their passes with
@@ -152,15 +160,84 @@ spelling was the one thing this migration had to not do.
   continuous tunable, so the variants are unbounded. `p.bundles()` takes no per-call
   `pendingPipelines` (`frame.ts` says so explicitly) and the callback cannot await.
 
-## Known residual — a T04-21 blocker, not a T04-19 gap
+## The QA cycle: four renderers were broken, and the skip is where they lived
 
-`apps/docs/examples/triangle-led-front/light-sources-raw.ts`: the re-recorded `clearBundle`.
+The first submission declared the `apps/docs` renderers "covered by `--verify` and typecheck, not
+executed under a forced throw" and called that an honest limit. **It was a hole, and four renderers
+were in it.** Adversarial QA extended the harness (mock the adapter to `src/mock.ts`, keep
+`prepare`/`frame`/`bundle`/`pipeline-store` REAL, fake canvas, pumped rAF) and got 17 of 21 docs
+renderers executing under the real `"throw"` default. Four raised `VGPU-PIPELINE-PENDING`. A control
+run with the throw mock neutralized was 21/21 green, so the failures were the code, not the harness.
 
-Under today's `"sync"` default it re-encodes inline exactly as it always has — **nothing is broken
-by this ticket**. Under `"throw"` it will raise on the first bake-key change. The fix is either a
-frame-level `pendingPipelines` policy for that renderer or hoisting the re-record out of the
-callback; both are *behaviour* changes to the example, which a purely-additive ticket does not make.
-Recorded here so T04-21 inherits a known item rather than a surprise.
+**The lesson is the one worth carrying into T04-21: the skipped verification is exactly where the
+bugs were.** Not one of the four was visible to typecheck, to `--verify`, or to the per-example
+`renderer.test.ts` files — those stub `vgpu` wholesale with `prepare: () => Promise.resolve([])`, so
+they can *never* catch this class. All twelve `examples/` projects, which were executed under a
+forced throw from the start, were correct on the first pass. That is not a coincidence.
+
+### Class A — the bundle was never prepared (batch-rendering, instanced-rendering)
+
+The original comment asserted the draws had to be prepared *before* `bundle()` "because the
+recording needs the pipelines". **That premise is false.** `bundle.ts`'s frozen transition table is
+explicit: `bundle(gpu, {target}, rec)` **always** lands on `pending-pipelines` ("the native bundle
+is not materialized at construction"), recording needs no pipelines at all, and the only edge to
+`ready` is `prepare(gpu, [{ bundle }])` — which compiles the recorded draws **and** encodes the
+native bundle.
+
+So the request is the **bundle**, and it comes **after** the recording. The `{draw, target}`
+requests were both unnecessary (subsumed) and insufficient (never moved the bundle off
+`pending-pipelines`). The port was faithful to the legacy `.compile()` prewarm, which only ever
+worked because `"sync"` materializes the bundle inline on first replay — the exact crutch T04-21
+removes. `s09-bundles` got this right on the first pass *because the shipped test executed it*.
+
+Fixing it revealed a **layered** failure: the live `createRenderer` path never prepared the
+`*-blit` effect either (only `renderThumbnail` did). Both paths now do.
+
+### Class B — a new bundle reaches a running loop before its prepare resolves
+
+- **fluid — this branch introduced the window.** The legacy order was `await compile()` → create
+  bundles, with nothing after the await. Moving the await below the construction (correct in
+  itself) made it create → `await prepare()` → publish. On resize `output` is the *same* surface
+  object, so `renderFluid`'s `fluid.output !== output` guard cannot fire and the loop encodes the
+  new, unprepared bundle. Fixed by holding the pair in a **local** and assigning `fluid.bundles`
+  only after the await: the loop keeps replaying the previous ready pair, so a resize is late, never
+  broken.
+- **triangle-led-front.** `rebuild()` and `setOutputTarget()` re-record the floor bundles
+  synchronously on every resize — and `rebuild()` builds an entirely new `raycastBundle` — while the
+  loop runs and `prewarm()` is fire-and-forget. The earlier claim that the memoized `??` is "always
+  a cache hit" is true and **beside the point: a cache hit is not readiness.** Fixed with an
+  explicit readiness generation — `rebuild()`/`setOutputTarget()` bump it, `prewarm()` opens the
+  gate only if nothing re-recorded mid-flight, and `renderFrame()` skips until they match.
+- **triangle-led-front, second bug found by re-running the harness after the gate landed:** the
+  floor-noise bake ran in the *synchronous body* of `createHeroRenderer()` — a real encode before
+  anything could possibly be prepared, since a constructor cannot await. Moved into `prewarm()`,
+  after the prepare that already covered the combination.
+
+### Class C — re-record inside the sync callback (unchanged, T04-21 input)
+
+`apps/docs/examples/triangle-led-front/light-sources-raw.ts`: `clearBundle` is re-recorded inside
+`encode()` whenever the bake key changes (occluder toggle / clip-inset tunable). Its birth cannot be
+hoisted — the key is a continuous tunable, so the variants are unbounded — `p.bundles()` takes no
+per-call `pendingPipelines`, and the callback cannot await.
+
+QA scanned all 9 `bundle()` construction sites and confirmed this is the **only class-C site in the
+corpus**. It is also the **least severe** of the three: it needs a bake-key change to fire, whereas
+class A threw on frame 1. Under today's `"sync"` default it re-encodes inline exactly as it always
+has — nothing is broken by this ticket. Under `"throw"` it will raise on the first bake-key change.
+The fix is a frame-level policy or hoisting the re-record; both are *behaviour* changes to the
+example, which a purely-additive ticket does not make.
+
+**T04-21 inherits: one class-C site, and the standing instruction to run the extended docs harness
+rather than trust `--verify` alone.**
+
+## Verification, restated honestly
+
+| Corpus | How verified | Result |
+|---|---|---|
+| `examples/` (12) | shipped `prepare-corpus-throw.test.ts`, real modules, forced `"throw"` | 13/13 |
+| `apps/docs` (21 incl. hero) | extended QA harness, real prepare/frame/bundle, pumped rAF | 21/21 |
+| control (mock neutralized) | same harness, `"sync"` default | 21/21 — failures were real |
+| still not executed | `fft-ocean-surface` / `nextjs-flare` (need `document.createElement`), 3 ML renderers (no `createRenderer`) | `--verify` + typecheck only |
 
 ## What was deliberately NOT touched
 
