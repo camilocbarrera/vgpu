@@ -10,18 +10,26 @@
  * feature families, and so the guard costs one tiny function in any bundle that uses a factory.
  */
 import { VGPUError } from "./errors.ts";
+import { assertDeviceUsable } from "./lifecycle.ts";
 import { kernelOf, type Gpu, type Kernel, type Release } from "./kernel.ts";
 import type { QueryHostOptions } from "./query-ring.ts";
 
 /**
- * Kernel of `gpu`, or a thrown error when the gpu is disposed (`VGPU-GPU-DISPOSED`) or was not
- * created by `init()` (`VGPU-GPU-FOREIGN`, from `kernelOf`).
+ * Kernel of `gpu`, or a thrown error when the gpu is disposed (`VGPU-GPU-DISPOSED`), its device was
+ * really lost (`VGPU-DEVICE-LOST`) or it was not created by `init()` (`VGPU-GPU-FOREIGN`, from
+ * `kernelOf`).
+ *
+ * The loss check is the factory half of contract #19: a real device loss is terminal and graph-wide,
+ * so building anything new on that gpu — a surface, a target, a bundle, a `prepare()` batch — must
+ * fail at the door with the device-lost error, instead of handing back a doomed handle. It is NOT
+ * `disposed`: `gpu.dispose()` and a real loss stay two distinct signals with two distinct codes.
  *
  * @internal
  */
 export function liveKernel(gpu: Gpu, where: string): Kernel {
   const kernel = kernelOf(gpu);
   if (kernel.disposed) throw gpuDisposedError(where);
+  assertDeviceUsable(kernel.device, where);
   return kernel;
 }
 

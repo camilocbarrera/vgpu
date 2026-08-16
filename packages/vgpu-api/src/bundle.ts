@@ -6,6 +6,7 @@ import { normalizeSignature, signatureKeyOf, validateTargetSignature } from "./p
 import { bundleBlendConstantError, bundleDisposedError, bundleStencilReferenceError, compileFailedError, pipelinePendingError, surfaceNotInFrameError, VGPUError } from "./errors.ts";
 import { isFrameActive, isSurface } from "./surface.ts";
 import { FRAME_BUNDLE, type FrameBundleProtocol } from "./frame-protocols.ts";
+import { assertDeviceUsable } from "./lifecycle.ts";
 import { liveKernel } from "./live-kernel.ts";
 import type { PendingPipelines } from "./pending-pipelines.ts";
 import type { Gpu } from "./kernel.ts";
@@ -33,6 +34,7 @@ export function bundle(gpu: Gpu, opts: BundleOptions, record: (recorder: BundleR
     pendingPipelinesDefault: () => kernel.pendingPipelinesDefault(),
     reportError: (error) => { void kernel.reportError(error); },
     trackSettled: (promise) => { void kernel.trackDelivery(promise); },
+    assertDeviceUsable: (where) => assertDeviceUsable(kernel.device, where),
   }, opts, record);
 }
 
@@ -124,6 +126,12 @@ export interface BundleHost {
   reportError?(error: VGPUError): void;
   /** Joins `gpu.settled()`: background preparation started by a `"skip"` replay is observable. */
   trackSettled?(promise: Promise<unknown>): void;
+  /**
+   * Device-state guard of the owning gpu (contract #19): throws `VGPU-DEVICE-LOST` after a real loss
+   * and `VGPU-DEVICE-DISPOSED` after `gpu.dispose()`. Optional like the rest of this host, so a bundle
+   * built over a hand-made host (tests) keeps working — the guard is a capability, not a requirement.
+   */
+  assertDeviceUsable?(where: string): void;
 }
 
 let nextBundleId = 1;
@@ -205,6 +213,11 @@ class RecordedBundle implements Bundle, BundleBackReference {
    */
   prepareCombination(): Promise<GPURenderBundle> {
     if (this.#status === "disposed") return Promise.reject(bundleDisposedError(this.id, "prepare"));
+    // A lost/disposed device beats every readiness state, including the ready fast path below: there is
+    // nothing to compile against and nothing to replay. Rejected, not thrown, so the async entry point
+    // stays async for its callers.
+    try { this.host.assertDeviceUsable?.(`bundle '${this.id}' prepare`); }
+    catch (error) { return Promise.reject(error); }
     // prepare() on a ready bundle is a no-op: no new pipeline, no re-encode (contract #7, bundle half).
     if (this.#status === "ready" && this.#gpu) return Promise.resolve(this.#gpu);
     if (this.#preparing) return this.#preparing;
@@ -222,6 +235,9 @@ class RecordedBundle implements Bundle, BundleBackReference {
       const settled = await Promise.allSettled([...this.#draws].map((draw) => draw.pipelineForAsync(this.signature)));
       // dispose() is terminal, including for work that was already in flight when it landed.
       if (this.#status === "disposed") throw bundleDisposedError(this.id, "prepare");
+      // So is a device loss that landed mid-compile: encoding the bundle now would hand back a handle
+      // for a dead device. Thrown raw (not through #fail): the bundle did not fail, the device did.
+      this.host.assertDeviceUsable?.(`bundle '${this.id}' prepare`);
       // rebuild() replaced the recording mid-flight: prepare() prepares whatever recording is
       // current when it finishes, so warm the new one instead of encoding the old command list.
       if (this.#generation !== generation) continue;
@@ -244,6 +260,8 @@ class RecordedBundle implements Bundle, BundleBackReference {
   resolveForReplay(target: Target, policy?: PendingPipelines): GPURenderBundle | undefined {
     // Terminal beats policy: a disposed bundle has no native bundle to replay under any of them.
     if (this.#status === "disposed") throw bundleDisposedError(this.id, "replay");
+    // Same for the device behind it — a lost device cannot execute even an already-encoded bundle.
+    this.host.assertDeviceUsable?.(`bundle '${this.id}' replay`);
     // A different target signature is a usage error, not a readiness state: it is checked before the
     // policy and no policy can turn it into a skip or an inline re-encode.
     this.#assertSignature(target);
@@ -266,6 +284,7 @@ class RecordedBundle implements Bundle, BundleBackReference {
 
   rebuild(record: (recorder: BundleRecorder) => void): void {
     if (this.#status === "disposed") throw bundleDisposedError(this.id, "rebuild");
+    this.host.assertDeviceUsable?.(`bundle '${this.id}' rebuild`);
     this.#generation += 1;
     // The retained error belonged to the recording being replaced, so it goes away with it.
     this.#error = undefined;

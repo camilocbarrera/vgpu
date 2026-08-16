@@ -9,6 +9,7 @@ import {
   surfaceResizeReentrantError,
 } from "./errors.ts";
 import { frameState } from "./frame-state.ts";
+import { assertDeviceUsable } from "./lifecycle.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { serviceToken, type Gpu, type Kernel } from "./kernel.ts";
 
@@ -184,6 +185,7 @@ export class CanvasSurface implements Surface {
    */
   get color(): Texture {
     this.#assertLive();
+    assertDeviceUsable(this.device, "surface.color");
     return new Texture(this.device, this.context.getCurrentTexture(), {
       size: this.size,
       format: this.format,
@@ -192,7 +194,7 @@ export class CanvasSurface implements Surface {
     }, "external");
   }
   get colors(): readonly [Texture, ...Texture[]] { return [this.color]; }
-  get depth(): Texture | undefined { this.#assertLive(); this.#syncAttachments(); return this.#depthTexture; }
+  get depth(): Texture | undefined { this.#assertLive(); assertDeviceUsable(this.device, "surface.depth"); this.#syncAttachments(); return this.#depthTexture; }
   get sampleCount(): 1 | 4 { this.#assertLive(); return this.#sampleCount; }
   /**
    * Pipeline signature of this surface, derived from its configuration alone: the format fixed by
@@ -215,12 +217,16 @@ export class CanvasSurface implements Surface {
 
   resize(size: readonly [number, number]): void {
     this.#assertLive();
+    assertDeviceUsable(this.device, "surface.resize");
     if (this.#notifying) throw surfaceResizeReentrantError(this.options.label);
     this.#applyResize(sanitizeSize(size), this.#currentDpr, true);
   }
 
   applyAutoResize(): void {
     if (this.#isDisposed || !this.autoResize || !this.layoutBacked) return;
+    // Reached from the frame clock, not from user code: a lost device stops the auto-resize the same
+    // way it stops everything else, instead of quietly reconfiguring a canvas whose device is gone.
+    assertDeviceUsable(this.device, "surface.applyAutoResize");
     const nextDpr = effectiveDpr(this.options.dpr);
     const nextSize = layoutCanvasSize(this.canvas, nextDpr);
     this.#applyResize(nextSize, nextDpr, true);
@@ -228,6 +234,7 @@ export class CanvasSurface implements Surface {
 
   onResize(cb: (event: SurfaceResizeEvent) => void): () => void {
     this.#assertLive();
+    assertDeviceUsable(this.device, "surface.onResize");
     this.#callbacks.add(cb);
     this.#notifying = true;
     resizeCallbackDepth += 1;
@@ -236,14 +243,15 @@ export class CanvasSurface implements Surface {
     return () => { this.#callbacks.delete(cb); };
   }
 
-  async read(): Promise<Uint8Array> { this.#assertLive(); return this.color.read(); }
-  async readFloats(): Promise<Float32Array> { this.#assertLive(); return this.color.readFloats(); }
+  async read(): Promise<Uint8Array> { this.#assertLive(); assertDeviceUsable(this.device, "surface.read"); return this.color.read(); }
+  async readFloats(): Promise<Float32Array> { this.#assertLive(); assertDeviceUsable(this.device, "surface.readFloats"); return this.color.readFloats(); }
   onDestroy(cb: ResourceDestroyCallback<Target>): UnsubscribeResourceDestroy { this.#assertLive(); return this.#destroySignal.onDestroy(this, cb); }
   onTexturesRecreated(cb: () => void): () => void { this.#assertLive(); this.#texturesRecreatedCallbacks.add(cb); return () => { this.#texturesRecreatedCallbacks.delete(cb); }; }
 
   renderPassDescriptor(opts: RenderPassDescriptorOptions = {}): GPURenderPassDescriptor {
     const { clear = [0, 0, 0, 1], preserve, clearDepth, clearStencil, depthReadOnly } = opts;
     this.#assertLive();
+    assertDeviceUsable(this.device, "surface.renderPassDescriptor");
     // Encoding is the only path that needs the current texture — and the only one that needs the
     // internal attachments to match its size.
     this.#syncAttachments();
@@ -352,6 +360,14 @@ export class CanvasSurface implements Surface {
     return { width: size[0], height: size[1], dpr: this.#currentDpr, surface: this };
   }
 
+  /**
+   * Disposal of the surface itself. Every method that touches the device pairs it with
+   * `assertDeviceUsable(this.device, "surface.<method>")` (contract #19): after a real device loss the
+   * surface is terminal too, and it says so naming the method the caller wrote — instead of failing
+   * later inside `Device.createTexture`, or not failing at all for a surface without depth/MSAA
+   * attachments, which would keep encoding against the canvas of a device that is gone. Disposal is
+   * checked first: it is the more local fact, and it keeps its own error.
+   */
   #assertLive(): void {
     if (this.#isDisposed) throw surfaceDisposedError(this.options.label);
   }
