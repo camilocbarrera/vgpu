@@ -7,7 +7,7 @@ export { Geometry } from "./scene/geometry-descriptor.ts";
 export type { GeometryAttributeOverride, GeometryAttributes, GeometryBuffer, GeometryBufferOptions, GeometryData, GeometryOptions, GeometrySlice, GeometrySliceOptions } from "./scene/geometry-descriptor.ts";
 export type { BorrowedCommandEncoder, CopyableBuffer, CopyBufferOptions, Frame, FrameCallback, FrameComputeOptions, FrameOptions, FramePass, FramePassOptions, FrameLoopHandle, FrameLoopOptions, FrameRunner, SyncReturn } from "./frame.ts";
 export type { Effect, EffectOptions } from "./effect.ts";
-export type { CompileTarget, Target, TargetOptions, TargetSignature, TargetTextureOptions } from "./target.ts";
+export type { CompileTarget, RenderDestination, Target, TargetOptions, TargetSignature, TargetTextureOptions } from "./target.ts";
 export { VGPUError } from "./errors.ts";
 export type { Buffer, Device, ResourceIdentity, Texture, VGPUAdapter } from "@vgpu/core";
 export { Uniform } from "./core/uniform.ts";

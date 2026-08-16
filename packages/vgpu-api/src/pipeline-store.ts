@@ -88,10 +88,13 @@ export function normalizeSignature(arg: CompileTarget): TargetSignature {
     };
   }
   if (typeof arg !== "object" || arg === null) return { colors: [] };
+  // Everything left is a signature bag: a `RenderDestination` always answers `isTarget` (it owns a
+  // `renderPassDescriptor`) or publishes `pipelineSignature`, so only `TargetSignature` reaches here.
+  const bag = arg as TargetSignature;
   return {
-    colors: Array.isArray(arg.colors) ? [...arg.colors] : (arg.colors as TargetSignature["colors"] | undefined ?? []),
-    depth: arg.depth,
-    sampleCount: arg.sampleCount ?? 1,
+    colors: Array.isArray(bag.colors) ? [...bag.colors] : (bag.colors as TargetSignature["colors"] | undefined ?? []),
+    depth: bag.depth,
+    sampleCount: bag.sampleCount ?? 1,
   };
 }
 
