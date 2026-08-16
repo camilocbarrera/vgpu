@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { Worker } from "node:worker_threads";
 import { describe, expect, test } from "vitest";
 import { init, effect, frame, surface, target } from "../../src/node.ts";
@@ -31,7 +35,7 @@ const YELLOW = `
 
 describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Surface Docker GPU acceptance", () => {
   test("§7.14 surface render, resize, re-render, and readback use the new physical size", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const canvas = gpuCanvasLike(8, 8, true);
       const canvasSurface = surface(gpu, canvas, { dpr: 1, autoResize: false, label: "gpuSurface" });
@@ -62,7 +66,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("Surface Docker GPU accept
   });
 
   test("§7.16 multi-canvas surfaces render and read back independently", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const a = surface(gpu, gpuCanvasLike(6, 6, true), { dpr: 1, label: "surfaceA" });
       const b = surface(gpu, gpuCanvasLike(5, 5, true), { dpr: 1, label: "surfaceB" });

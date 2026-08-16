@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { expect, test } from "vitest";
 import { init, effect, frame, target } from "../../src/node.ts";
 
@@ -11,7 +15,7 @@ const RED_CHANNEL = `
 `;
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("rgba16float target readback keeps HDR values", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba16float" });
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (pass) => pass.draw(effect(gpu, HDR))));
@@ -30,7 +34,7 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("rgba16float target readback k
 });
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("rgba32float target readback is exact", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba32float" });
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (pass) => pass.draw(effect(gpu, HDR))));
@@ -45,7 +49,7 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("rgba32float target readback i
 });
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("r32float target reads back one component per texel across padded rows", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     // 3 texels per row = 12 bytes, well under the 256-byte copy alignment: exercises row unpadding.
     const colorTarget = target(gpu, { size: [3, 2], format: "r32float" });
@@ -60,7 +64,7 @@ test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("r32float target reads back on
 });
 
 test.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("rgba8unorm readback is unchanged and readFloats normalizes it", async () => {
-  const gpu = await init();
+  const gpu = await init({ pendingPipelines: "sync" });
   try {
     const colorTarget = target(gpu, { size: [2, 2], format: "rgba8unorm" });
     frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, clear: [0, 0, 0, 1] }, (pass) => pass.draw(effect(gpu, `

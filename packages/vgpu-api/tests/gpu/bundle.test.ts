@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { describe, expect, test } from "vitest";
 import { UniformPool } from "../../src/core.ts";
 import { init, bundle, draw, effect, frame, target } from "../../src/node.ts";
@@ -43,7 +47,7 @@ struct Out { @builtin(position) position: vec4f, @location(0) uv: vec2f }
 
 describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu bundle GPU acceptance", () => {
   test("§9 bundle replay and dynamic draw coexist in one pass", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const scene = target(gpu, { size: [8, 8], format: "rgba8unorm" });
       const floor = effect(gpu, { shader: SOLID_GREEN, label: "floor" });
@@ -68,7 +72,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu bundle GPU acceptanc
   });
 
   test("R4 wraps native async validation for raw claimed bind groups without metadata", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const cube = draw(gpu, { shader: OFFSET_COLOR, label: "cube", set: { globals: { tint: 1 } } });
       const colorTarget = target(gpu, { size: [4, 4], format: "rgba8unorm" });
@@ -104,7 +108,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu bundle GPU acceptanc
   });
 
   test("§10 UniformPool dynamic offsets can draw 1000 pushed objects and sample selected offsets", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const cube = draw(gpu, { shader: OFFSET_COLOR, label: "cube", set: { globals: { tint: 1 } } });
       const pool = new UniformPool(gpu.device, { capacityBytes: 1 << 20 });
@@ -132,7 +136,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu bundle GPU acceptanc
   });
 
   test("§9 ping-pong with bundles uses two explicit recordings without staleness", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       let read = target(gpu, { size: [4, 4], format: "rgba8unorm" });
       let write = target(gpu, { size: [4, 4], format: "rgba8unorm" });

@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { describe, expect, test } from "vitest";
 import { init, draw, frame, target } from "../../src/node.ts";
 
@@ -26,7 +30,7 @@ struct VertexOut {
 
 describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu instancing GPU acceptance", () => {
   test("instanced quads render more than one visible copy", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const colorTarget = target(gpu, { size: [32, 16], format: "rgba8unorm" });
       const quads = draw(gpu, { shader: INSTANCED_QUADS, label: "instanced-quads", vertices: 6, instances: 2 });

@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { describe, expect, test } from "vitest";
 import { init, effect, frame, target, uniforms } from "../../src/node.ts";
 
@@ -21,7 +25,7 @@ fn globalsMouse() -> f32 { return g.mouse.x; }
 
 describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("uniforms(gpu) Docker GPU", () => {
   test("wave and blur share one animated globals object", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     const createBufferCount = countCreateBufferCalls(gpu.gpu);
     try {
       const globals = uniforms(gpu, { time: 0, mouse: [0, 0] });

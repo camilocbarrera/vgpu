@@ -286,9 +286,17 @@ list from what seemed relevant instead of from what CI actually runs.**
 3. The vacuous s05 assertion above, which is the same disease in a third form: a check that cannot
    fail is a gate that does not exist.
 
-**Two rules this earns, for T04-21 and the rest of the train:**
+**Three rules this earns, for T04-21 and the rest of the train:**
 
-- Derive the local gate list from the CI workflow, not from memory.
+- Derive the local gate list from the CI workflow, not from memory — **and that list INCLUDES the
+  conditional jobs.** `docker-gpu` runs vitest with `VGPU_DOCKER_TEST=1`, so a plain `vitest run`
+  SKIPS every `skipIf(process.env.VGPU_DOCKER_TEST !== "1")` suite and reports green over a hole.
+  A local sweep must be `VGPU_DOCKER_TEST=1 npx vitest run`, and a blast radius measured without it
+  is not a blast radius. T04-21 learned this from the PR: its 173-failure inventory was complete
+  for the un-gated suite and missed 26 GPU-gated failures, which CI found instead. When the env var
+  changes what runs, run it BOTH ways and diff against the same two-way run on the base commit —
+  the base run is what separates your regressions from the environment's pre-existing noise (in the
+  sandbox: 7 snapshot/adapter failures that have nothing to do with the change).
 - **A new test must run in CI's ENVIRONMENT, not just the author's.** If it needs a real adapter it
   is either hermetic by mock or it lives in the GPU-gated suite behind
   `skipIf(process.env.VGPU_DOCKER_TEST !== "1")` — the convention `examples/*/example.test.ts`

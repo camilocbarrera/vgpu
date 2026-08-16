@@ -1,3 +1,7 @@
+// T04-21 (the `pendingPipelines` default is now "throw"): the tests below name `"sync"` at init().
+// Their subject is what the DEVICE does -- pixels, blend, resolve, readback, filterability -- not
+// readiness, and `"sync"` is exactly the eager compile-on-encode they were written against. The
+// default is covered on a real device by by-example-gpu.test.ts, which prepares instead.
 import { describe, expect, test } from "vitest";
 import { init, draw, effect, sampler, target } from "../../src/node.ts";
 
@@ -37,7 +41,7 @@ const dockerTest = process.env.VGPU_DOCKER_TEST === "1";
 
 describe.skipIf(!dockerTest)("fragment-only effect UV orientation", () => {
   test("uses v=0 for the top row", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const colorTarget = target(gpu, { size: [SIZE, SIZE], format: "rgba8unorm" });
       effect(gpu, UV_PATTERN).draw(colorTarget);
@@ -57,7 +61,7 @@ describe.skipIf(!dockerTest)("fragment-only effect UV orientation", () => {
   });
 
   test("copies a target pixel-for-pixel when sampling at the injected uv", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const source = target(gpu, { size: [SIZE, SIZE], format: "rgba8unorm" });
       const output = target(gpu, { size: [SIZE, SIZE], format: "rgba8unorm" });
@@ -77,7 +81,7 @@ describe.skipIf(!dockerTest)("fragment-only effect UV orientation", () => {
   });
 
   test("matches the @vgpu/wgsl-std fullscreenTriangleUv orientation", async () => {
-    const gpu = await init();
+    const gpu = await init({ pendingPipelines: "sync" });
     try {
       const injected = target(gpu, { size: [SIZE, SIZE], format: "rgba8unorm" });
       const helper = target(gpu, { size: [SIZE, SIZE], format: "rgba8unorm" });
