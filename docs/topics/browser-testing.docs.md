@@ -2,14 +2,21 @@
 
 Browser tests should exercise the same public API users copy: `init()`, `surface(gpu, canvas, opts)`, explicit targets, and deterministic frame submission. Avoid hidden app globals and avoid relying on a continuous loop in assertions.
 
-```text
-import { init } from "vgpu";
+```ts
+import { effect, frame, init, prepare, surface } from "vgpu";
 
-export async function renderOnce(canvas: HTMLCanvasElement) {
+declare const WGSL: string;
+
+export async function renderOneFrame(canvas: HTMLCanvasElement) {
   const gpu = await init();
-  const surface = surface(gpu, canvas, { dpr: 1, autoResize: false });
-  const effect = effect(gpu, WGSL, { set: { time: 0, texel: surface.texelSize } });
-  frame(gpu, (f) => f.pass({ target: surface, clear: [0, 0, 0, 1] }, (p) => p.draw(effect)));
+  const screen = surface(gpu, canvas, { dpr: 1, autoResize: false });
+  const fx = effect(gpu, {
+    shader: WGSL,
+    values: { params: { time: 0, texel: screen.texelSize } },
+  });
+  // Pipelines are created here, on the async path — never inside the frame.
+  await prepare(gpu, [{ draw: fx, target: screen }]);
+  frame(gpu, (f) => f.pass({ target: screen, clear: [0, 0, 0, 1] }, (p) => p.draw(fx)));
   return gpu;
 }
 ```
@@ -17,7 +24,9 @@ export async function renderOnce(canvas: HTMLCanvasElement) {
 ## Test checklist
 
 - Use fixed DPR/size (`dpr: 1`, `autoResize: false`, or explicit `size`) for pixel snapshots.
-- Submit with `frame(gpu, ...)` for one deterministic frame, not `requestAnimationFrame` loops.
+- Submit with `frame(gpu, ...)` for one deterministic frame, not `requestAnimationFrame` loops. Frame callbacks are synchronous: `await` before the frame, never inside it.
+- `await prepare(gpu, [...])` every combination the test encodes. The default `pendingPipelines: "throw"` is uniform across browser, node and mock — there is no dev/prod divergence to work around — so a missing `prepare()` is a deterministic `VGPU-PIPELINE-PENDING`, not a flaky first-frame stall. For a standalone render, `await renderOnce(gpu, target, cb)` awaits readiness itself.
+- `await gpu.settled()` before asserting on asynchronous errors or readbacks: it snapshots the submissions, compilations and readbacks already started, flushes pending `gpu.onError` deliveries, and never rejects.
 - Read from explicit surfaces or offscreen targets with `target.read()`.
 - Keep WGSL imports pure: modules export helpers only; bindings live in the entry shader. If a module declares a binding, fix `VGPU-RESOLVE-MODULE-BINDING`.
 - For headless tests use `vgpu/mock` for deterministic unit tests and `vgpu/node` only when Dawn/WebGPU behavior is under test.
