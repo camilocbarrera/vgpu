@@ -20,7 +20,11 @@ export function createRenderer(options: BrowserRendererOptions<InstancedRenderin
  const rebuild = (count: InstanceCount, buildGeneration: number) => { if (!gpu || !colorTarget || disposed) return; void createScene(gpu, colorTarget, count).then((next) => { if (disposed || buildGeneration !== generation) { next.geometry.destroy(); return; } scene?.geometry.destroy(); scene = next; }, (error: unknown) => { if (disposed || buildGeneration !== generation) return; fail(error); }); };
  const setControls = (next: Readonly<InstancedRenderingControls>) => { if (disposed || !validCount(next.count) || next.count === controls.count) return; controls = { count: next.count }; const buildGeneration = ++generation; if (!initializing) rebuild(controls.count, buildGeneration); };
  const dispose = () => { if (disposed) return; disposed = true; generation++; loop?.stop(); loop = undefined; if (resizeFrame) cancelAnimationFrame(resizeFrame); resizeFrame = 0; pendingSize = undefined; observer?.disconnect(); observer = undefined; if (typeof window !== 'undefined') window.removeEventListener('resize', onWindowResize); scene?.geometry.destroy(); scene = undefined; (colorTarget as { destroy?: () => void } | undefined)?.destroy?.(); colorTarget = undefined; canvasSurface?.dispose(); canvasSurface = undefined; gpu?.dispose(); gpu = undefined; };
- const initialize = async () => { const { init } = await import('vgpu'); if (disposed) return; const nextGpu = await init(); if (disposed) { nextGpu.dispose(); return; } gpu = nextGpu; canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] }); colorTarget = target(gpu, { size: canvasSurface.size, format: 'rgba8unorm', depth: true }); blit = createBlit(gpu, colorTarget, canvasSurface); while (!disposed) { const buildGeneration = generation; let nextScene: Scene; try { nextScene = await createScene(gpu, colorTarget, controls.count); } catch (error) { if (disposed) return; if (buildGeneration !== generation) continue; throw error; } if (disposed) { nextScene.geometry.destroy(); return; } if (buildGeneration !== generation) { nextScene.geometry.destroy(); continue; } scene = nextScene; break; } if (disposed) return; initializing = false; observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure); observer?.observe(options.canvas); window.addEventListener('resize', onWindowResize); measure(); const time = clock(gpu); loop = frameLoop(gpu, (currentFrame) => { if (!disposed && scene && blit && colorTarget && canvasSurface && gpu) render(currentFrame, scene, blit, colorTarget, canvasSurface, time.time); }); };
+ const initialize = async () => { const { init } = await import('vgpu'); if (disposed) return; const nextGpu = await init(); if (disposed) { nextGpu.dispose(); return; } gpu = nextGpu; canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] }); colorTarget = target(gpu, { size: canvasSurface.size, format: 'rgba8unorm', depth: true }); blit = createBlit(gpu, colorTarget, canvasSurface);
+    // The live path encodes the blit into the surface every frame just as the thumbnail does; only
+    // the thumbnail prepared it. `render()` runs from a frameLoop callback that cannot await.
+    await prepare(gpu, [{ draw: blit, target: canvasSurface }]); if (disposed) return;
+    while (!disposed) { const buildGeneration = generation; let nextScene: Scene; try { nextScene = await createScene(gpu, colorTarget, controls.count); } catch (error) { if (disposed) return; if (buildGeneration !== generation) continue; throw error; } if (disposed) { nextScene.geometry.destroy(); return; } if (buildGeneration !== generation) { nextScene.geometry.destroy(); continue; } scene = nextScene; break; } if (disposed) return; initializing = false; observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measure); observer?.observe(options.canvas); window.addEventListener('resize', onWindowResize); measure(); const time = clock(gpu); loop = frameLoop(gpu, (currentFrame) => { if (!disposed && scene && blit && colorTarget && canvasSurface && gpu) render(currentFrame, scene, blit, colorTarget, canvasSurface, time.time); }); };
  const ready = initialize().catch((error: unknown) => { if (disposed) return; fail(error); throw error; });
  return { ready, setControls, invalidate() {}, resize, dispose };
 }
@@ -46,10 +50,14 @@ async function createScene(gpu: Gpu, colorTarget: Target, n: number): Promise<Sc
   const drawable = draw(gpu, { shader: sceneWgsl, geometry: geo, label: `instanced-cubes-${n}` });
   drawable.set("uniforms", { light: [-0.45, -0.75, -0.35] });
   try {
-    // Prepared before `bundle()` records it: the recording needs the pipeline, so this await
-    // cannot move below the construction on the next line.
-    await prepare(gpu, [{ draw: drawable, target: colorTarget }]);
     const recorded = bundle(gpu, { target: colorTarget, label: `instanced-cubes-${n}` }, (b) => b.draw(drawable));
+    // `bundle()` ALWAYS lands on `pending-pipelines`: the native bundle is not materialized at
+    // construction (bundle.ts, the frozen transition table), and recording needs no pipelines. The
+    // only edge out is `prepare(gpu, [{ bundle }])`, which compiles the recorded draw AND encodes
+    // the native bundle -- so it subsumes the `{ draw, target }` request that used to sit above,
+    // and it has to come AFTER the recording. Every consumer publishes the scene only once this
+    // resolves, so a bundle never reaches the loop unprepared.
+    await prepare(gpu, [{ bundle: recorded }]);
     return { geometry: geo, draw: drawable, bundle: recorded, extent: n * 0.64 };
   } catch (error) {
     geo.destroy();

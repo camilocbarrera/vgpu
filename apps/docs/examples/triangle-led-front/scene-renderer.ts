@@ -135,6 +135,17 @@ export function createHeroRenderer(
   let rgbDeployActive = false;
   let outputTarget = opts.target;
   let destroyed = false;
+  // Readiness generation. `rebuild()` and `setOutputTarget()` re-record the floor bundles (and
+  // `rebuild()` builds a whole new `raycastBundle`) SYNCHRONOUSLY, while the frame loop is running
+  // and `prewarm()` is fire-and-forget (renderer.ts:43). A freshly recorded bundle is always on
+  // `pending-pipelines`, so without this gate the very next frame replays an unprepared bundle.
+  // Hoisting the birth out of the frame callback made the bundles preparable; it did NOT make them
+  // prepared, and a memoized cache hit is not readiness. `renderFrame()` therefore skips until the
+  // prewarm covering the CURRENT generation has resolved: a resize shows the previous frame a
+  // little longer instead of throwing.
+  let sceneGeneration = 0;
+  let preparedGeneration = -1;
+  let noiseBaked = false;
 
   const samplerState = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
   const noiseTarget = target(gpu, {
@@ -147,11 +158,6 @@ export function createHeroRenderer(
   const darkFloorDraw = draw(gpu, { shader: darkFloorWgsl, vertices: 3 });
   const raycastDraw = draw(gpu, { shader: raycastWgsl, vertices: 3 });
 
-  // Bake the time-invariant floor-noise target once. It is rebuilt only if this renderer is rebuilt.
-  frame(gpu, (currentFrame: Frame) => {
-    currentFrame.pass({ target: noiseTarget }, (pass: FramePass) => pass.draw(noiseDraw));
-  });
-
   let parts = buildParts(opts.css);
   if (outputTarget) recordFloorBundles(parts, outputTarget);
 
@@ -160,6 +166,7 @@ export function createHeroRenderer(
     renderFrame(currentFrame, args) {
       if (destroyed) return;
       if (!outputTarget) return;
+      if (preparedGeneration !== sceneGeneration) return;
       const currentParts = parts;
       const currentTheme = theme;
       const resolved = heroFrameState.resolveFrame({
@@ -238,6 +245,7 @@ export function createHeroRenderer(
     },
     setOutputTarget(colorTarget) {
       outputTarget = colorTarget;
+      sceneGeneration += 1;
       recordFloorBundles(parts, colorTarget);
     },
     rebuild(css) {
@@ -247,6 +255,7 @@ export function createHeroRenderer(
       const next = buildParts(css, parts.leds);
       destroyParts(parts);
       parts = next;
+      sceneGeneration += 1;
       if (outputTarget) recordFloorBundles(parts, outputTarget);
     },
     setBrush(b) {
@@ -261,6 +270,7 @@ export function createHeroRenderer(
     async prewarm() {
       const colorTarget = outputTarget;
       if (!colorTarget) return;
+      const generation = sceneGeneration;
       const ready = parts.lightSourcesRaw.ready;
       // The two floor draws keep a signature literal: which one runs is a THEME choice made per
       // frame (`currentTheme === 'light' ? … : …`), so both must be warm and neither owns the
@@ -287,6 +297,21 @@ export function createHeroRenderer(
         ]),
         ready ?? Promise.resolve(),
       ]);
+      // Bake the time-invariant floor-noise target once, HERE. It used to run in the synchronous
+      // body of `createHeroRenderer()`, which is a real encode before anything could possibly have
+      // been prepared -- the constructor cannot await, so under a throw default that `frame()` was
+      // the first thing to fail (`rgba16float:none:1`). The combination is in the prepare above, so
+      // baking after it is the whole fix; it stays once-only because `noiseTarget` is owned by this
+      // closure and outlives every `rebuild()`.
+      if (!destroyed && !noiseBaked) {
+        frame(gpu, (currentFrame: Frame) => {
+          currentFrame.pass({ target: noiseTarget }, (pass: FramePass) => pass.draw(noiseDraw));
+        });
+        noiseBaked = true;
+      }
+      // Only open the gate if nothing re-recorded while this prewarm was in flight; a resize that
+      // lands mid-await bumped the generation and owns its own prewarm.
+      if (!destroyed && generation === sceneGeneration) preparedGeneration = generation;
     },
     destroy() {
       if (destroyed) return;

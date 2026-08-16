@@ -98,7 +98,7 @@ export async function prepareFluid(fluid: Fluid, output: Output): Promise<void> 
   const config = { dye_size: [DYE_WIDTH, DYE_HEIGHT], output_size: output.size };
   fluid.passes.display[0].set({ config, dye: fluid.dye.read });
   fluid.passes.display[1].set({ config, dye: fluid.dye.write });
-  fluid.bundles = [0, 1].map((parity) => bundle(fluid.gpu, { target: { colors: [output.format] } }, (recorded) => {
+  const recordedBundles = [0, 1].map((parity) => bundle(fluid.gpu, { target: { colors: [output.format] } }, (recorded) => {
     recorded.draw(fluid.passes.display[parity]!);
   })) as [Bundle, Bundle];
   // The encode site is `p.bundles(fluid.bundles[fluid.step & 1])`, so the combination that has to
@@ -108,7 +108,16 @@ export async function prepareFluid(fluid: Fluid, output: Output): Promise<void> 
   // `display.compile({ colors: [output.format] })` calls this replaces are not merely moved: they
   // are subsumed. The order matters — the bundles must EXIST before they can be prepared, so this
   // await moved below their construction.
-  await prepare(fluid.gpu, [{ bundle: fluid.bundles[0] }, { bundle: fluid.bundles[1] }]);
+  //
+  // ...and moving it below the construction is exactly what opened a window, so the new bundles
+  // are held in a LOCAL until they are ready. `prepareFluid()` is re-run on resize while the frame
+  // loop keeps calling `renderFluid()`, and on resize `output` is the SAME surface object, so the
+  // `fluid.output !== output` guard cannot fire: publishing `fluid.bundles` before the await hands
+  // the running loop a bundle still on `pending-pipelines`. Publishing after means the loop keeps
+  // replaying the previous, ready pair for the few frames the compile takes — the resize is late,
+  // never broken. (The bundles a resize replaces are the ones this function has always dropped.)
+  await prepare(fluid.gpu, [{ bundle: recordedBundles[0] }, { bundle: recordedBundles[1] }]);
+  fluid.bundles = recordedBundles;
   fluid.output = output;
 }
 

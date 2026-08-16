@@ -81,6 +81,10 @@ export function createRenderer(options: BrowserRendererOptions): ExampleRenderer
     canvasSurface = surface(gpu, options.canvas, { dpr: [1, 2] });
     colorTarget = target(gpu, { size: canvasSurface.size, format: 'rgba8unorm', depth: true });
     blit = createBlit(gpu, colorTarget, canvasSurface);
+    // The live path encodes the blit into the surface every frame just as the thumbnail does; only
+    // the thumbnail prepared it. `render()` runs from a frameLoop callback that cannot await.
+    await prepare(gpu, [{ draw: blit, target: canvasSurface }]);
+    if (disposed) return;
     const nextScene = await createScene(gpu, colorTarget);
     if (disposed) {
       nextScene.geometry.destroy();
@@ -154,11 +158,6 @@ async function createScene(gpu: Gpu, colorTarget: Target): Promise<Scene> {
     const draws = slices.map((slice, i) => draw(gpu, { shader: sceneWgsl, geometry: slice, label: `batch-${i}` }));
     const initial = camera(2.4, colorTarget);
     for (const drawable of draws) drawable.set({ light: [-0.45, -0.75, -0.35], time: 2.4, viewProjection: initial });
-    // The four draws are built by `map` over the slice list, so their requests are too. They are
-    // prepared as `{ draw, target }` even though every encode goes through the bundle below,
-    // because `bundle()` RECORDS them at construction — the recording needs the pipelines, and it
-    // happens on the next line, before any `prepare({ bundle })` could run.
-    await prepare(gpu, draws.map((drawable) => ({ draw: drawable, target: colorTarget })));
     // Slices freeze their ranges; this bundle also captures the pyramid's equivalent call-level override.
     // A changing range would require a direct pass.draw override or re-recording the bundle.
     const recorded = bundle(gpu, { target: colorTarget, label: 'batch-rendering-primitives' }, (b) => {
@@ -167,6 +166,13 @@ async function createScene(gpu: Gpu, colorTarget: Target): Promise<Scene> {
       b.draw(draws[2]!);
       b.draw(draws[3]!);
     });
+    // `bundle()` ALWAYS lands on `pending-pipelines` — the native bundle is not materialized at
+    // construction (bundle.ts, the frozen transition table). Recording needs no pipelines at all;
+    // the only edge out of that state is `prepare(gpu, [{ bundle }])`, which compiles the recorded
+    // draws AND encodes the native bundle. So the request is the BUNDLE, and it comes after the
+    // recording. Preparing the draws beforehand was a faithful port of the legacy prewarm that
+    // only ever worked because "sync" materializes the bundle inline on first replay.
+    await prepare(gpu, [{ bundle: recorded }]);
     return { geometry: geo, draws, bundle: recorded };
   } catch (error) {
     geo.destroy();
