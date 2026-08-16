@@ -1,0 +1,18 @@
+{
+  "$comment": "T04-14: narrow typecheck fixture for the apps/docs blind spot (T04-10, incidents #328/#337). Extends the real tsconfig.json (same `strict: true`) but only INCLUDEs examples/**, components/hero/** and the generated examples registry -- NOT app/**/content/** which need Next's generated route types (LayoutProps/RouteContext) that only exist after `next build`/`next dev` (see apps/docs/package.json `$comment:typecheck`). Do not widen `include` to app/** without also giving this project the generated .next/types.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "plugins": []
+  },
+  "include": [
+    "examples/**/*.ts",
+    "examples/**/*.tsx",
+    "components/hero/**/*.ts",
+    "components/hero/**/*.tsx",
+    "lib/examples-source.generated.ts",
+    "wgsl.d.ts",
+    "webgpu-types.d.ts"
+  ],
+  "exclude": ["node_modules"]
+}
