@@ -228,7 +228,7 @@ Fixing it revealed a **layered** failure: the live `createRenderer` path never p
   anything could possibly be prepared, since a constructor cannot await. Moved into `prewarm()`,
   after the prepare that already covered the combination.
 
-### Class C — re-record inside the sync callback (unchanged, T04-21 input)
+### Class C — re-record inside the sync callback (RESOLVED by T04-21)
 
 `apps/docs/examples/triangle-led-front/light-sources-raw.ts`: `clearBundle` is re-recorded inside
 `encode()` whenever the bake key changes (occluder toggle / clip-inset tunable). Its birth cannot be
@@ -242,8 +242,22 @@ has — nothing is broken by this ticket. Under `"throw"` it will raise on the f
 The fix is a frame-level policy or hoisting the re-record; both are *behaviour* changes to the
 example, which a purely-additive ticket does not make.
 
-**T04-21 inherits: one class-C site, and the standing instruction to run the extended docs harness
-rather than trust `--verify` alone.**
+**T04-21 inherited exactly this: one class-C site, and the standing instruction to run the extended
+docs harness rather than trust `--verify` alone.** It needed NEITHER of the two options sketched above,
+and finding that out is the useful part of the record: `recordClearBundle()` took no arguments and
+closed only over draws created once, so every recording it produced was identical. The bake key
+never travelled through the recording — it travels through `.set("cfg", ...)` on the two draws,
+rewritten on every `encode()` before either branch, which a replayed bundle picks up. The
+re-record was already a no-op under `"sync"` (an invisible recompile of a byte-identical bundle);
+`"throw"` only made it visible, as a crash. T04-21 deleted it: on a key change the bundle prepared
+at construction is replayed, in the same frame, with no new pipeline and no new recording. A
+readiness gate would have bought a frame of latency and a dropped-toggle window to protect a
+recording that never becomes unprepared.
+
+Executed, not asserted: `apps/docs/examples/triangle-led-front/light-sources-bake.test.ts` toggles
+the key (including a per-frame clip-inset drag) under the real default and pins the conduct — no
+throw, and the bake lands in the SAME frame. Both the pre-fix re-record and a deferred-bake gate
+fail it.
 
 ## Verification, restated honestly
 

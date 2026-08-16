@@ -34,7 +34,9 @@ export type PendingPipelines = "throw" | "skip" | "sync";
  * with a temporary `"sync"` default, index invariant 2): every encode site of the corpus reaches
  * its first frame through `prepare()` — `examples/*` and `apps/docs/examples/*` were migrated by
  * T04-19 and the last re-record inside a synchronous frame callback
- * (`triangle-led-front/light-sources-raw.ts`) was hoisted behind a readiness gate by this ticket.
+ * (`triangle-led-front/light-sources-raw.ts`) was deleted by this ticket, which is all it ever
+ * needed: that recording never depended on anything the frame changed, so the prepared bundle is
+ * replayed instead of being rebuilt.
  * `packages/vgpu-api/tests/prepare-corpus-throw.test.ts` executes that claim against the shipped
  * example modules instead of asserting it.
  *
