@@ -48,6 +48,38 @@ prepare-insertion, is semi-automated and uses the same primitives for its automa
   classification}` JSON report, and `writeUnlessDryRun({dryRun, file, text})` as the single choke
   point every codemod must funnel writes through.
 
+## Codemod entrypoints
+
+- **`unified-signature.mjs`** (T04-16) — 3-argument `effect(gpu, shader, opts)` onto the unified
+  options bag. Shape-only; needs no checker.
+- **`ownership-binding-scoped.mjs`** (T04-17) — the flat `.set({…})` bag onto binding-scoped
+  `.set("b", v)` / `.bind("b", r)` / construction-time `bindings`. Three oracles (checker for the
+  receiver, checker for each value, WGSL reflection for each key).
+- **`dispatch-migration.mjs`** (T04-18) — legacy lazy-sync `Compute.dispatch()` at the call sites
+  onto `f.compute(inst, n)` (inside a frame callback, one shared submit) or
+  `await inst.dispatchOnce(n)` (standalone). **The `await` is the whole difficulty**: `dispatchOnce()`
+  is async and `dispatch()` is not, so the transform is only sound where inserting an `await` costs
+  nothing observable — an already-`async` enclosing function, or the top level of an ES module.
+  Every other context (a sync callback handed to a third party, a method whose `: void` return is
+  fixed by an interface the module exports, a generator, a call whose value is consumed) goes to a
+  named `ambiguous-*` bucket **with a reason**, because forcing async there would change a published
+  contract. `dispatch()` cannot be deleted in T04-22 while those buckets are non-empty, so leaving
+  them silent would turn a design decision into a build break three tickets later.
+  Buckets: `auto-f-compute` · `auto-dispatch-once` · `ambiguous-sync-context` ·
+  `ambiguous-indirect-options` (`f.compute()` has no `indirect` overload) · `ambiguous-await-position`
+  · `ambiguous-arguments` · `unresolved-receiver` · `not-a-compute` · `excluded-test-subject` ·
+  `skipped-parse-error`.
+
+### Standing corpus invariants (`*.corpus.test.ts`)
+
+Two of these codemods ship a `.corpus.test.ts` next to their unit suite. They are not unit tests:
+they re-run the codemod's own classifier over the **real, migrated tree** and assert a property of
+the result (T04-17: no construction site pins a value read through a mutated object; T04-18: no
+`.dispatch()` remains in a context the codemod could have migrated on its own). They exist because
+the behaviour at these call sites is only asserted by suites gated behind `VGPU_DOCKER_TEST`, so on
+a normal CI run *nothing else in the repo would notice* a regression there. They are also what makes
+a new example file with a legacy call site fail immediately instead of at the cut.
+
 ## The hard rule
 
 **Every codemod in this train runs with `--dry-run` first.** Its JSON report (from

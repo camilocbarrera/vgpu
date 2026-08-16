@@ -30,10 +30,10 @@ async function projectionFixture(seed: boolean) {
     if (seed) for (let y=0;y<H;y++) for(let x=0;x<W;x++){const i=(y*W+x)*2;initial[i]=Math.sin(x*.71+y*.23)*.7;initial[i+1]=Math.cos(x*.19-y*.83)*.6;}
     velocity.write(initial); projected.write(new Float32Array(N*2)); pressure.read.write(new Float32Array(N)); pressure.write.write(new Float32Array(N));
     const sim={size:[W,H]}; const div=compute(gpu, DIVERGENCE); const jacobi=compute(gpu, PRESSURE); const project=compute(gpu, PROJECT);
-    div.set({sim,velocity,divergence:before}).dispatch(2,2);
-    for(let i=0;i<8;i++){jacobi.set({sim,src:pressure.read,divergence:before,dst:pressure.write}).dispatch(2,2);pressure.swap();}
-    project.set({sim,src:velocity,pressure:pressure.read,dst:projected}).dispatch(2,2);
-    div.set({sim,velocity:projected,divergence:after}).dispatch(2,2);
+    await div.set({sim,velocity,divergence:before}).dispatchOnce(2,2);
+    for(let i=0;i<8;i++){await jacobi.set({sim,src:pressure.read,divergence:before,dst:pressure.write}).dispatchOnce(2,2);pressure.swap();}
+    await project.set({sim,src:velocity,pressure:pressure.read,dst:projected}).dispatchOnce(2,2);
+    await div.set({sim,velocity:projected,divergence:after}).dispatchOnce(2,2);
     const [preBytes,postBytes,projectedBytes,pressureBytes]=await Promise.all([before.read(),after.read(),projected.read(),pressure.read.read()]);
     return { pre:new Float32Array(preBytes),post:new Float32Array(postBytes),projected:new Float32Array(projectedBytes),pressure:new Float32Array(pressureBytes) };
   } finally { gpu.dispose(); }

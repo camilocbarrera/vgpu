@@ -18,6 +18,6 @@ export async function runComputeExample() {
   src.write(new Float32Array([1, 2, 3, 4]));
   const sim = compute(gpu, { shader: SIM, label: "sim" });
   sim.set({ dt: 0.5, src, dst });
-  sim.dispatch(1);
+  await sim.dispatchOnce(1);
   return { gpu, dst };
 }
