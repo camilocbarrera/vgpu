@@ -6,6 +6,7 @@
  */
 import { afterEach, expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
+import { isFrameActive } from "../src/surface.ts";
 import { draw, effect, init, prepare, renderOnce, storage, surface, target } from "../src/mock.ts";
 
 const WGSL = `
@@ -293,6 +294,103 @@ test("a combination that fails synchronously is reported with its siblings and o
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
+  } finally {
+    gpu.dispose();
+  }
+});
+
+test("the same failing draw named twice is one reported failure, not two", async () => {
+  const gpu = await init();
+  try {
+    const screen = target(gpu, { size: [4, 4] });
+    const bad = draw(gpu, { shader: WGSL, label: "bad-twice" });
+    const createAsync = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
+    vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockImplementation(async (desc: GPURenderPipelineDescriptor) => {
+      if (String(desc.label ?? "").includes("bad-twice")) throw new Error("boom");
+      return createAsync(desc);
+    });
+
+    const error = await renderOnce(gpu, screen, (p) => { p.draw(bad); p.draw(bad); }).catch((e: unknown) => e);
+
+    // Readiness is a property of the (draw, target signature) COMBINATION, so naming it twice is one
+    // combination: the report says so, instead of listing the same failure once per call site.
+    expect((error as { code?: string }).code).toBe("VGPU-PREPARE-FAILED");
+    expect((error as { detail?: { failures?: unknown[] } }).detail?.failures).toHaveLength(1);
+    expect((error as Error).message).toContain("1 combination(s)");
+  } finally {
+    gpu.dispose();
+  }
+});
+
+test("each p.draw() keeps the options it was given, even if the caller reuses one object", async () => {
+  const gpu = await init();
+  try {
+    const screen = target(gpu, { size: [4, 4] });
+    const quad = draw(gpu, { shader: WGSL, label: "reused-opts" });
+    const instanceCounts: (number | undefined)[] = [];
+    const createCommandEncoder = gpu.device.gpu.createCommandEncoder.bind(gpu.device.gpu);
+    vi.spyOn(gpu.device.gpu, "createCommandEncoder").mockImplementation((desc?: GPUCommandEncoderDescriptor) => {
+      const encoder = createCommandEncoder(desc);
+      const beginRenderPass = encoder.beginRenderPass.bind(encoder);
+      encoder.beginRenderPass = (passDesc: GPURenderPassDescriptor) => {
+        const pass = beginRenderPass(passDesc);
+        const drawCall = pass.draw.bind(pass);
+        (pass as { draw: unknown }).draw = (vertexCount: number, instances?: number, firstVertex?: number, firstInstance?: number) => {
+          instanceCounts.push(instances);
+          drawCall(vertexCount, instances, firstVertex, firstInstance);
+        };
+        return pass;
+      };
+      return encoder;
+    });
+    // One options object, mutated between the two calls: the classic reuse-the-bag pattern. The
+    // encode happens after an await, so without a snapshot both recorded calls would read the last
+    // mutation and the first draw would silently render with someone else's instance count.
+    const opts = { instances: 2 };
+
+    await renderOnce(gpu, screen, (p) => { p.draw(quad, opts); opts.instances = 5; p.draw(quad, opts); });
+
+    expect(instanceCounts).toEqual([2, 5]);
+  } finally {
+    gpu.dispose();
+  }
+});
+
+// --- The encode runs inside a frame scope, and always leaves it ---------------------------------
+
+test("renderOnce opens a frame scope around its encode and closes it after the submit", async () => {
+  const gpu = await init();
+  try {
+    const screen = surface(gpu, canvasLike(), { size: [8, 4] });
+    const quad = effect(gpu, FRAGMENT_ONLY, { label: "scoped" });
+    let activeAtSubmit: boolean | undefined;
+    const submit = gpu.device.gpu.queue.submit.bind(gpu.device.gpu.queue);
+    vi.spyOn(gpu.device.gpu.queue, "submit").mockImplementation((buffers: GPUCommandBuffer[]) => { activeAtSubmit = isFrameActive(); submit(buffers); });
+
+    expect(isFrameActive()).toBe(false);
+    await renderOnce(gpu, screen, (p) => p.draw(quad));
+
+    // A surface texture may only be encoded inside a frame scope: a one-shot render IS a very small
+    // frame, and it must look like one for exactly as long as the encode lasts.
+    expect(activeAtSubmit).toBe(true);
+    expect(isFrameActive()).toBe(false);
+  } finally {
+    gpu.dispose();
+  }
+});
+
+test("a throwing encode still leaves the frame scope", async () => {
+  const gpu = await init();
+  try {
+    const screen = target(gpu, { size: [4, 4] });
+    const quad = draw(gpu, { shader: WGSL, label: "throwing-submit" });
+    vi.spyOn(gpu.device.gpu.queue, "submit").mockImplementation(() => { throw new Error("submit exploded"); });
+
+    await expect(renderOnce(gpu, screen, (p) => p.draw(quad))).rejects.toThrow(/submit exploded/);
+
+    // A leaked frame scope is invisible until much later, when it makes an ILLEGAL surface encode
+    // look legal somewhere else entirely.
+    expect(isFrameActive()).toBe(false);
   } finally {
     gpu.dispose();
   }
