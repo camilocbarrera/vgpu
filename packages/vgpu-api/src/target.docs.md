@@ -18,7 +18,8 @@ interface TargetTextureOptions {
   readonly format?: GPUTextureFormat;
   readonly colors?: readonly { readonly format: GPUTextureFormat }[];
   readonly depth?: boolean | GPUTextureFormat;
-  readonly msaa?: boolean | 4;
+  /** The one spelling for multisampling, on both `target()` and `surface()`. */
+  readonly sampleCount?: 1 | 4;
   readonly label?: string;
 }
 
@@ -62,7 +63,7 @@ interface PingPongStorage { readonly read: import("vgpu").StorageBuffer; readonl
 | opts.format | `GPUTextureFormat` | ✖ | `"rgba8unorm"` | Used for single-color targets when `colors` is omitted. |
 | opts.colors | `readonly { format: GPUTextureFormat }[]` | ✖ | `[{ format: opts.format ?? "rgba8unorm" }]` | Multiple render targets (MRT): one attachment per entry, all written by one pass — the G-buffer layout for deferred shading. `target.color` is `colors[0]`. |
 | opts.depth | `boolean \| GPUTextureFormat` | ✖ | `undefined` | `true` means `"depth24plus"`; a string uses that depth format; omitted means no depth. Combined depth-stencil formats such as `"depth24plus-stencil8"` are supported; stencil-only `"stencil8"` is rejected. |
-| opts.msaa | `boolean \| 4` | ✖ | `false` / sample count `1` | Only `true` or `4` enables MSAA, creating color/depth attachments with sample count `4` and resolving to sampleable `.color(s)`. |
+| opts.sampleCount | `1 \| 4` | ✖ | `1` | `4` enables MSAA, creating color/depth attachments with sample count `4` and resolving into sampleable `.color(s)`. `sampleCount` is WebGPU platform vocabulary and the **one** spelling for multisampling on both `target()` and `surface()` — 0.3's `msaa` was a second spelling of it. The sample count is part of the pipeline signature: changing it invalidates the prepared combinations that used the old one. |
 | opts.clearColor | `ClearColor` | ✖ | `[0, 0, 0, 1]` | Default clear color of this target, used by passes that clear without naming one. Writable at runtime as `target.clearColor`; a pass `clear` color still wins for that pass. Four finite numbers, or a `GPUColor` object. |
 | opts.label | `string` | ✖ | `undefined` | Prefix for created texture labels. |
 | target.resize.size | `readonly [number, number]` | ✔ | — | Recreates offscreen textures unless size is unchanged. |
@@ -81,18 +82,20 @@ interface PingPongStorage { readonly read: import("vgpu").StorageBuffer; readonl
 
 **Returns:** `target(gpu)` returns `Target`; `resize()` returns `void`; `read()` returns `Promise<Uint8Array>`; `readFloats()` returns `Promise<Float32Array>`; `renderPassDescriptor(opts?)` returns a WebGPU render pass descriptor; `pingPong(gpu)` returns `PingPongTargets`; `pingPongStorage(gpu)` returns `PingPongStorage`.
 
-**Throws:** `VGPU-CORE-UNSUPPORTED-FORMAT` when `read()` / `readFloats()` runs on a color format outside the readback table (see `Texture`); `VGPU-TARGET-SIZE-REQUIRED` when runtime JS calls `target(gpu)` without `size`; `VGPU-TARGET-MSAA-INVALID` when runtime JS passes an unsupported `msaa` value (only `true` / `4` are accepted); `VGPU-TARGET-DEPTH-STENCIL-ONLY` when `depth` receives the stencil-only `"stencil8"` format (stencil-only depth targets are not supported yet); `VGPU-RING1-UNSUPPORTED` when `msaa: true` / `4` with `rgba16float` is used on a Dawn compatibility-mode device; underlying core texture/readback operations can throw native WebGPU validation errors.
+**Throws:** `VGPU-CORE-UNSUPPORTED-FORMAT` when `read()` / `readFloats()` runs on a color format outside the readback table (see `Texture`); `VGPU-TARGET-SIZE-REQUIRED` when runtime JS calls `target(gpu)` without `size`; `VGPU-TARGET-MSAA-INVALID` when runtime JS passes an unsupported `sampleCount` value (only `1` / `4` are accepted); `VGPU-TARGET-DEPTH-STENCIL-ONLY` when `depth` receives the stencil-only `"stencil8"` format (stencil-only depth targets are not supported yet); `VGPU-RING1-UNSUPPORTED` when `sampleCount: 4` with `rgba16float` is used on a Dawn compatibility-mode device; underlying core texture/readback operations can throw native WebGPU validation errors.
 
 ## Examples
 
 ```ts
-import { init, effect, frame, target } from "vgpu/mock";
+import { init, effect, frame, prepare, target } from "vgpu/mock";
 
 const gpu = await init();
-const scene = target(gpu, { size: [128, 128], format: "rgba16float", depth: true, msaa: true });
+const scene = target(gpu, { size: [128, 128], format: "rgba16float", depth: true, sampleCount: 4 });
 const post = effect(gpu, `
   @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f { return vec4f(uv, 0, 1); }
 `);
+
+await prepare(gpu, [{ draw: post, target: scene }]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (pass) => pass.draw(post));
@@ -100,7 +103,7 @@ frame(gpu, (currentFrame) => {
 ```
 
 ```ts
-import { init, draw, frame, target } from "vgpu/mock";
+import { init, draw, frame, prepare, target } from "vgpu/mock";
 
 const gpu = await init();
 // G-buffer for deferred shading: albedo, normals, material parameters.
@@ -122,6 +125,8 @@ const fill = draw(gpu, {
   `,
 });
 
+await prepare(gpu, [{ draw: fill, target: gbuffer }]);
+
 frame(gpu, (currentFrame) => {
   currentFrame.pass(gbuffer, fill); // one draw fills all three attachments
 });
@@ -136,15 +141,25 @@ const gpu = await init();
 const canvasSurface = surface(gpu, mockCanvas());
 const bloomSize = (w: number, h: number): [number, number] => [w / 2, h / 2];
 const bloom = target(gpu, { size: bloomSize(canvasSurface.size[0], canvasSurface.size[1]) });
-const bright = effect(gpu, `
-  struct Params { resolution: vec2f }
-  @group(0) @binding(0) var<uniform> params: Params;
-  @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }
-`, { set: { params: { resolution: bloom.size } } });
+const bright = effect(gpu, {
+  shader: `
+    struct Params { resolution: vec2f }
+    @group(0) @binding(0) var<uniform> params: Params;
+    @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }
+  `,
+  values: { params: { resolution: bloom.size } },
+});
+const composite = effect(gpu, {
+  shader: `
+    @group(0) @binding(0) var src: texture_2d<f32>;
+    @fragment fn fs_main() -> @location(0) vec4f { return textureLoad(src, vec2u(0, 0), 0); }
+  `,
+  bindings: { src: bloom },    // bind the TARGET: a resize re-binds the new texture identity for you
+});
 
 canvasSurface.onResize(({ width, height }) => {
-  bloom.resize(bloomSize(width, height));
-  bright.set({ params: { resolution: bloom.size } });
+  bloom.resize(bloomSize(width, height));           // the `src` binding auto-heals…
+  bright.set("params", { resolution: bloom.size }); // …only the byte value needs updating
 });
 
 function mockCanvas(): HTMLCanvasElement {
@@ -159,13 +174,14 @@ function mockCanvas(): HTMLCanvasElement {
 ```
 
 ```ts
-import { init, effect, frame, target } from "vgpu/mock";
+import { init, effect, frame, prepare, target } from "vgpu/mock";
 
 const gpu = await init();
 // HDR target: readFloats() decodes the half-float texels, read() would hand back raw bytes.
 const hdr = target(gpu, { size: [64, 64], format: "rgba16float" });
 const bloom = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(4.0, 2.0, 1.0, 1.0); }`);
 
+await prepare(gpu, [{ draw: bloom, target: hdr }]);
 frame(gpu, (currentFrame) => currentFrame.pass(hdr, bloom));
 
 const floats = await hdr.readFloats(); // Float32Array, 64 * 64 * 4 components
@@ -173,11 +189,14 @@ console.log(floats[0]); // 4 — values above 1 survive the readback
 ```
 
 ```ts
-import { init, effect, frame, pingPong } from "vgpu/mock";
+import { init, effect, frame, pingPong, prepare } from "vgpu/mock";
 
 const gpu = await init();
 const pair = pingPong(gpu, 32.9, 32.1, { format: "rgba8unorm" });
 const blur = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+
+// Both halves share one signature, so one prepared combination covers the swap.
+await prepare(gpu, [{ draw: blur, target: pair.write }]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: pair.write, clear: false }, (pass) => pass.draw(blur));
@@ -187,12 +206,14 @@ pair.swap();
 
 ## Notes
 
-- Choose `Target` for offscreen intermediates that must be reused, sampled, read back, or ping-ponged; choose `Surface` only for the canvas swapchain (see `Surface`). A target can be rendered in multiple passes and sampled by later effects.
+- **`Target` is a bindable resource; `Surface` is a presentation destination.** Both are `RenderDestination`s accepted by `f.pass()` and by `prepare()`, but only a `Target` has persistent resource identity: `.color` / `.colors` / `.depth`, usable as a texture binding, auto-healing across resize and recreation. Choose `Target` for offscreen intermediates that must be reused, sampled, read back or ping-ponged; choose `Surface` only for the canvas swapchain, which is never bindable (`VGPU-SURFACE-NOT-BINDABLE`).
+- **Bind the `Target`, not its texture snapshot.** `bindings: { src: scene }` / `.bind("src", scene)` wires the resource-recreation event: a `scene.resize(...)` re-binds transparently and dependent bundles are marked `stale` (recover with `prepare(gpu, [{ bundle }])` — the logical recording stays valid, so no `rebuild()`). Binding `.color` — a `Texture` snapshot — has no recreation hook and goes **silently** stale on resize.
+- Readiness is per combination: `prepare(gpu, [{ draw, target }])` for every `(renderable, target)` pair you encode. A resize that preserves color format, depth format and sample count invalidates nothing; changing any of the three does.
 - Use simple `format` for one color attachment. Use `colors` when a pass writes multiple attachments (MRT/G-buffer), then consume `target.colors[i]` in later lighting/post passes.
-- Set `depth: true` for ordinary z-testing; choose `depth: "depth24plus-stencil8"` when stencil masking is required. Enable `msaa: true`/`4` for anti-aliased 3D geometry, but do not combine MSAA with `clear: false` preservation or `depthReadOnly`: the internal multisample render attachments (including depth) are discarded, while the resolved `.color(s)` remain sampleable/readable.
+- Set `depth: true` for ordinary z-testing; choose `depth: "depth24plus-stencil8"` when stencil masking is required. Set `sampleCount: 4` for anti-aliased 3D geometry, but do not combine MSAA with `clear: false` preservation or `depthReadOnly`: the internal multisample render attachments (including depth) are discarded, while the resolved `.color(s)` remain sampleable/readable. Those internal attachments are unreachable through every public accessor, which is why they are the only place vgpu may apply a transient allocation — an implementation detail, never a public flag.
 - `target.read()` / `target.readFloats()` are intended for tests, snapshots, and diagnostics—not a per-frame hot path. For iterative simulation or post-processing, use `pingPong(gpu, ...)` and swap targets instead of readback.
 - There is no global resolution binding. Pass `target.size` or `target.texelSize` explicitly to shaders.
-- `Surface.color` wraps the canvas current texture; offscreen target colors are stable until resize/destroy.
+- A `Surface` exposes no `.color`: its presentation texture is frame-scoped and deliberately not handed out (read it back with `surface.read()` / `surface.readFloats()`). Offscreen target colors are stable until resize/destroy, which is exactly what makes a `Target` bindable.
 - `target.read()` and `surface.read()` return raw texel bytes in the target's own color format, with row padding removed and BGRA canvas formats swizzled to RGBA. For `rgba8unorm` targets that is exactly the previous RGBA byte layout.
 - Float targets (`rgba16float`, `rgba32float`, `r16float`, `r32float`, `rg16float`, `rg32float`) read back through `target.readFloats()`, which decodes half/float texels into a `Float32Array` of components — HDR values above `1` and negatives are preserved. `readFloats()` also works on `unorm8` targets (normalized to `[0, 1]`), so tooling can stay format-agnostic.
 - Custom `Target` implementers must provide `readFloats()`; delegating to `this.color.readFloats()` (as `target(gpu)` and `surface(gpu)` do) is enough.

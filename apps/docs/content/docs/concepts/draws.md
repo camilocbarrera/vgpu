@@ -10,7 +10,7 @@ A [`Draw`](/reference/vgpu/draw#draw) renders geometry with custom vertex buffer
 `geometry(gpu, geometry)` turns geometry from `vgpu/scene` into vertex and index buffers. Your vertex shader declares the attributes it consumes — `@location(0) position`, `@location(1) normal` — and the geometry feeds them.
 
 ```ts
-import { init, draw, geometry, target } from "vgpu";
+import { init, draw, frame, geometry, prepare, target } from "vgpu";
 
 const gpu = await init();
 
@@ -42,15 +42,24 @@ const colorTarget = target(gpu, { size: [1280, 720], depth: true });
 const camera = perspectiveCamera({ fov: 45, aspect: 16 / 9, position: [2, 2, 3], target: [0, 0, 0] });
 
 const cube = draw(gpu, { shader, geometry: geometry(gpu, box({ size: 1 })) });
-cube.set({
-  camera: { viewProjection: camera.viewProjection },
-  model: { model: orbit(0) },
-});
 
-cube.draw(colorTarget);
+// Binding-scoped writes: one call per WGSL binding, each one a single struct rewrite.
+cube.set("camera", { viewProjection: camera.viewProjection });
+cube.set("model", { model: orbit(0) });
+
+await prepare(gpu, [{ draw: cube, target: colorTarget }]);
+frame(gpu, (f) => f.pass(colorTarget, (p) => p.draw(cube)));
 ```
 
-Everything works like the rest of vgpu: bindings are reflected from the WGSL, `set()` writes uniforms by name, and the draw renders one-shot into any target. Pipelines are compiled per target format and cached, so the same `Draw` can render into different targets. See [Compilation](/concepts/compilation) to pre-warm each signature before the first draw.
+Everything works like the rest of vgpu: bindings are reflected from the WGSL, and `.set(binding, value)`
+writes the bytes of a binding this instance owns — a struct takes a partial, so absent fields keep
+their last value. A binding you declare in `bindings: { … }` instead is *external*: update the
+resource itself, or swap its identity with `.bind(binding, resource)`.
+
+Pipelines are cached per `(draw, target signature)` combination, so the same `Draw` renders into
+different targets — but each combination must be prepared: under the default policy an unprepared one
+throws `VGPU-PIPELINE-PENDING` instead of compiling inside your frame. See
+[Compilation](/concepts/compilation).
 
 Three details specific to geometry:
 
@@ -63,7 +72,7 @@ Three details specific to geometry:
 Leave `geometry` out and the draw runs with no buffers at all: `vertices` defaults to `3`, so every instance is one triangle whose corners you position from `@builtin(vertex_index)`. Combined with `instances`, that spawns a particle system from nothing:
 
 ```ts
-import { init, draw, surface } from "vgpu";
+import { clock, init, draw, frameLoop, prepare, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -96,10 +105,14 @@ const smokeShader = `
 
 const smoke = draw(gpu, { shader: smokeShader, instances: 10_000 });
 
-smoke.set({ params: { time: 2.5 } }); // drive with clock(gpu).time in a frame loop
-smoke.draw(canvasSurface);
+await prepare(gpu, [{ draw: smoke, target: canvasSurface }]);
+
+frameLoop(gpu, (f) => {
+  smoke.set("params", { time: clock(gpu).time });
+  f.pass(canvasSurface, (p) => p.draw(smoke));
+});
 ```
 
-One draw call, 10,000 smoke puffs, zero buffers — each particle derives its position, size, and fade from `instance_index` and `time`. Counts can also change per call: `smoke.draw({ target: surface, instances: 500 })`.
+One draw call, 10,000 smoke puffs, zero buffers — each particle derives its position, size, and fade from `instance_index` and `time`. Counts can also change per encode: `p.draw(smoke, { instances: 500 })`.
 
 See it live: the [instanced rendering example](/examples/instanced-rendering) drives a 125k-cube lattice from a single instance stream.

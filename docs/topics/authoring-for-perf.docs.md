@@ -31,14 +31,33 @@ struct Globals {
 
 ## JavaScript defaults
 
-```text
-const globals = uniforms(gpu, { time: 0, mouse: [0, 0], enabled: 1 });
-const draw = draw(gpu, { shader: WGSL, set: { globals } });
-await draw.compile(target);
+```ts
+import { clock, draw, frameLoop, init, prepare, target, uniform } from "vgpu/mock";
+
+const gpu = await init();
+const screen = target(gpu, { size: [64, 64] });
+const mouse: [number, number] = [0, 0];
+const WGSL = `
+  struct Globals { time: f32, mouse: vec2f, enabled: u32 }
+  @group(0) @binding(0) var<uniform> globals: Globals;
+  @vertex fn vs_main() -> @builtin(position) vec4f { return vec4f(globals.time); }
+  @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }
+`;
+
+// ---cut---
+const globals = uniform(gpu, { time: 0, mouse: [0, 0], enabled: 1 });
+const mesh = draw(gpu, { shader: WGSL, bindings: { globals } });  // external → declared once
+
+await prepare(gpu, [{ draw: mesh, target: screen }]);             // warm the combination
+
 frameLoop(gpu, (f) => {
-  globals.set({ time: clock(gpu).time, mouse });
-  f.pass({ target }, (p) => p.draw(draw));
+  globals.set({ time: clock(gpu).time, mouse });                  // one write, every pipeline
+  f.pass(screen, (p) => p.draw(mesh));
 });
 ```
 
-Use the performance playbook before writing a new shader: bundles for static draws, `compile()` for pre-warm, `draw.group()` for many objects, `uniforms(gpu)` for shared state, ping-pong for iterative effects, and target-owned depth/MSAA.
+Use the performance playbook before writing a new shader: bundles for static draws, `prepare()` for
+pipeline readiness, `draw.group()` for many objects, one shared `uniform(gpu, …)` for shared state,
+ping-pong for iterative effects, and target-owned depth/`sampleCount`. Note where each update lands:
+an **external** binding (`bindings`) is updated on the resource, an **instance-owned** one (`values`,
+or simply undeclared) with `instance.set(binding, value)`.

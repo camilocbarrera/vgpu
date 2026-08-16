@@ -6,7 +6,7 @@ description: "A pass composites any number of draws into one target; a single sh
 A pass is a render-pass section inside a frame. It has one target, one clear color, and any number of draw calls. Open a pass by hand when you want to composite multiple draws into the same render target — here, an ocean and a boat rendered straight to the canvas:
 
 ```ts
-import { init, effect, frame, surface } from "vgpu";
+import { init, effect, frame, prepare, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -33,6 +33,11 @@ const boatSource = `
 const ocean = effect(gpu, oceanSource);
 const boat = effect(gpu, boatSource);
 
+await prepare(gpu, [
+  { draw: ocean, target: canvasSurface },
+  { draw: boat, target: canvasSurface },
+]);
+
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: canvasSurface, clear: [0, 0, 0, 1] }, (pass) => {
     pass.draw(ocean); // fill the canvas with water
@@ -47,10 +52,10 @@ Both draws share one render pass and one target. Order inside the pass is paint 
 
 ## One shader? Draw it directly
 
-Now add postprocessing. The pass is the same — the only change is its target: an offscreen [`Target`](/reference/vgpu/target#target) with the same size as the canvas. Then the postprocessing effect (bound with `set({ src: scene })`) needs no pass ceremony to reach the screen:
+Now add postprocessing. The pass is the same — the only change is its target: an offscreen [`Target`](/reference/vgpu/target#target) with the same size as the canvas. The postprocessing effect declares that target as an external binding (`bindings: { src: scene }`), and a second pass in the **same** frame composites it to the screen:
 
 ```ts
-import { init, effect, frame, sampler, surface, target } from "vgpu";
+import { init, effect, frame, prepare, sampler, surface, target } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -83,23 +88,34 @@ const postSource = `
 
 // ---cut---
 const scene = target(gpu, { size: [canvasSurface.size[0], canvasSurface.size[1]] });
-const postprocessing = effect(gpu, postSource);
-postprocessing.set({
-  src: scene,
-  samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
-}); // the offscreen scene becomes the post input
+const postprocessing = effect(gpu, {
+  shader: postSource,
+  bindings: {
+    src: scene,   // bind the Target: a resize re-binds the new texture identity for you
+    samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
+  },
+});
+
+await prepare(gpu, [
+  { draw: ocean, target: scene },
+  { draw: boat, target: scene },
+  { draw: postprocessing, target: canvasSurface },
+]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (pass) => {
     pass.draw(ocean);
     pass.draw(boat);
   });
+  currentFrame.pass(canvasSurface, (pass) => pass.draw(postprocessing));
 });
-
-postprocessing.draw(canvasSurface); // rendering an effect creates a pass
 ```
 
-The one-shot `draw()` runs after the frame has submitted, so the scene is already rendered when postprocessing reads it. Under the hood it creates an encoder, opens a render pass on `canvasSurface`, encodes the draw, and submits — the same GPU work you would write by hand with `frame.pass`.
+Two passes, one command encoder, one submit: the offscreen pass is encoded before the presentation
+pass, so the scene is already rendered when postprocessing samples it — program order **is** execution
+order. If you need the same work standalone, outside any frame,
+`await renderOnce(gpu, canvasSurface, (p) => p.draw(postprocessing))` owns its encoder and submits
+exactly once.
 
 > Good to know: `frame.pass()` always needs a target. Use a canvas-backed [`Surface`](/reference/vgpu/surface#surface) from `surface(gpu, canvas)` or an offscreen [`Target`](/reference/vgpu/target#target) from `target(gpu, { size })`.
 

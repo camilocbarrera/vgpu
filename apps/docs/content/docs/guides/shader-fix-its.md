@@ -38,23 +38,65 @@ const draw = draw(gpu, { shader });
 
 ## Missing binding: `VGPU-R1-BINDING-NEVER-SET`
 
-Every reflected binding must be set by name or covered by a claimed group. Do not rely on globals or implicit buffers.
+Every reflected binding must have a value before the draw is encoded, or be covered by a claimed group. Declare ownership at construction — `values` for what the instance owns, `bindings` for external resources — and write bytes per binding afterwards. Do not rely on globals or implicit buffers.
 
-```text
-const effect = effect(gpu, WGSL);
-effect.set({ params: { time: clock(gpu).time }, tex: target.color, samp: sampler(gpu) });
+```ts
+import { clock, effect, init, sampler, target } from "vgpu/mock";
+
+const gpu = await init();
+const scene = target(gpu, { size: [64, 64] });
+const WGSL = `
+  struct Params { time: f32 }
+  @group(0) @binding(0) var<uniform> params: Params;
+  @group(0) @binding(1) var tex: texture_2d<f32>;
+  @group(0) @binding(2) var samp: sampler;
+  @fragment fn fs_main() -> @location(0) vec4f {
+    return textureSampleLevel(tex, samp, vec2f(0.5), 0.0) * params.time;
+  }
+`;
+
+// ---cut---
+const fx = effect(gpu, {
+  shader: WGSL,
+  values:   { params: { time: 0 } },              // instance-owned → .set()
+  bindings: { tex: scene, samp: sampler(gpu) },   // external → .bind() / bind the Target
+});
+fx.set("params", { time: clock(gpu).time });
 ```
 
 ## Ownership flip: `VGPU-R1-OWNERSHIP-FLIP`
 
-The first `set()` decides ownership. Plain JS values are lib-owned and updated in place. Resources (`Uniform`, storage, textures, samplers, bind groups) are user-owned. Do not switch the same binding from JS value to resource later.
+**This error class is unrepresentable in 0.4.** Ownership is fixed at construction, not latched by the
+first `set()`: a binding listed in `values` (or declared in the WGSL and listed in neither bag) is
+instance-owned, a binding listed in `bindings` is external. Because nothing can flip, there is no
+ownership-flip failure mode left — the modern error you may meet instead is
+**`VGPU-R1-EXTERNAL-BINDING`**: `.set()` was called on a binding the instance does not own. Its message
+names the resource to update.
 
-```text
-// Pick one from the start:
-wave.set({ params: { time: 0 } });     // lib-owned
-// or
-wave.set({ params: sharedUniform });   // user-owned
+```ts
+import { effect, init, uniform } from "vgpu/mock";
+
+const gpu = await init();
+const WGSL = `
+  struct Globals { time: f32 }
+  @group(0) @binding(0) var<uniform> globals: Globals;
+  @fragment fn fs_main() -> @location(0) vec4f { return vec4f(globals.time); }
+`;
+
+// ---cut---
+// Decide once, at construction:
+const shared = uniform(gpu, { time: 0 });
+const wave = effect(gpu, { shader: WGSL, bindings: { globals: shared } });   // external
+shared.set({ time: 0.5 });          // ✅ update the RESOURCE
+// wave.set("globals", { time: 0.5 });  // ❌ VGPU-R1-EXTERNAL-BINDING
+
+const owned = effect(gpu, { shader: WGSL, values: { globals: { time: 0 } } }); // instance-owned
+owned.set("globals", { time: 0.5 });  // ✅ bytes only; never rebuilds a bind group
 ```
+
+Owned→external transitions are not supported either: recreate the instance from its options object
+(`effect(gpu, { ...opts, bindings: { globals } })`), which is cheap because the input is plain data.
+Identity changes on an external binding are `instance.bind(binding, resource)`.
 
 ## Bool host-shareable layouts
 
@@ -66,7 +108,17 @@ struct Params { enabled: u32 }
 
 ## Bundle stale
 
-`VGPU-R3-BUNDLE-STALE` means a bundle was recorded for a different render signature or an old bind-group/resource identity. A bundle survives resizing the target it draws onto when formats/depth/sample count match; re-record after resource identity changes, including sampling a resized target. Plain JS `set()` updates are safe because buffers are written in place.
+`VGPU-R3-BUNDLE-STALE` means the bundle's pipelines are compiled but its native bundle must be
+re-encoded — a captured resource changed identity (a `.bind()` swap, or a sampled `Target` recreating
+its texture on resize), or the replay target's signature does not match the recorded one.
+
+**The fix is `await prepare(gpu, [{ bundle }])`, not `rebuild()`**: the logical recording is still
+valid, so `prepare()` re-encodes it with the current resources. `rebuild(cb)` is only for when the
+command list itself changes, and it is synchronous. A bundle survives resizing the target it draws onto
+when color format, depth format and sample count match. Byte updates (`instance.set(binding, value)`)
+never stale a bundle because they write into the same buffers. Related codes:
+`VGPU-PIPELINE-PENDING` (the bundle was never prepared — it is born `"pending-pipelines"`) and
+`VGPU-BUNDLE-DISPOSED` (terminal, under every policy).
 
 ## Manual bind-group claims
 
@@ -74,4 +126,37 @@ struct Params { enabled: u32 }
 
 ## Compute aliasing
 
-`VGPU-R1-STORAGE-ALIASING` means a writable storage buffer is bound as both source and destination. Use `pingPongStorage(gpu)` and swap after dispatch.
+`VGPU-R1-STORAGE-ALIASING` means a writable storage buffer is bound as both source and destination. Use `pingPongStorage(gpu)`, `.bind()` the swapped halves, and swap after each dispatch.
+
+## Pipeline pending
+
+`VGPU-PIPELINE-PENDING` means a synchronous encode met a `(renderable, target signature)` combination
+with no compiled pipeline. Nothing was compiled and nothing was encoded: that is the default policy
+(`pendingPipelines: "throw"`) refusing to stall inside a frame.
+
+**Fix:** `await prepare(gpu, [{ draw, target }])` — or `{ compute }` / `{ bundle }` — before the frame,
+or use `renderOnce()` / `dispatchOnce()`, which take the async readiness path themselves. Content that
+may legitimately appear late can name `pendingPipelines: "skip"` at the call site (or on the frame) so
+it is omitted until ready. `pendingPipelines: "sync"` opts into inline compilation, stall included.
+`VGPU-PREPARE-FAILED` is the sibling: `prepare()` rejected, and the error enumerates every failed
+combination with its resolved signature and `cause`.
+
+## Surface is not bindable
+
+`VGPU-SURFACE-NOT-BINDABLE` means a `Surface` was passed where a texture binding was expected —
+`bindings: { src: screen }` or `instance.bind("src", screen)`. A surface is a presentation destination:
+its texture is frame-scoped, so a bind group over it would retain a view of an already-invalid texture.
+
+**Fix:** render into a `target(gpu, …)` and bind **the target** (not `target.color`, which has no
+recreation hook), or read the surface back explicitly with `surface.read()` / `surface.readFloats()`.
+
+## Device lost
+
+`VGPU-DEVICE-LOST` means the device backing this object graph was lost. Loss is **terminal**: vgpu
+stops the frame loops it owns and every later operation on that graph throws — `.set()` / `.bind()`,
+`frame()` / `frameLoop()`, `prepare()`, a bundle replay, `read()`.
+
+**Fix:** `await gpu.lost` (it resolves only on a real loss, never after `gpu.dispose()`), then rebuild
+everything device-local from a new `init()`: surfaces/targets, textures/buffers/uniforms, instances and
+their bind groups, prepared pipelines and bundles. Reuse application data, not vgpu objects — an
+options value holding a device-local resource must be reconstructed. The canvas itself is reused.

@@ -4,34 +4,42 @@ description: "Start with the public `vgpu` package. A program has one `Gpu` cont
 ---
 
 ```ts
-import { clock, init, effect, frameLoop, surface } from "vgpu";
+import { clock, init, effect, frameLoop, prepare, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
 const canvasSurface = surface(gpu, canvas, { dpr: [1, 2] });
-const gradient = effect(gpu, `
-struct Params { time: f32, texel: vec2f }
-@group(0) @binding(0) var<uniform> params: Params;
-@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-  return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
-}
-`, { set: { params: { time: 0, texel: canvasSurface.texelSize } } });
+const gradient = effect(gpu, {
+  shader: `
+    struct Params { time: f32, texel: vec2f }
+    @group(0) @binding(0) var<uniform> params: Params;
+    @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+      return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
+    }
+  `,
+  values: { params: { time: 0, texel: canvasSurface.texelSize } },
+});
+
+// The one async line: warm the (renderable, target) combination before the loop.
+await prepare(gpu, [{ draw: gradient, target: canvasSurface }]);
 
 canvasSurface.onResize(() => {
-  gradient.set({ params: { texel: canvasSurface.texelSize } });
+  gradient.set("params", { texel: canvasSurface.texelSize });
 });
 
 const time = clock(gpu);
 frameLoop(gpu, (frame) => {
-  gradient.set({ params: { time: time.time } });
+  gradient.set("params", { time: time.time });
   frame.pass(canvasSurface, gradient);
 });
 ```
 
-Two habits keep this correct as it grows: bindings are set by their WGSL
-names — `params` is a struct, so its members nest inside it — and `set()`
-writes immediately, so the render loop only writes what actually changes
-(`time`); size-class values like `texel` belong in the resize handler.
+Three habits keep this correct as it grows. **`.set()` names a WGSL binding** and takes its value —
+`params` is a struct, so a partial merges into it and absent fields keep their last value. **`.set()`
+writes immediately**, so the render loop only writes what actually changes (`time`); size-class values
+like `texel` belong in the resize handler. And **compilation is explicit**: `prepare()` is the only
+place pipelines are created, because the default policy (`pendingPipelines: "throw"`) refuses to
+compile inside a synchronous encode — no hidden stall, ever.
 
 ## Validate with static renders
 
@@ -50,7 +58,7 @@ evidence instead of guesswork:
 ```typescript
 import { writeFileSync } from "node:fs";
 import { PNG } from "pngjs";
-import { init, effect, target } from "vgpu/node";
+import { init, effect, renderOnce, target } from "vgpu/node";
 
 const SHADER = `
   @fragment fn main() -> @location(0) vec4f {
@@ -61,7 +69,7 @@ const width = 160;
 const height = 90;
 const gpu = await init();
 const colorTarget = target(gpu, { size: [width, height] }); // small targets stay fast, even on CPU
-effect(gpu, SHADER).draw(colorTarget);
+await renderOnce(gpu, colorTarget, (p) => p.draw(effect(gpu, SHADER))); // awaits readiness, one submit
 const pixels = await colorTarget.read();                   // RGBA bytes — assert on them
 const png = new PNG({ width, height });               // ...and write a PNG you can open
 png.data.set(pixels);
@@ -90,9 +98,10 @@ reference, following
 
 - Use `effect(gpu)` for fullscreen fragment work.
 - Use `draw(gpu)` for vertex shaders, meshes, storage-driven vertices, instancing, MRT, and depth.
-- Use `effect.draw(target)` for simple single-pass draws; use `frame(gpu, (f) => ...)` to batch multi-pass work and `frameLoop(gpu, ...)` for animation.
-- Use `set()` for every binding declared in WGSL; missing bindings fail with `VGPU-R1-BINDING-NEVER-SET`.
-- Keep plain JS values plain from their first `set()`; if you need user-owned lifetime, pass a resource from the first `set()`.
+- Use `frame(gpu, (f) => ...)` for everything that belongs to one submit — passes, compute dispatches (`f.compute`), buffer copies (`f.copyBuffer`) and raw encoder commands (`f.raw`). `frame()` per tick is the primitive; `frameLoop(gpu, ...)` is sugar for self-contained animation, and `renderOnce(gpu, target, cb)` / `kernel.dispatchOnce(n)` are the standalone one-shot paths.
+- Call `await prepare(gpu, [{ draw, target }, { compute }, { bundle }])` for every combination you will encode. It is the one spelling for readiness — there is no `compile()`, `compileSync()`, `pipelineFor()` or `targets: [...]`.
+- Declare ownership at construction: `values` for bindings this instance owns (written with `.set(binding, value)`), `bindings` for external resources (swapped with `.bind(binding, resource)`, or updated on the resource itself). A binding declared in the WGSL and listed in neither is instance-owned and zero-initialized; a binding never provided fails with `VGPU-R1-BINDING-NEVER-SET`.
+- Share values across pipelines with one `uniform(gpu, { … })`: `globals.set({ time })` is a single write every bound pipeline sees.
 - Request optional device capabilities at startup with `init({ requiredFeatures: [...] })` — for example `"timestamp-query"` for `timer(gpu)`; a name the adapter lacks fails init with `VGPU-FEATURE-UNSUPPORTED`.
 
 ## Where to go next
@@ -102,8 +111,8 @@ Read the concept guides in order — each builds on the previous one:
 ```sh
 vgpu docs cat concepts-context.md         # the Gpu context, surfaces, targets
 vgpu docs cat concepts-draws.md           # draw(), meshes, instancing
-vgpu docs cat concepts-compilation.md     # compile() and pipeline warmup
-vgpu docs cat concepts-effects.md         # fragment effects and set()
+vgpu docs cat concepts-compilation.md     # prepare() and the pendingPipelines policy
+vgpu docs cat concepts-effects.md         # fragment effects, .set() and .bind()
 vgpu docs cat concepts-passes.md          # frame.pass and multi-pass work
 vgpu docs cat concepts-frames.md          # frame batching and animation loops
 vgpu docs cat concepts-render-bundles.md  # record draws once, replay cheap

@@ -61,7 +61,7 @@ Render an 8×1 or 1×1 target where each pixel is a slot and each channel carrie
 | distance, thickness | `distance * scale` with a fixed scale | `byte / 255 / scale` |
 
 ```ts
-import { init, effect, target } from "vgpu/node";
+import { init, effect, renderOnce, target } from "vgpu/node";
 
 const helpers = `
   fn dielectric_fresnel(ior: f32, facing: f32) -> f32 {
@@ -76,7 +76,7 @@ const helpers = `
 const gpu = await init();
 const colorTarget = target(gpu, { size: [8, 1] });
 
-effect(gpu, `
+const probe = effect(gpu, `
   ${helpers}
   @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
     let slot = i32(floor(uv.x * 8.0));
@@ -87,7 +87,8 @@ effect(gpu, `
     // normalized LOD: divide by levels - 1 so full roughness reaches exactly 1.0
     return vec4f(transmission_lod(0.0, 8.0) / 7.0, transmission_lod(0.5, 8.0) / 7.0, transmission_lod(1.0, 8.0) / 7.0, 1.0);
   }
-`).draw(colorTarget);
+`);
+await renderOnce(gpu, colorTarget, (p) => p.draw(probe));
 
 const pixels = await colorTarget.read();
 const slot0 = [...pixels.slice(0, 3)].map((byte) => byte / 255);
@@ -146,22 +147,26 @@ export async function dump(target: Target, file: string): Promise<void> {
 `target.read()` returns 8-bit RGBA bytes and does not read HDR targets such as `rgba16float` or `rgba32float` directly (known limitation: [#193](https://github.com/vercel-labs/vgpu/issues/193)). Render an encode pass into a separate `rgba8unorm` target, then read that target. Choose an encoding for the quantity: the example maps signed directions with `x * 0.5 + 0.5`; use a fixed range appropriate to distances or radiance instead.
 
 ```typescript
-import { init, effect, sampler, target } from "vgpu/node";
+import { init, effect, renderOnce, sampler, target } from "vgpu/node";
 
 const gpu = await init();
 const hdr = target(gpu, { size: [64, 64], format: "rgba16float" });
 const encoded = target(gpu, { size: [64, 64], format: "rgba8unorm" });
 
-const encode = effect(gpu, `
-  @group(0) @binding(0) var source: texture_2d<f32>;
-  @group(0) @binding(1) var sourceSampler: sampler;
+const encode = effect(gpu, {
+  shader: `
+    @group(0) @binding(0) var source: texture_2d<f32>;
+    @group(0) @binding(1) var sourceSampler: sampler;
 
-  @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-    let value = textureSampleLevel(source, sourceSampler, uv, 0.0);
-    return vec4f(value.rgb * 0.5 + vec3f(0.5), 1.0); // signed direction -> [0, 1]
-  }
-`);
-encode.set({ source: hdr, sourceSampler: sampler(gpu, { minFilter: "linear", magFilter: "linear" }) }).draw(encoded);
+    @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+      let value = textureSampleLevel(source, sourceSampler, uv, 0.0);
+      return vec4f(value.rgb * 0.5 + vec3f(0.5), 1.0); // signed direction -> [0, 1]
+    }
+  `,
+  // External resources: bind the TARGET (it re-binds itself if recreated), plus a sampler.
+  bindings: { source: hdr, sourceSampler: sampler(gpu, { minFilter: "linear", magFilter: "linear" }) },
+});
+await renderOnce(gpu, encoded, (p) => p.draw(encode));
 const pixels = await encoded.read();
 gpu.dispose();
 ```

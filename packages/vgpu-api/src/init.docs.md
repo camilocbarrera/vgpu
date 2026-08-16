@@ -13,7 +13,7 @@ Browser code imports from `vgpu`; Node GPU tests import from `vgpu/node`; determ
 ## Signature
 
 ```ts
-import type { Gpu } from "vgpu";
+import type { Gpu, PendingPipelines } from "vgpu";
 import type { RequiredDeviceLimits, VGPUAdapter } from "vgpu/core";
 
 declare function init(options?: InitOptions): Promise<Gpu>;
@@ -24,6 +24,7 @@ interface InitOptions {
   readonly requiredFeatures?: readonly GPUFeatureName[];
   readonly requiredLimits?: RequiredDeviceLimits;
   readonly label?: string;
+  readonly pendingPipelines?: PendingPipelines;
 }
 ```
 
@@ -37,18 +38,19 @@ interface InitOptions {
 | options.requiredFeatures | `readonly GPUFeatureName[]` | ✖ | `undefined` | Optional device features to enable, forwarded to `adapter.requestDevice` (e.g. `"depth-clip-control"` for `DrawOptions.unclippedDepth`). Checked against the adapter's supported features first: a name the adapter lacks fails init with `VGPU-FEATURE-UNSUPPORTED` instead of a native rejection. `device.features` reflects exactly the requested features. |
 | options.requiredLimits | `RequiredDeviceLimits` | ✖ | `undefined` | Forwarded unchanged to `adapter.requestDevice`. Unsupported names/values reject device creation. |
 | options.label | `string` | ✖ | `undefined` | Reserved public option; current main API (`vgpu`) device creation does not use it as a debug label. |
+| options.pendingPipelines | `"throw" \| "skip" \| "sync"` | ✖ | `"throw"` | Gpu-wide default of the compilation policy: what a **synchronous** encode does when the `(renderable, target signature)` combination it needs has no compiled pipeline yet. The default never compiles implicitly — it throws `VGPU-PIPELINE-PENDING`. See [Pipeline compilation policy](#pipeline-compilation-policy). |
 
 **Returns:** `Promise<Gpu>` — the context every factory takes first: `surface(gpu, ...)`,
 `target(gpu, ...)`, `draw(gpu, ...)`, `effect(gpu, ...)`, `compute(gpu, ...)`, `geometry(gpu, ...)`,
-`frame(gpu, cb)` / `frameLoop(gpu, cb)`, `storage(gpu, ...)`, `uniforms(gpu, ...)`,
-`sampler(gpu, ...)`, and `bundle(gpu, ...)`.
+`frame(gpu, cb)` / `frameLoop(gpu, cb)`, `prepare(gpu, requests)`, `storage(gpu, ...)`,
+`uniform(gpu, ...)`, `sampler(gpu, ...)`, and `bundle(gpu, ...)`.
 
 **Throws:** `VGPU-RING1-UNSUPPORTED` when WebGPU is unavailable, adapter request returns `null`, or an entrypoint lacks an adapter factory — use `vgpu/mock` in tests, `vgpu/node` in Node, or pass a valid adapter; `VGPU-FEATURE-UNSUPPORTED` when `requiredFeatures` names a feature the adapter does not support — remove the unsupported name(s) or run on an adapter that supports them.
 
 ## Examples
 
 ```ts
-import { init, effect, frame, target } from "vgpu/mock";
+import { init, effect, frame, prepare, target } from "vgpu/mock";
 
 const gpu = await init();
 const colorTarget = target(gpu, { size: [64, 64], format: "rgba8unorm" });
@@ -58,13 +60,16 @@ const shader = effect(gpu, `
   }
 `);
 
+// Under the default policy, compilation happens on an async path only:
+await prepare(gpu, [{ draw: shader, target: colorTarget }]);
+
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: colorTarget }, (p) => p.draw(shader));
 });
 ```
 
 ```ts
-import { init, effect, frame, surface } from "vgpu";
+import { init, effect, frame, prepare, surface } from "vgpu";
 
 declare const canvas: HTMLCanvasElement;
 
@@ -72,12 +77,23 @@ const gpu = await init({
   // Request only when a vertex entry actually reads storage and the adapter supports it.
   requiredLimits: { maxStorageBuffersInVertexStage: 1 },
 });
-const canvasSurface = surface(gpu, canvas, { dpr: [1, 2] });
+const canvasSurface = surface(gpu, canvas, { dpr: [1, 2], depth: true, sampleCount: 4 });
 const shader = effect(gpu, `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }`);
+
+// A Surface has a frame-independent pipeline signature, so this is legal outside frame():
+await prepare(gpu, [{ draw: shader, target: canvasSurface }]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: canvasSurface }, (p) => p.draw(shader));
 });
+```
+
+```ts
+import { init } from "vgpu";
+
+// Prototyping / porting escape hatch: opt in to inline compilation app-wide.
+// It is the only policy that can stall a synchronous encode.
+const gpu = await init({ pendingPipelines: "sync" });
 ```
 
 ```ts
@@ -94,8 +110,28 @@ gpuTimer.onResults((spans) => console.table(spans));
 
 The granted feature makes `timer(gpu)` succeed. In a browser, drop the `adapter` option — `requiredFeatures` is forwarded to the real adapter the same way.
 
+## Pipeline compilation policy
+
+`pendingPipelines` is the one compilation policy shared by draws, effects, computes and bundles. It
+is resolved **call site → frame → gpu**: `p.draw(inst, { pendingPipelines })` wins over
+`frame(gpu, cb, { pendingPipelines })`, which wins over `init({ pendingPipelines })`. Set it once
+here (or per frame); the per-call form is for exceptions.
+
+| Value | A synchronous encode meets an uncompiled combination |
+|---|---|
+| `"throw"` *(default)* | Does **not** start compilation. Throws `VGPU-PIPELINE-PENDING` and encodes nothing for that command. `await prepare(gpu, [...])` first. |
+| `"skip"` | Starts (or continues) async compilation in the background and omits the command this frame. Never throws per frame; a compilation failure is reported once through `gpu.onError`. |
+| `"sync"` | Immediate inline pipeline creation. The only synchronous-compilation opt-in, and the only value that can stall. |
+
+The default is uniform across browser, node and mock — there is no dev/prod divergence, and tests
+get readiness by calling `prepare()`, which is instant on the mock device.
+
 ## Notes
 
+- **The compilation default is `"throw"`, so the one async line every app writes is `prepare()`.**
+  `init()` never compiles pipelines; `prepare(gpu, requests)` (or `renderOnce()` /
+  `compute.dispatchOnce()`) is where compilation happens. A hidden synchronous compile inside a
+  third-party animation tick is a dropped frame, which is exactly what the default forbids.
 - Choose the entrypoint for the runtime: use `vgpu` in browsers with WebGPU; use `vgpu/node` for headless Node rendering with a real adapter; use `vgpu/mock` for deterministic tests that do not require a GPU. Keep application code on the same `init(options?)` shape so the switch is local.
 - Request optional features only when a code path uses them: `"timestamp-query"` enables `timer(gpu)`, `"depth-clip-control"` enables `DrawOptions.unclippedDepth`, and `"indirect-first-instance"` enables indirect draws that provide a non-zero first instance. Do not request features speculatively; unsupported names fail `init`.
 - In tests, declare and request a mock feature explicitly: `init({ adapter: createMockAdapter({ features: ["timestamp-query"] }), requiredFeatures: ["timestamp-query"] })` lets you exercise feature gates instead of silently relying on defaults.

@@ -12,9 +12,7 @@ import type { DepthOptions, Draw, DrawOptions, DrawCallOptions, DrawLayoutOption
 ## Signature
 
 ```ts
-import type { ShaderSource, StorageBuffer, Target, TargetSignature } from "vgpu";
-
-type SetBag = Record<string, unknown>;
+import type { PendingPipelines, ShaderSource, StorageBuffer, Target } from "vgpu";
 
 type BlendPreset = "alpha" | "additive" | "premultiplied";
 interface BlendComponentOptions { readonly src: GPUBlendFactor; readonly dst: GPUBlendFactor; readonly op?: GPUBlendOperation; }
@@ -46,9 +44,11 @@ interface StencilOptions {
 interface DrawOptions {
   readonly shader: string | ShaderSource;
   readonly geometry?: GeometryLike;
-  readonly set?: SetBag;
+  /** Instance-owned bindings: storage created here, written with `.set()`. */
+  readonly values?: Record<string, unknown>;
+  /** Externally-owned bindings: identity swapped with `.bind()`. */
+  readonly bindings?: Record<string, unknown>;
   readonly label?: string;
-  readonly targets?: readonly Target[];
   readonly instances?: number;
   readonly vertices?: number;
   readonly firstInstance?: number;
@@ -77,6 +77,8 @@ interface DrawCallOptions {
   readonly baseVertex?: number;
   readonly firstInstance?: number;
   readonly indirect?: StorageBuffer | { readonly buffer: StorageBuffer; readonly offset?: number };
+  /** Call-site link of the `pendingPipelines` chain (call site → frame → gpu). Exceptions only. */
+  readonly pendingPipelines?: PendingPipelines;
 }
 
 interface DrawLayoutOptions { readonly dynamicOffsets?: boolean; }
@@ -97,14 +99,14 @@ interface GeometryLike {
 }
 
 interface Draw {
+  /** The `GPURenderPipeline` of the last prepared combination, or `undefined` while none is. */
   readonly gpu: GPURenderPipeline | undefined;
-  readonly targets: readonly Target[] | undefined;
-  set(values: SetBag): this;
+  /** Binding-scoped byte write on an instance-owned binding. Never rebuilds a bind group. */
+  set(binding: string, value: unknown): this;
+  /** Identity swap of an externally-owned binding. Dedupes by identity; rebuilds exactly that group. */
+  bind(binding: string, resource: unknown): this;
   group(n: number, bindGroup: GPUBindGroup): this;
   layout(n: number, opts?: DrawLayoutOptions): GPUBindGroupLayout;
-  draw(target?: Target | DrawCallOptions): void;
-  compile(target?: Target | TargetSignature): Promise<this>;
-  compileSync(target?: Target | TargetSignature): this;
 }
 ```
 
@@ -114,9 +116,9 @@ interface Draw {
 |---|---|---:|---|---|
 | opts.shader | `string \| ShaderSource` | ✔ | — | WGSL string or loader-produced `ShaderSource`. Must contain compatible vertex/fragment entry points; default names are `vs_main` and `fs_main` if reflection does not find them. |
 | opts.geometry | `GeometryLike` | ✖ | `undefined` | Supplies vertex/index buffers and layouts. Omit for generated vertex-index drawing. |
-| opts.set | `Record<string, unknown>` | ✖ | `undefined` | Initial `.set()` call. |
+| opts.values | `Record<string, unknown>` | ✖ | `undefined` | Initial values of **instance-owned** bindings, keyed by WGSL binding name. Declaring a binding here pins it value-owned at construction and pins its type; its storage is created here and zero-initialized, and only `.set()` writes it. |
+| opts.bindings | `Record<string, unknown>` | ✖ | `undefined` | **Externally-owned** resources (a shared `uniform()`, a `Target`, a `StorageBuffer`, a sampler), keyed by WGSL binding name. `.set()` on one of these throws `VGPU-R1-EXTERNAL-BINDING`; `.bind()` swaps its identity. |
 | opts.label | `string` | ✖ | `"draw"` | Debug/error label. |
-| opts.targets | `readonly Target[]` | ✖ | `undefined` | Synchronous pre-warm sugar for the listed target signatures. In browser load paths, prefer `await draw.compile(target)`. |
 | opts.instances | `number` | ✖ | `1` | Default instance count. Integer `>= 0`; per-call `instances` overrides. |
 | opts.vertices | `number` | ✖ | `3` for non-indexed, unless `geometry.vertexCount` exists | Default non-indexed vertex count. Ignored by indexed geometries. Integer `>= 0`. |
 | opts.firstInstance | `number` | ✖ | `0` | Default first instance. Integer `>= 0`; per-call `firstInstance` overrides. |
@@ -129,16 +131,17 @@ interface Draw {
 | opts.unclippedDepth | `boolean` | ✖ | `false` | Disables depth clipping so geometry outside `[near, far]` rasterizes instead of vanishing. Use it for shadow-map pancaking: casters behind the light's near plane flatten onto it instead of being clipped out of the map. Requires the `"depth-clip-control"` device feature. When omitted or `false`, standard clipping applies. |
 | opts.depth | `false \| DepthOptions` | ✖ | `{ write: true, compare: "less-equal" }` | Depth test/write state for targets with a depth attachment; fields are in the `DepthOptions` table below. `false` disables depth testing for overlays and gizmos that must draw over the scene regardless of distance. When omitted, nearer fragments win and coplanar re-draws still pass; ignored when the target has no depth. |
 | opts.stencil | `StencilOptions` | ✖ | WebGPU pass-through defaults | Masks draws to marked screen regions using the stencil aspect of the depth attachment — portals, mirrors, object outlines, masked UI. Requires a target depth format with a stencil aspect (`depth: "depth24plus-stencil8"`). Fields are in the `StencilOptions` table below. |
-| opts.multisample | `{ alphaToCoverage?, mask? }` | ✖ | `{ alphaToCoverage: false, mask: 0xFFFFFFFF }` | MSAA state. `alphaToCoverage`: turns fragment alpha into a per-sample coverage mask, so alpha-tested foliage antialiases in any draw order — no blending, no transparency sorting; requires an `msaa: true` target. `mask`: bitmask of samples the draw may write — a niche debugging tool most draws never set. Only the low `sampleCount` bits matter; higher bits are legal and ignored. |
+| opts.multisample | `{ alphaToCoverage?, mask? }` | ✖ | `{ alphaToCoverage: false, mask: 0xFFFFFFFF }` | MSAA state. `alphaToCoverage`: turns fragment alpha into a per-sample coverage mask, so alpha-tested foliage antialiases in any draw order — no blending, no transparency sorting; requires a multisampled target (`sampleCount: 4`). `mask`: bitmask of samples the draw may write — a niche debugging tool most draws never set. Only the low `sampleCount` bits matter; higher bits are legal and ignored. |
 | opts.constants | `Readonly<Record<string, number \| boolean>>` | ✖ | the WGSL defaults | Values for WGSL `override` constants, fixed at pipeline creation. Use them to specialize one shader — quality tiers, feature toggles, workgroup-size tuning — without string-templating the WGSL. Key by override name, or by the decimal string of `N` when the declaration has `@id(N)` (the name is not usable then). Booleans become `1`/`0`; every override declared without a default must be provided. |
 | opts.entry | `{ vertex?: string; fragment?: string }` | ✖ | first entry point of each stage | Selects which `@vertex`/`@fragment` functions to compile when one WGSL module declares several — variants of one technique sharing helpers, such as depth-only and shaded passes from the same source. Names must exist in the shader with the matching stage. Omitted fields keep the first entry point of that stage. |
-| draw.set.values | `Record<string, unknown>` | ✔ | — | Values keyed by WGSL binding variable name. JS objects/numbers are packed; resources are bound by identity. |
+| draw.set.binding | `string` | ✔ | — | Names a **complete instance-owned WGSL binding**; the second argument is its value. Struct-typed bindings accept a partial — absent fields keep the last value written, merged CPU-side into a single struct rewrite — while a non-struct binding (`mat4x4f`, `vec4f`, `array<f32,N>`) takes its complete value. There is no object-wide form and no member-name shortcut: naming a struct member without naming its binding is rejected with an actionable message. |
+| draw.bind.resource | `unknown` | ✔ | — | New identity for an externally-owned binding: rebuilds exactly the affected group and marks bundles that captured it `stale`. Re-binding the same resource is free (deduped by identity). A `Surface` is rejected with `VGPU-SURFACE-NOT-BINDABLE`. |
 | draw.group.n | `number` | ✔ | — | Bind group index to claim for manual bind-group binding (`group(n, bindGroup)`). |
 | draw.group.bindGroup | `GPUBindGroup` | ✔ | — | Must be compatible with `draw.layout(n)` or `draw.layout(n, { dynamicOffsets: true })`. |
 | draw.layout.n | `number` | ✔ | — | Reflected bind group index. |
 | draw.layout.opts.dynamicOffsets | `boolean` | ✖ | `false` | When `true`, returns/reuses a layout whose buffer entries have `hasDynamicOffset: true` and clears cached pipelines. |
-| draw.draw.target | `Target \| DrawCallOptions` | ✖ | `{}` | One-shot draw options. Pass a bare target for the common case, or an options bag when setting counts or offsets. |
-| opts.target | `Target` | ✖ | — | Required at runtime when an options bag is used. Use a `Surface` or an offscreen `Target`. |
+| p.draw.opts | `DrawCallOptions` | ✖ | `{}` | Per-encode options of `p.draw(drawable, opts)` inside a pass: counts, offsets, `indirect`, and the call-site `pendingPipelines`. |
+| opts.target | `Target` | ✖ | — | Pass destination when the options bag is used outside a `f.pass()` body. Use a `Surface` or an offscreen `Target`. |
 | opts.offsets | `readonly number[] \| Partial<Record<number, readonly number[]>>` | ✖ | Reflected/claimed fallback offsets | Dynamic offsets for claimed/dynamic groups. Array applies to every group; object keys by group. |
 | opts.instances | `number` | ✖ | `DrawOptions.instances ?? geometry.instanceCount ?? 1` | Per-call instance count; integer `>= 0`. |
 | opts.vertices | `number` | ✖ | `geometry.vertexCount ?? DrawOptions.vertices ?? 3` | Per-call non-indexed vertex count; indexed geometries use `geometry.indexCount`. |
@@ -175,12 +178,15 @@ interface Draw {
 | depthFail | `GPUStencilOperation` | ✖ | `"keep"` | Operation when the stencil comparison passes but the depth test fails. |
 | pass | `GPUStencilOperation` | ✖ | `"keep"` | Operation when both comparisons pass. `"replace"` writes `ref`, marking the region for later draws. |
 
-**Returns:** `draw(gpu)` returns `Draw`; `set()`, `group()`, and `compileSync()` return the same `Draw`; `layout()` returns a `GPUBindGroupLayout`; one-shot `draw()` returns `void`; `compile()` returns `Promise<this>`.
+**Returns:** `draw(gpu, opts)` returns `Draw`; `set()`, `bind()` and `group()` return the same `Draw`; `layout()` returns a `GPUBindGroupLayout`.
 
-**Throws:** one `VGPU-*` code per condition below. Checks marked † resolve against the target signature at compile/draw time; with `targets: [...]` they surface from `draw(gpu)` itself, because that option compiles at construction.
+**Throws:** one `VGPU-*` code per condition below. Checks marked † resolve against the target signature, so they surface from `prepare(gpu, [{ draw, target }])` (or from the encode that first needs that combination), never from `draw(gpu, …)` — a `Draw` is target-agnostic and compiles nothing at construction.
 
+- `VGPU-PIPELINE-PENDING` — a synchronous encode met a `(draw, target signature)` combination with no compiled pipeline, under the default `pendingPipelines: "throw"`. Nothing was compiled and the draw was not encoded: `await prepare(gpu, [{ draw, target }])` before drawing, or opt in to inline compilation with `pendingPipelines: "sync"`.
+- `VGPU-PREPARE-FAILED` — `prepare()` rejected; the error enumerates every failed combination (renderable label + resolved signature + `cause`). Combinations that did compile stay cached.
 - `VGPU-LIMIT-STORAGE-VERTEX` / `VGPU-LIMIT-STORAGE-FRAGMENT` — static storage-buffer use by a selected entry point exceeds the granted stage limit. Request the supported `requiredLimits` value, or reduce/move the storage data.
-- `VGPU-TARGET-REQUIRED` — `draw.draw()` was called without a target and the draw has none to fall back on. Pass a `Target`, or an options bag with `target`.
+- `VGPU-TARGET-REQUIRED` — a draw was encoded without a pass destination. Encode inside `f.pass(target, …)`, or use `renderOnce(gpu, target, …)`.
+- `VGPU-DEVICE-LOST` — the device backing this draw was lost. Loss is terminal: rebuild the object graph on a new `Gpu`.
 - `VGPU-BLEND-INVALID` — unknown blend preset or malformed blend object. Use `"alpha"`, `"additive"`, `"premultiplied"`, or `{ color: { src, dst, op? }, alpha? }`.
 - `VGPU-BLEND-CONSTANT-INVALID` — `blendConstant` is not exactly four finite numbers, or no color target's effective blend uses a `"constant"`/`"one-minus-constant"` factor (the value could never apply). The effective blend of a target is its `colors[i].blend` when it has one, else the top-level `blend` — so a top-level constant factor overridden on *every* target is still dead, while a constant factor reached only through `colors[i].blend` is live. Fix the tuple, or add a constant factor to a blend that survives the per-target overrides.
 - `VGPU-WRITEMASK-INVALID` — `writeMask` is not an array, or contains a channel outside `"r"`/`"g"`/`"b"`/`"a"`.
@@ -190,14 +196,15 @@ interface Draw {
 - `VGPU-UNCLIPPED-DEPTH-INVALID` — `unclippedDepth` is not a boolean, or is `true` on a device whose `features` lacks `"depth-clip-control"`. Request the feature with `init({ requiredFeatures: ["depth-clip-control"] })` on an adapter that supports it.
 - `VGPU-DEPTH-INVALID` — non-boolean `write`; unknown `compare`; non-integer `bias`; non-finite bias values; a nonzero bias value with a `line-*`/`point-*` topology (depth bias is only defined for triangles); or a nonzero `biasClamp` on a compatibility-mode device. Zero the offending field.
 - `VGPU-STENCIL-INVALID` — malformed `stencil` (non-object value, malformed `front`/`back` face, unknown `compare` or `fail`/`depthFail`/`pass` operation, or `readMask`/`writeMask`/`ref` outside integer `[0, 0xFFFFFFFF]`); or † any stencil state against a depth format without a stencil aspect. Create the target with `depth: "depth24plus-stencil8"`.
-- `VGPU-MULTISAMPLE-INVALID` — malformed `multisample` (non-object value, non-boolean `alphaToCoverage`, or a `mask` outside integer `[0, 0xFFFFFFFF]`); or † `alphaToCoverage: true` against a non-MSAA signature. Create the target with `msaa: true`.
+- `VGPU-MULTISAMPLE-INVALID` — malformed `multisample` (non-object value, non-boolean `alphaToCoverage`, or a `mask` outside integer `[0, 0xFFFFFFFF]`); or † `alphaToCoverage: true` against a non-MSAA signature. Create the target with `sampleCount: 4`.
 - `VGPU-CONSTANTS-INVALID` — non-object `constants`; a key that matches no override in the shader (the message lists the available ones); a value that is neither a finite number nor a boolean; or an override declared without a default that `constants` does not provide. Add `constants: { "<nameOrId>": value }`.
 - `VGPU-ENTRY-INVALID` — non-object `entry` or a non-string `vertex`/`fragment` field; a name that matches no entry point; or a name whose entry point has the wrong stage. The message lists the shader's entry points with their stages.
 - `VGPU-R1-DRAW-COUNT` — a count field is not an integer `>= 0`. Use `0` only for a deliberate no-op draw.
 - `VGPU-INDIRECT-INVALID` — at call time: `indirect` is neither a `StorageBuffer` nor `{ buffer, offset? }`; the buffer was created without the indirect flag (use `storage(gpu, bytes, { indirect: true })`); `offset` is not a non-negative integer multiple of 4; the arguments overrun the buffer (the message shows the byte math); or `indirect` is combined with `vertices`/`indices`/`instances`/`firstVertex`/`firstIndex`/`baseVertex`/`firstInstance` — the GPU reads those from the buffer, so drop the CPU-side value.
-- `VGPU-R1-BINDING-NEVER-SET` — a reflected binding was never provided before drawing. `set()` the named binding, or claim its group with `group(n, bindGroup)`.
-- `VGPU-R1-OWNERSHIP-FLIP` — a binding switched between JS-value ownership and resource ownership across `set()` calls. Keep passing the kind its first `set()` used.
-- `VGPU-R1-BINDING-INCOMPATIBLE-RESOURCE` — a `set()` value does not satisfy the binding; the message names the binding and what it needs.
+- `VGPU-R1-BINDING-NEVER-SET` — a reflected binding was never provided before drawing. `set()` the named binding, declare it in `values`/`bindings`, or claim its group with `group(n, bindGroup)`.
+- `VGPU-R1-EXTERNAL-BINDING` — `.set()` named a binding declared in `bindings`, which the instance does not own. Update the resource itself (`globals.set({ time })`), or swap its identity with `.bind(binding, resource)`. Ownership is fixed at construction, so the order-dependent latch of 0.3 (`VGPU-R1-OWNERSHIP-FLIP`) is unrepresentable here.
+- `VGPU-SURFACE-NOT-BINDABLE` — a `Surface` was passed as a binding. A surface is a presentation destination, not a bindable texture: render into a `Target` and bind that, or read back with `surface.read()`.
+- `VGPU-R1-BINDING-INCOMPATIBLE-RESOURCE` — a `set()`/`bind()` value does not satisfy the binding; the message names the binding and what it needs.
 - `VGPU-SET-TEXTURE-FILTERABILITY` — a facade texture format cannot satisfy an ordinarily sampled `float` binding (detail identifies the format, texture, and paired sampler). Use a filterable format, request `float32-filterable`, or rewrite to `textureLoad`.
 - `VGPU-R4-GROUP-CLAIMED` — `set()` tried to update a claimed group. Call `set()` before claiming, or keep updating the group yourself from `draw.layout(n)`.
 - `VGPU-R4-GROUP-INCOMPATIBLE` — a claimed bind group does not match the draw's layout. Build it from `draw.layout(n, { dynamicOffsets? })` before calling `group(n, bindGroup)`.
@@ -207,13 +214,12 @@ interface Draw {
 ## Examples
 
 ```ts
-import { init, draw, target } from "vgpu/mock";
+import { init, draw, frame, prepare, target } from "vgpu/mock";
 
 const gpu = await init();
 const colorTarget = target(gpu, { size: [64, 64] });
 const tri = draw(gpu, {
   label: "tri",
-  targets: [colorTarget],
   shader: `
     @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
       var p = array<vec2f, 3>(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
@@ -223,13 +229,18 @@ const tri = draw(gpu, {
   `,
 });
 
-tri.draw({ target: colorTarget, vertices: 3, instances: 1 });
+// A Draw is target-agnostic; readiness belongs to the (draw, target) combination:
+await prepare(gpu, [{ draw: tri, target: colorTarget }]);
+
+frame(gpu, (f) => {
+  f.pass(colorTarget, (p) => p.draw(tri, { vertices: 3, instances: 1 }));
+});
 ```
 
 Backface culling for a closed imported geometry:
 
 ```ts
-import { init, draw, target } from "vgpu/mock";
+import { init, draw, renderOnce, target } from "vgpu/mock";
 
 const gpu = await init();
 const scene = target(gpu, { size: [256, 256], depth: true });
@@ -246,7 +257,7 @@ const opaque = draw(gpu, {
   cull: "back",    // closed geometry: faces pointing away are never visible
   frontFace: "cw", // the importer produced clockwise triangles
 });
-opaque.draw(scene);
+await renderOnce(gpu, scene, (p) => p.draw(opaque));
 ```
 
 Culling back faces skips roughly half the fragment work on the closed statue, and `frontFace: "cw"` keeps the imported clockwise winding — or a negative-scale mirror — counting as front-facing.
@@ -254,7 +265,7 @@ Culling back faces skips roughly half the fragment work on the closed statue, an
 Shadow map with depth bias and pancaking:
 
 ```ts
-import { init, createMockAdapter, draw, target } from "vgpu/mock";
+import { init, createMockAdapter, draw, renderOnce, target } from "vgpu/mock";
 
 const gpu = await init({
   adapter: createMockAdapter({ features: ["depth-clip-control"] }),
@@ -274,7 +285,7 @@ const casters = draw(gpu, {
   // Pancake casters behind the light's near plane instead of clipping them away.
   unclippedDepth: true,
 });
-casters.draw(shadowMap);
+await renderOnce(gpu, shadowMap, (p) => p.draw(casters));
 ```
 
 The bias pair keeps lit surfaces acne-free, and `unclippedDepth` flattens casters between the light and its near plane onto the map instead of losing their shadows.
@@ -282,7 +293,7 @@ The bias pair keeps lit surfaces acne-free, and `unclippedDepth` flattens caster
 MRT decal into a G-buffer:
 
 ```ts
-import { init, draw, target } from "vgpu/mock";
+import { init, draw, renderOnce, target } from "vgpu/mock";
 
 const gpu = await init();
 // Deferred-shading G-buffer: albedo + world-space normals.
@@ -306,7 +317,7 @@ const decal = draw(gpu, {
   ],
   depth: { write: false }, // the decal sits on existing geometry
 });
-decal.draw(gbuffer);
+await renderOnce(gpu, gbuffer, (p) => p.draw(decal));
 ```
 
 One draw blends the decal into `gbuffer.colors[0]` while `{ writeMask: [] }` leaves the normals exactly as the opaque pass wrote them — the fragment still outputs `@location(1)`, the mask only blocks the write.
@@ -314,10 +325,10 @@ One draw blends the decal into `gbuffer.colors[0]` while `{ writeMask: [] }` lea
 Alpha-tested foliage without transparency sorting:
 
 ```ts
-import { init, draw, target } from "vgpu/mock";
+import { init, draw, renderOnce, target } from "vgpu/mock";
 
 const gpu = await init();
-const scene = target(gpu, { size: [256, 256], depth: true, msaa: true });
+const scene = target(gpu, { size: [256, 256], depth: true, sampleCount: 4 });
 const foliage = draw(gpu, {
   shader: `
     @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
@@ -329,7 +340,7 @@ const foliage = draw(gpu, {
   `,
   multisample: { alphaToCoverage: true },
 });
-foliage.draw(scene);
+await renderOnce(gpu, scene, (p) => p.draw(foliage));
 ```
 
 Fragment alpha becomes per-sample coverage, so leaf edges antialias in any draw order — no blending, no transparency sorting.
@@ -366,7 +377,7 @@ The first draw marks the portal region in the stencil buffer; the second renders
 Per-draw layer fade with the blend constant:
 
 ```ts
-import { init, draw, target } from "vgpu/mock";
+import { init, draw, renderOnce, target } from "vgpu/mock";
 
 const gpu = await init();
 const colorTarget = target(gpu, { size: [128, 128] });
@@ -382,7 +393,7 @@ const overlay = draw(gpu, {
   blend: { color: { src: "constant", dst: "one-minus-constant" } },
   blendConstant: [0.25, 0.25, 0.25, 0.25], // the layer shows at 25%
 });
-overlay.draw(colorTarget);
+await renderOnce(gpu, colorTarget, (p) => p.draw(overlay));
 ```
 
 The whole overlay fades with one per-draw value — no per-vertex alpha rewrite, and no extra pipeline, because the constant is encoder state.
@@ -390,7 +401,7 @@ The whole overlay fades with one per-draw value — no per-vertex alpha rewrite,
 Pipeline specialization with `constants` and `entry`:
 
 ```ts
-import { init, draw, target } from "vgpu/mock";
+import { init, draw, renderOnce, target } from "vgpu/mock";
 
 const gpu = await init();
 const colorTarget = target(gpu, { size: [128, 128] });
@@ -407,8 +418,10 @@ const SOURCE = `
 const hero = draw(gpu, { shader: SOURCE, constants: { STEPS: 64 } });        // high quality tier
 const backdrop = draw(gpu, { shader: SOURCE, entry: { fragment: "fs_flat" } }); // cheap variant
 
-hero.draw(colorTarget);
-backdrop.draw(colorTarget);
+await renderOnce(gpu, colorTarget, (p) => {
+  p.draw(hero);
+  p.draw(backdrop);
+});
 ```
 
 Both draws compile from the same module: `constants` specializes the shaded variant at pipeline creation instead of string-templating WGSL, and `entry` picks the flat fragment for the backdrop.
@@ -416,19 +429,21 @@ Both draws compile from the same module: `constants` specializes the shaded vari
 GPU-driven draw with `indirect`:
 
 ```ts
-import { init, compute, draw, storage, target } from "vgpu/mock";
+import { init, compute, draw, frame, prepare, storage, target } from "vgpu/mock";
 
 const gpu = await init();
 const scene = target(gpu, { size: [256, 256], depth: true });
 // drawIndirect arguments: vertexCount, instanceCount, firstVertex, firstInstance.
 const args = storage(gpu, 16, { indirect: true });
-const cullPass = compute(gpu, `
-  @group(0) @binding(0) var<storage, read_write> args: array<u32, 4>;
-  @compute @workgroup_size(1) fn cs_main() {
-    args = array<u32, 4>(3u, 1u, 0u, 0u); // survivors of the culling test
-  }
-`);
-cullPass.set({ args });
+const cullPass = compute(gpu, {
+  shader: `
+    @group(0) @binding(0) var<storage, read_write> args: array<u32, 4>;
+    @compute @workgroup_size(1) fn cs_main() {
+      args = array<u32, 4>(3u, 1u, 0u, 0u); // survivors of the culling test
+    }
+  `,
+  bindings: { args },
+});
 const grass = draw(gpu, {
   shader: `
     @vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
@@ -438,17 +453,60 @@ const grass = draw(gpu, {
     @fragment fn fs_main() -> @location(0) vec4f { return vec4f(0, 0.6, 0, 1); }
   `,
 });
-cullPass.dispatch(1);                          // the GPU decides the counts
-grass.draw({ target: scene, indirect: args }); // the CPU never reads them back
+await prepare(gpu, [{ compute: cullPass }, { draw: grass, target: scene }]);
+
+frame(gpu, (f) => {
+  f.compute(cullPass, 1);                                  // the GPU decides the counts
+  f.pass(scene, (p) => p.draw(grass, { indirect: args }));  // the CPU never reads them back
+});                                                         // both in one submit, in program order
 ```
 
 The compute pass writes the draw arguments and the draw consumes them on the GPU — the culling result never round-trips through the CPU.
 
 ## Pipeline pre-warm
 
-`draw.compile(target)` asynchronously prepares one target signature and resolves to the same draw. `draw.compileSync(target)` prepares the same signature synchronously; if an async compile for that signature is still pending, the synchronous result wins the race and unblocks later draws. Both methods also accept a target signature object such as `{ colors: ["bgra8unorm"], depth: "depth24plus", sampleCount: 4 }`; `colors` is required and bare strings are rejected.
+`prepare(gpu, requests)` is the **one** spelling for readiness. A render pipeline cannot exist
+without a target signature, so the unit of preparation is the **combination** `(renderable, target)`:
 
-Each color/depth/sample-count variant is a different pipeline. A missed variant sync-compiles on first use, which can jank; fire-and-forget pre-warms should always use `.catch(...)` or `gpu.onError`/`gpu.settled()` will not observe the returned promise rejection. `targets: [target]` is kept as creation-time `compileSync()` sugar for non-browser hot paths.
+```ts
+import { init, draw, prepare, target } from "vgpu/mock";
+
+const gpu = await init();
+const screen = target(gpu, { size: [64, 64] });
+const hdr = target(gpu, { size: [64, 64], format: "rgba16float" });
+const mesh = draw(gpu, { shader: `@fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }` });
+
+const [forScreen, forHdr] = await prepare(gpu, [
+  { draw: mesh, target: screen },
+  { draw: mesh, target: hdr },     // a different signature is a different pipeline
+]);
+forScreen.signature;               // resolved TargetSignature { colors, depth, sampleCount }
+forHdr.gpu;                        // GPURenderPipeline — the only low-level escape hatch
+```
+
+Rules that follow from readiness being combination-scoped:
+
+- Preparing `{ draw, target: a }` does **not** make `{ draw, target: b }` ready, and a failure on `b`
+  neither throws for `a` nor mutates anything observable through the `Draw`. There is no `ready` /
+  `pending` field and no per-target status map on a `Draw`.
+- Handles are **data, not state**: there is no `prepared.status`. `prepare()` **rejects** with
+  `VGPU-PREPARE-FAILED` listing every failed combination; the ones that compiled stay cached, so
+  re-preparing the good subset is free and issues no new `createRenderPipeline`.
+- `prepare()` is idempotent and O(1) on an already-prepared combination — it is also the query.
+- Every other pipeline-affecting input (geometry vertex layout, topology, cull/front face,
+  depth/stencil/multisample/blend state, `constants`, `entry`) is fixed at construction of the
+  renderable, which is why `(renderable, signature)` is a complete key and `prepare()` needs no
+  `geometry:` or state axis.
+- Preparing against a `Surface` **outside** `frame()` is legal: a surface's pipeline signature comes
+  from its configuration, not from `getCurrentTexture()`. Only *encoding* needs the current texture.
+- A resize that preserves color format, depth format and sample count does not invalidate a prepared
+  pipeline; changing any of those three does.
+
+There is deliberately no `draw.compile()` / `compileSync()`, no `pipelineFor()` and no
+`DrawOptions.targets` precompile list: each was a per-object spelling of a per-combination fact, and
+the synchronous ones compiled pipelines outside an async API — exactly what the `"throw"` default
+forbids. Inline compilation is still reachable, but only as an explicit choice
+(`pendingPipelines: "sync"`), where the possible stall is visible at the call site.
 
 ## Notes
 
@@ -467,6 +525,7 @@ Each color/depth/sample-count variant is a different pipeline. A missed variant 
 - Blend presets: `"alpha"` uses source alpha over, `"premultiplied"` uses premultiplied source over, and `"additive"` uses one-plus-one additive blending for color and alpha. In explicit blends, `op` defaults to `"add"` and omitted `alpha` copies `color`.
 - `indirect` argument layouts: a non-indexed geometry (or no geometry) encodes `drawIndirect` — 4 u32 values, `vertexCount, instanceCount, firstVertex, firstInstance` (16 bytes); an indexed geometry still sets its index buffer and encodes `drawIndexedIndirect` — 5 32-bit values, `indexCount, instanceCount, firstIndex, baseVertex (signed), firstInstance` (20 bytes). Write them from a compute shader (bind the same buffer as storage) or from JS via `write()`. Indirect draws record fine into `bundle()`: `drawIndirect`/`drawIndexedIndirect` exist on render bundle encoders.
 - A non-zero `firstInstance` inside the buffered indirect arguments silently turns the draw into a no-op unless the device has the `"indirect-first-instance"` feature. The value lives on the GPU, so vgpu cannot validate it — request the feature with `init({ requiredFeatures: ["indirect-first-instance"] })` when you need it.
-- One-shot `draw.draw()` has no implicit target and returns `void`; raw claimed-group validation errors are delivered through `gpu.onError`, and tests can `await gpu.settled()`.
-- Changing resource identity after a draw is recorded in a `Bundle` marks that bundle stale; changing JS values in-place does not.
-- **See also:** `Effect`, `FramePass.draw`, `Bundle`, `Surface`, `Target`, `SharedUniforms`.
+- Encoding a draw always names its destination: `f.pass(target, (p) => p.draw(drawable))` inside a frame, or `renderOnce(gpu, target, cb)` for standalone work with its own encoder and single submit. There is no implicit target; raw claimed-group validation errors are delivered through `gpu.onError`, and tests can `await gpu.settled()`.
+- **`.set()` is bytes, `.bind()` is identity.** `draw.set("camera", { viewProjection })` writes bytes into instance-owned storage and never rebuilds a bind group, so a `Bundle` that captured this draw stays `ready`. `draw.bind("albedo", nextTexture)` swaps identity, rebuilds exactly that group, and moves dependent bundles to `stale` — recover with `prepare(gpu, [{ bundle }])`, not `rebuild()`. Bind a `Target` (not `target.color`) so resizes re-bind transparently.
+- A binding declared in the WGSL and absent from both `values` and `bindings` is instance-owned by default, with zero-initialized storage — which is why `.set()` works without declaring `values`. Owned→external transitions are not supported: recreate the instance (a plain options object makes that cheap).
+- **See also:** `Effect`, `prepare`, `FramePass.draw`, `Bundle`, `Surface`, `Target`, `SharedUniforms`.

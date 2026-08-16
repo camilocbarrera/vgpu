@@ -61,7 +61,7 @@ import { initFromDevice, type Buffer, type Compute } from "vgpu";
 
 declare const modelBytes: Uint8Array;
 declare const input: ort.Tensor;
-declare const compute: Compute;
+declare const kernel: Compute;
 declare const destination: Buffer;
 declare const workgroups: number;
 
@@ -73,7 +73,8 @@ const gpu = await initFromDevice(await ort.env.webgpu.device);
 const output = (await session.run({ input })).output;
 const source = gpu.device.wrapBuffer(output.gpuBuffer);
 try {
-  compute.set({ source, destination }).dispatch(workgroups);
+  kernel.bind("source", source).bind("destination", destination);
+  await kernel.dispatchOnce(workgroups);
   await gpu.device.queue.flush();
 } finally {
   source.dispose();

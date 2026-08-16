@@ -13,7 +13,7 @@ Surfaces and canvases have no depth buffer, and [Draws](concepts-draws.docs.md) 
 ## The recipe
 
 ```ts
-import { draw, effect, frame, geometry, init, sampler, surface, target } from "vgpu";
+import { draw, effect, frame, geometry, init, prepare, sampler, surface, target } from "vgpu";
 import { box, orbit, perspectiveCamera, sphere } from "vgpu/scene";
 
 const gpu = await init();
@@ -63,21 +63,25 @@ const canvasSurface = surface(gpu, canvas);
 const camera = perspectiveCamera({ fov: 45, aspect: width / height, position: [2.5, 2, 3.5], target: [0, 0, 0] });
 
 const cube = draw(gpu, { shader: objectShader, geometry: geometry(gpu, box({ size: 1 })), cull: "back" });
-cube.set({
-  camera: { viewProjection: camera.viewProjection },
-  model: { model: orbit(0), color: [0.95, 0.45, 0.2] },
-});
+cube.set("camera", { viewProjection: camera.viewProjection });
+cube.set("model", { model: orbit(0), color: [0.95, 0.45, 0.2] });
 
 const ball = draw(gpu, { shader: objectShader, geometry: geometry(gpu, sphere({ radius: 0.6 })), cull: "back" });
-ball.set({
-  camera: { viewProjection: camera.viewProjection },
-  model: { model: orbit(2.1), color: [0.3, 0.6, 1] },
-});
+ball.set("camera", { viewProjection: camera.viewProjection });
+ball.set("model", { model: orbit(2.1), color: [0.3, 0.6, 1] });
 
 // The present pass is a single full-screen effect bound to the offscreen target.
-const present = effect(gpu, presentShader, {
-  set: { scene, sceneSampler: sampler(gpu, { minFilter: "linear", magFilter: "linear" }) },
+const present = effect(gpu, {
+  shader: presentShader,
+  bindings: { scene, sceneSampler: sampler(gpu, { minFilter: "linear", magFilter: "linear" }) },
 });
+
+// Every combination this frame encodes, warmed on the async path:
+await prepare(gpu, [
+  { draw: cube, target: scene },
+  { draw: ball, target: scene },
+  { draw: present, target: canvasSurface },
+]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: scene, clear: [0.04, 0.05, 0.08, 1], clearDepth: 1 }, (pass) => {
@@ -91,17 +95,17 @@ frame(gpu, (currentFrame) => {
 Three things are doing the work:
 
 - **`depth: true` on the offscreen target.** Without it the draws have no depth attachment and the two objects paint over each other in submission order. `clearDepth: 1` resets it every frame; use `clearDepth: 0` together with `depth: { compare: "greater" }` on the draw for reversed-Z in deep scenes.
-- **Binding the target itself.** `set({ scene })` passes the `Target` where the WGSL declares a `texture_2d<f32>`; vgpu binds its color texture. Pair it with a `sampler(gpu, ...)` for the `sampler` binding.
-- **One `frame()`.** Both passes are encoded into one command encoder and submitted once — see [Frames](concepts-frames.docs.md). Do not use one-shot `.draw()` calls inside a frame callback; they submit on their own and break the ordering.
+- **Binding the target itself.** `bindings: { scene }` passes the `Target` where the WGSL declares a `texture_2d<f32>`; vgpu binds its color texture and re-binds it transparently if the target is recreated on resize. Binding `scene.color` — a texture snapshot — would go silently stale instead. Pair it with a `sampler(gpu, ...)` for the `sampler` binding. Both are external resources, so they are swapped with `.bind()`, never `.set()`.
+- **One `frame()`, and one `prepare()` before it.** Both passes are encoded into one command encoder and submitted once — see [Frames](concepts-frames.docs.md) — and each `(renderable, target)` combination is warmed beforehand, because a synchronous encode never compiles implicitly under the default policy. A `Surface` can be prepared outside `frame()`: its signature comes from its configuration, not from the current texture.
 
-Animating? Move the `frame(gpu, ...)` body into [`frameLoop(gpu, ...)`](concepts-frames.docs.md) and re-`set()` the model matrices from `clock(gpu).time` each tick. The targets, draws, and the present effect are all created once, outside the loop.
+Animating? Move the `frame(gpu, ...)` body into [`frameLoop(gpu, ...)`](concepts-frames.docs.md) and re-`set("model", …)` the model matrices from `clock(gpu).time` each tick. The targets, draws, the present effect and the prepared pipelines are all created once, outside the loop.
 
 ## Headless / no-bundler variant
 
 Rendering this from Node, a script, or a test instead of a browser? Everything is identical except that the second target is another offscreen target rather than a canvas surface, and you read the pixels back at the end:
 
 ```ts
-import { draw, effect, frame, geometry, init, sampler, target } from "vgpu/node";
+import { draw, effect, frame, geometry, init, prepare, sampler, target } from "vgpu/node";
 import { box, orbit, perspectiveCamera } from "vgpu/scene";
 
 const objectShader = "/* the same vertex + fragment shader as above */";
@@ -116,13 +120,14 @@ const output = target(gpu, { size: [width, height] });   // stands in for the ca
 
 const camera = perspectiveCamera({ fov: 45, aspect: width / height, position: [2.5, 2, 3.5], target: [0, 0, 0] });
 const cube = draw(gpu, { shader: objectShader, geometry: geometry(gpu, box({ size: 1 })), cull: "back" });
-cube.set({
-  camera: { viewProjection: camera.viewProjection },
-  model: { model: orbit(0), color: [0.95, 0.45, 0.2] },
+cube.set("camera", { viewProjection: camera.viewProjection });
+cube.set("model", { model: orbit(0), color: [0.95, 0.45, 0.2] });
+const present = effect(gpu, {
+  shader: presentShader,
+  bindings: { scene, sceneSampler: sampler(gpu, { minFilter: "linear", magFilter: "linear" }) },
 });
-const present = effect(gpu, presentShader, {
-  set: { scene, sceneSampler: sampler(gpu, { minFilter: "linear", magFilter: "linear" }) },
-});
+
+await prepare(gpu, [{ draw: cube, target: scene }, { draw: present, target: output }]);
 
 frame(gpu, (currentFrame) => {
   currentFrame.pass({ target: scene, clear: [0.04, 0.05, 0.08, 1], clearDepth: 1 }, (pass) => {
@@ -139,7 +144,7 @@ To load the two shaders from `.wgsl` files instead of inline strings in this set
 
 ## Do you actually need two passes?
 
-- **One full-screen fragment shader, no geometry?** No. `effect(gpu, source).draw(canvasSurface)` renders straight to the canvas — see [Getting started](getting-started.docs.md).
+- **One full-screen fragment shader, no geometry?** No. One pass on the canvas is enough — `frame(gpu, (f) => f.pass(canvasSurface, fx))`, or `await renderOnce(gpu, canvasSurface, (p) => p.draw(fx))` for a standalone render — see [Getting started](getting-started.docs.md).
 - **Flat 2D geometry with explicit paint order?** No. Open a single pass on the canvas and draw in order, as [Passes](concepts-passes.docs.md) shows.
 - **Any 3D geometry that can occlude itself or another object?** Yes — you need the depth attachment, and only an offscreen target has one.
 - **Post-processing on top of a 3D scene?** Yes, and the present pass is where it goes: replace `presentShader` with your post effect, which already samples the scene texture.

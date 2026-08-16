@@ -354,12 +354,40 @@
       "destination": "/docs/reference/vgpu/effect#effectoptions"
     },
     {
+      "source": "/packages/vgpu/PendingPipelines",
+      "destination": "/docs/reference/vgpu/prepare#pendingpipelines"
+    },
+    {
       "source": "/packages/vgpu/PingPongStorage",
       "destination": "/docs/reference/vgpu/target#pingpongstorage"
     },
     {
       "source": "/packages/vgpu/PingPongTargets",
       "destination": "/docs/reference/vgpu/target#pingpongtargets"
+    },
+    {
+      "source": "/packages/vgpu/PreparedBundle",
+      "destination": "/docs/reference/vgpu/prepare#preparedbundle"
+    },
+    {
+      "source": "/packages/vgpu/PreparedCompute",
+      "destination": "/docs/reference/vgpu/prepare#preparedcompute"
+    },
+    {
+      "source": "/packages/vgpu/PreparedDraw",
+      "destination": "/docs/reference/vgpu/prepare#prepareddraw"
+    },
+    {
+      "source": "/packages/vgpu/PreparedFor",
+      "destination": "/docs/reference/vgpu/prepare#preparedfor"
+    },
+    {
+      "source": "/packages/vgpu/PrepareRequest",
+      "destination": "/docs/reference/vgpu/prepare#preparerequest"
+    },
+    {
+      "source": "/packages/vgpu/RenderOncePass",
+      "destination": "/docs/reference/vgpu/render-once#renderoncepass"
     },
     {
       "source": "/packages/vgpu/StorageAccess",

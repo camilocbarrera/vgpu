@@ -109,7 +109,7 @@ WebGPU is browser-only, so the canvas lives in a `"use client"` component and `i
 
 ```ts
 // src/app/plasma.ts
-import { clock, effect, frameLoop, init, surface } from "vgpu";
+import { clock, effect, frameLoop, init, prepare, surface } from "vgpu";
 import type { FrameLoopHandle } from "vgpu";
 import plasmaShader from "./plasma.wgsl";
 
@@ -124,15 +124,21 @@ export function startPlasma(canvas: HTMLCanvasElement): () => void {
     if (disposed) return gpu.dispose();
 
     const canvasSurface = surface(gpu, canvas, { dpr: [1, 2] });
-    const plasma = effect(gpu, plasmaShader, {
+    const plasma = effect(gpu, {
+      shader: plasmaShader,
       label: "plasma",
-      set: { params: { time: 0, texel: canvasSurface.texelSize } },
+      values: { params: { time: 0, texel: canvasSurface.texelSize } },
     });
-    canvasSurface.onResize(() => plasma.set({ params: { texel: canvasSurface.texelSize } }));
+    canvasSurface.onResize(() => plasma.set("params", { texel: canvasSurface.texelSize }));
+
+    // Warm the pipeline before the loop: the effect hook is already async, and the
+    // default policy never compiles inside a frame.
+    await prepare(gpu, [{ draw: plasma, target: canvasSurface }]);
+    if (disposed) return gpu.dispose();
 
     const time = clock(gpu);
     loop = frameLoop(gpu, (frame) => {
-      plasma.set({ params: { time: time.time } });
+      plasma.set("params", { time: time.time });
       frame.pass(canvasSurface, plasma);
     });
   })();

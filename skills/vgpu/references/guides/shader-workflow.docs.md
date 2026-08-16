@@ -54,18 +54,19 @@ Do not open a browser to see whether a shader draws. Render one frame headless, 
 ```ts
 import { writeFileSync } from "node:fs";
 import { PNG } from "pngjs";
-import { init, effect, target } from "vgpu/node";
+import { init, effect, renderOnce, target } from "vgpu/node";
 
 const width = 320;
 const height = 180;
 const gpu = await init();
 const colorTarget = target(gpu, { size: [width, height] });
 
-effect(gpu, `
+const gradient = effect(gpu, `
   @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
     return vec4f(uv, 0.5, 1.0);
   }
-`).draw(colorTarget);
+`);
+await renderOnce(gpu, colorTarget, (p) => p.draw(gradient)); // awaits readiness, one submit
 
 const pixels = await colorTarget.read();          // RGBA bytes, row-major, no padding
 const png = new PNG({ width, height });
