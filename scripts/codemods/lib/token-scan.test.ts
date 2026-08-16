@@ -103,6 +103,19 @@ test("a .tsx file is parsed with the TSX ScriptKind: a JSX closing tag name is a
   expect(starts.has(closingDivOffset)).toBe(true);
 });
 
+// QA re-validation (T04-15) pinned this: the scanner's identifier tables are language-version
+// dependent, so an old `ts.ScriptTarget` (e.g. ES5) drops or shifts offsets for identifiers whose
+// leading character is only a valid ID_Start from ES2015+ (astral-plane math letters, some
+// deprecated-script letters). A shifted offset is the dangerous case — a codemod would splice at
+// the wrong position instead of merely skipping the site.
+test("identifiers using ES2015+ ID_Start characters are still real token starts", () => {
+  const src = "const \u{1D4CD} = effect(gpu, s, {}); \u{1D4CD}.run();";
+  const starts = tokenStarts(src, "astral.ts");
+  expect(starts.has(6)).toBe(true);
+  expect(starts.has(src.lastIndexOf("\u{1D4CD}"))).toBe(true);
+  expect(starts.has(src.indexOf("effect"))).toBe(true);
+});
+
 test("parseDiagnosticsCount is 0 for well-formed code and >0 for content that does not belong (JSX inside a .ts file)", () => {
   const good = "const a = gpu.effect(x);\n";
   expect(parseDiagnosticsCount(good, "file.ts")).toBe(0);

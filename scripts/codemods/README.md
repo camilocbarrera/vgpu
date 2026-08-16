@@ -107,9 +107,18 @@ output to the un-mutated code for every reachable, valid input, not gaps in test
   so `e1 <= e2`. The only place the two orderings could differ is a tie on `start`, and the
   tie-break (`|| a.end - b.end`) sorts by `end` too — so this mutant is indistinguishable from the
   real code on any input `applyEdits` actually accepts.
-- **`T-setParentNodes-false`** / **`T-target-ES5`** (`token-scan.mjs`'s `ts.createSourceFile` call):
-  neither `setParentNodes` nor `ts.ScriptTarget` changes which offsets `ts.isIdentifier`/`this`
-  nodes start at for any construct this module's call sites exercise (decorators, generics,
-  destructuring, JSDoc, optional chaining, BigInt, numeric separators, private fields — all
-  probed by hand with zero observed divergence); both flags affect binding/type-checking and emit
-  respectively, not this module's plain syntax walk.
+- **`T-setParentNodes-false`** (`token-scan.mjs`'s `ts.createSourceFile` call): `getStart(source)`
+  does not depend on `.parent` when the `sourceFile` is passed explicitly (as this module always
+  does), so `setParentNodes` cannot change any offset this module reports.
+  **Audited (do not re-litigate):** an independent adversarial QA pass re-checked this claim
+  against 44 synthetic constructs (JSDoc `@example`/`@type`, decorators, static blocks,
+  `#priv in obj`, `accessor`, `satisfies`, `using`/`await using`, numeric separators, BigInt,
+  `?.`/`??`/`||=`, top-level `await`, `import ... with { type: "json" }`, regexp `v`/`d` flags,
+  enum/namespace/`declare module`, type-only imports — each in both `.ts` and `.tsx`) *and* a
+  differential run over the full real corpus (462 files at the time of the audit): **0
+  divergences** in either check. This one is confirmed equivalent for real.
+
+`T-target-ES5` (an old `ts.ScriptTarget`) is **not** equivalent, despite an earlier draft of this
+README claiming otherwise — see `lib/token-scan.test.ts`'s
+`"identifiers using ES2015+ ID_Start characters are still real token starts"` test and the note
+below for why, and why the fix is "keep parsing at `ESNext`", not "add a caveat".

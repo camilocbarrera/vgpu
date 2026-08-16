@@ -24,8 +24,13 @@ const CORPUS_GLOBS = [
   // touch. Which files inside `packages/*/tests/**` are the legacy-form SUBJECT of a test (must
   // stay on the old signature) vs incidental usage (must migrate) is each codemod's own
   // classification job — this module's only job is to make sure the file is visible at all.
+  // No `packages/*/tests/**/*.tsx` glob here: as of this corpus, no `.tsx` test file under any
+  // package contains a migratable call site, so a glob for it would be an uncovered, unexercised
+  // line (a QA pass flagged this exact class of "dead glob" as a nit). If a future package adds
+  // `.tsx` tests with real call sites, `glob-corpus.test.ts`'s coverage test (which independently
+  // re-derives "every file with a real call site" and asserts getCorpusFiles() is a superset)
+  // will fail and point straight at this comment.
   "packages/*/tests/**/*.ts",
-  "packages/*/tests/**/*.tsx",
   "experiments/**/*.ts",
 ];
 

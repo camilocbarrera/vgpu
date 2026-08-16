@@ -117,3 +117,19 @@ test("throws on duplicate edit ranges instead of silently picking whichever happ
   ];
   expect(() => applyEdits("xy", edits)).toThrow(/duplicate/);
 });
+
+// QA re-validation (T04-15) pinned this: a same-start tie-break by `end` is NOT the same total
+// order as sorting purely by `end` — they only coincide when starts are also tied. A zero-length
+// insertion that abuts the END of an unrelated, non-overlapping replacement (`[3,5)` followed by
+// `[5,5)`) has DIFFERENT starts but the SAME end (5), so a sort-by-end-only implementation puts
+// them in input order instead of start order, and the overlap guard then misreads them as
+// overlapping. 2274/20000 randomized valid edit sets diverge under that bug — this pins the one
+// minimal repro.
+test("abutting insertion at the END offset of a replacement applies in either input order", () => {
+  const text = "0123456789";
+  const replace = { start: 3, end: 5, replacement: "REPL" };
+  const insert = { start: 5, end: 5, replacement: "INS" };
+  const expected = "012REPLINS56789";
+  expect(applyEdits(text, [replace, insert])).toBe(expected);
+  expect(applyEdits(text, [insert, replace])).toBe(expected);
+});
