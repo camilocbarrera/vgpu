@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "contractId": "vgpu-examples/v1",
+  "revision": "d233471c6305c1dbd12888e1905cd6f4a27f0eaa41738340398c93153747c1d7",
+  "id": "gradient",
+  "title": "Simple Gradient",
+  "description": "Map screen coordinates to color with a tiny fullscreen fragment shader.",
+  "tags": [
+    "gradient",
+    "animation",
+    "shader"
+  ],
+  "capabilities": [
+    "webgpu",
+    "fragment-shader",
+    "continuous-rendering",
+    "responsive-canvas"
+  ],
+  "aggregateSha256": "11e52c957b2727545457c7ffb45e8894a29e90d52fbb4a416a1843bbd438bc37",
+  "files": [
+    {
+      "path": "index.tsx",
+      "contentType": "text/typescript",
+      "size": 817,
+      "sha256": "29257f24de5a94d5e50757e5f42602f8c5064e187db97027f134cb51d69d8c48",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/d233471c6305c1dbd12888e1905cd6f4a27f0eaa41738340398c93153747c1d7/examples/gradient/files/index.tsx.raw"
+    },
+    {
+      "path": "renderer.ts",
+      "contentType": "text/typescript",
+      "size": 4146,
+      "sha256": "e84432fc9ef7c74c1f6475c1469a64380a32c5d36085284fb226bc90ebb48022",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/d233471c6305c1dbd12888e1905cd6f4a27f0eaa41738340398c93153747c1d7/examples/gradient/files/renderer.ts.raw"
+    },
+    {
+      "path": "shader.wgsl",
+      "contentType": "text/wgsl",
+      "size": 362,
+      "sha256": "f47603ed166e4473fa72f94a8547bf2920370dd9f7654a9698f951a26b184d8c",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/d233471c6305c1dbd12888e1905cd6f4a27f0eaa41738340398c93153747c1d7/examples/gradient/files/shader.wgsl.raw"
+    }
+  ]
+}
