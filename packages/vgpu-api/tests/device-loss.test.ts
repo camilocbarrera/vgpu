@@ -16,7 +16,7 @@ import { loseMockGPUDevice } from "@vgpu/core";
 import { init, bundle, effect, frame, frameLoop, prepare, surface, target } from "../src/mock.ts";
 import type { Gpu } from "../src/kernel.ts";
 import { FRAME_BUNDLE } from "../src/frame-protocols.ts";
-import type { Bundle } from "../src/bundle.ts";
+import { createBundle, type Bundle } from "../src/bundle.ts";
 import type { Target } from "../src/target.ts";
 
 const SOLID = `
@@ -218,6 +218,23 @@ test("a prepare() in flight when the loss lands rejects with VGPU-DEVICE-LOST in
   expect(failure?.cause?.code).toBe("VGPU-DEVICE-LOST");
   expect(recorded.gpu).toBeUndefined();
   expect(recorded.status).not.toBe("ready");
+});
+
+test("the bundle host guard is a capability, not a requirement: a host without it still records and replays", async () => {
+  const gpu = await init();
+  const scene = target(gpu, { size: [4, 4] });
+  const fx = effect(gpu, SOLID);
+  // The reduced host shape (`render-service.ts` builds one) defines no assertDeviceUsable: calling it
+  // must stay optional, never a crash on an undefined member.
+  const bare = createBundle({ device: { gpu: gpu.gpu } }, { target: scene }, (r) => r.draw(fx));
+
+  expect(bare.status).toBe("pending-pipelines");
+  expect(() => replay(bare, scene)).not.toThrow();
+  expect(bare.status).toBe("ready");
+
+  await lose(gpu);
+  // Still no crash: a host that was given no guard simply cannot report the loss itself.
+  expect(() => replay(bare, scene)).not.toThrow();
 });
 
 // --- Helpers -------------------------------------------------------------------------------------
