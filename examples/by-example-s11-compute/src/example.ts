@@ -16,7 +16,7 @@ export async function runComputeExample() {
   const src = gpu.device.createBuffer({ size: 16, usage: ["storage", "copy_dst", "copy_src"], label: "src" });
   const dst = gpu.device.createBuffer({ size: 16, usage: ["storage", "copy_dst", "copy_src"], label: "dst" });
   src.write(new Float32Array([1, 2, 3, 4]));
-  const sim = compute(gpu, SIM, { label: "sim" });
+  const sim = compute(gpu, { shader: SIM, label: "sim" });
   sim.set({ dt: 0.5, src, dst });
   sim.dispatch(1);
   return { gpu, dst };

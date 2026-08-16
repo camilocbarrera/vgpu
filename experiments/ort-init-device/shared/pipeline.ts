@@ -32,7 +32,7 @@ export async function runPipeline(gpu: Gpu, raw: GPUBuffer, mode: Mode): Promise
     }
     const destination = gpu.device.createBuffer({ size: bytes, usage: ["storage", "copy_src"], label: `ort-${mode}-result` });
     try {
-      const consumer = compute(gpu, WGSL, { label: `ort-${mode}-consumer` });
+      const consumer = compute(gpu, { shader: WGSL, label: `ort-${mode}-consumer` });
       consumer.set({ source, destination });
       consumer.dispatch(1);
       lifecycle.push("consumer-submitted");
