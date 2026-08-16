@@ -25,7 +25,7 @@ export async function renderShaderPreview(
       if (output.size[0] !== size[0] || output.size[1] !== size[1]) {
         output.resize(size);
       }
-      shader.set("uniforms", { resolution: output.size });
+      shader.set({ uniforms: { resolution: output.size } });
       frame(gpu, (currentFrame) => currentFrame.pass(output, shader));
     };
 

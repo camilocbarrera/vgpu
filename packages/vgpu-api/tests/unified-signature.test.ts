@@ -77,7 +77,7 @@ struct Params { value: f32 }
   // would not exist.
   expect(drawReflection(effectDraw(fx)).bindings.map((binding) => binding.name)).toContain("params");
 
-  fx.set("params", { value: 1 });
+  fx.set({ params: { value: 1 } });
   fx.draw(colorTarget);
   const desc = getMockGPUDeviceInstrumentation(gpu.device.gpu).createRenderPipelineDescriptors.at(-1);
   expect(desc?.fragment?.targets?.[0]).toMatchObject({

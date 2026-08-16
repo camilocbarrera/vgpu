@@ -44,9 +44,9 @@ test("set() writes lib-owned values in-place and keeps bind group stable on mock
   const colorTarget = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
-  wave.set("params", { speed: 2 });
+  wave.set({ speed: 2 });
   frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
-  wave.set("params", { time: 0.5 });
+  wave.set({ time: 0.5 });
   frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
 
   expect(mock.calls.createBuffer).toBe(1);
@@ -60,7 +60,7 @@ test("creation-time set sugar is exactly an initial set()", async () => {
   const colorTarget = target(gpu, { size: [4, 4] });
   const mock = getMockGPUDeviceInstrumentation(gpu.device.gpu);
 
-  wave.set("params", { time: 0.25 });
+  wave.set({ time: 0.25 });
   frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
 
   expect(mock.calls.createBuffer).toBe(1);
@@ -71,7 +71,7 @@ test("creation-time set sugar is exactly an initial set()", async () => {
 test("R1 ownership flip reports canonical fix-it text", async () => {
   const gpu = await init();
   const wave = effect(gpu, { shader: WAVE, label: "wave" });
-  wave.set("params", { speed: 2 });
+  wave.set({ speed: 2 });
   const userBuffer = gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] });
 
   expect(() => wave.set({ speed: userBuffer })).toThrowError(
@@ -127,8 +127,8 @@ test("bundle back-refs stale only on identity changes, never lib-owned in-place 
   const events: unknown[] = [];
   registerDrawBundle(effectDraw(wave), { id: "bundle", markStale: (event) => { events.push(event); } });
 
-  wave.set("params", { time: 1 });
-  wave.set("params", { speed: 3 });
+  wave.set({ time: 1 });
+  wave.set({ speed: 3 });
   expect(events).toEqual([]);
 
   const camera = draw(gpu, { shader: CAMERA_SHADER, label: "camera" });

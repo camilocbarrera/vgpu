@@ -15,7 +15,7 @@ export async function runBundlesExample() {
   frame(gpu, (currentFrame) => currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.bundles(staticScene)));
   const before = new Uint8Array(await scene.read());
 
-  floor.set("params", { fogDensity: 0.7 });
+  floor.set({ fogDensity: 0.7 });
   frame(gpu, (currentFrame) => currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.bundles(staticScene)));
   const after = new Uint8Array(await scene.read());
 

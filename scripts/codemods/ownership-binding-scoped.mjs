@@ -355,6 +355,99 @@ function declarationScope(decl) {
   return null;
 }
 
+/** The identifier a member chain reads through: `buf` in `buf.read.texelSize`. */
+function rootIdentifierOf(expr) {
+  let n = unwrap(expr);
+  while (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n) || ts.isNonNullExpression(n)) {
+    n = unwrap(n.expression);
+  }
+  return ts.isIdentifier(n) ? n : null;
+}
+
+/**
+ * Does the `.set()` run at a different POINT IN TIME, or a different NUMBER OF TIMES, than the
+ * constructor? True when a loop or a function boundary sits between them — the constructor runs once,
+ * at its own moment; a `.set()` inside `for (…)` or inside a `frame(gpu, () => …)` callback does not.
+ */
+function crossesLoopOrCallback(site, ctorCall) {
+  const ctorStart = ctorCall.getStart(ctorCall.getSourceFile());
+  let cur = site.parent;
+  while (cur) {
+    const barrier = ts.isArrowFunction(cur) || ts.isFunctionExpression(cur) || ts.isFunctionDeclaration(cur)
+      || ts.isMethodDeclaration(cur) || ts.isConstructorDeclaration(cur)
+      || ts.isGetAccessorDeclaration(cur) || ts.isSetAccessorDeclaration(cur)
+      || ts.isForStatement(cur) || ts.isForOfStatement(cur) || ts.isForInStatement(cur)
+      || ts.isWhileStatement(cur) || ts.isDoStatement(cur);
+    // A barrier that also encloses the constructor is shared by both — it is not a boundary BETWEEN
+    // them, so it does not desynchronise anything.
+    if (barrier && !(cur.getStart(cur.getSourceFile()) <= ctorStart && ctorCall.end <= cur.end)) return true;
+    cur = cur.parent;
+  }
+  return false;
+}
+
+/**
+ * Is the object the resource expression reads THROUGH mutated anywhere in the file? `buf.read` is a
+ * getter over a parity flag (`ping-pong.ts`: `get read() { return this.halves[this.#parity] }`), and
+ * `buf.swap()` flips it. Any method call on that object, or any assignment to it or through it, means
+ * the value the expression yields is a function of mutable state and cannot be pinned at construction.
+ *
+ * Deliberately whole-file and deliberately blunt: proving a method does NOT mutate needs an effect
+ * analysis this codemod has no business attempting, and the cost of a false positive is one site left
+ * on the flat bag, while the cost of a false negative is a silently wrong render.
+ */
+function readsThroughMutatedObject(expr, ctorCall, checker) {
+  const root = rootIdentifierOf(expr);
+  // A bare identifier (`const tex = texture(...); fx.set({ src: tex })`) reads through nothing.
+  if (!root || unwrap(expr) === root) return false;
+  const sym = checker.getSymbolAtLocation(root);
+  if (!sym) return true;
+  const sameSymbol = (node) => {
+    const r = rootIdentifierOf(node);
+    return !!r && checker.getSymbolAtLocation(r) === sym;
+  };
+  let mutated = false;
+  const visit = (n) => {
+    if (mutated) return;
+    if (ts.isCallExpression(n)) {
+      const callee = unwrap(n.expression);
+      if (ts.isPropertyAccessExpression(callee) && sameSymbol(callee.expression)) { mutated = true; return; }
+    }
+    if (ts.isBinaryExpression(n) && ts.isAssignmentExpression(n) && sameSymbol(n.left)) { mutated = true; return; }
+    if ((ts.isPostfixUnaryExpression(n) || ts.isPrefixUnaryExpression(n)) && sameSymbol(n.operand)) { mutated = true; return; }
+    ts.forEachChild(n, visit);
+  };
+  visit(ctorCall.getSourceFile());
+  return mutated;
+}
+
+/**
+ * Does `expr` denote the SAME resource evaluated at the constructor as it does at the `.set()`?
+ *
+ * `isMovableTo` only proves the expression can be WRITTEN there (names in scope, declared earlier,
+ * no side effects). That is not the same question. The constructor runs once; the `.set()` may run
+ * later, or repeatedly, or after something changed what the expression reads. Both failures are real
+ * in this corpus and both were shipped by the first version of this codemod:
+ *
+ *   (a) `pingPong()` hands back `.read`/`.write` as GETTERS over a parity flag that `swap()` flips.
+ *       `bindings: { src: buf.read }` freezes the half that was current at construction, so the
+ *       effect samples the target it is drawing into and the feedback loop never accumulates.
+ *   (b) `feedback.set({ src: pair.read })` inside `for (…) { frame(…); pair.swap(); }` is ONE
+ *       syntactic site and FOUR evaluations. Counting assignment sites cannot tell those apart.
+ *
+ * This asks about execution, not about text, which is why counting sites (the rule this replaced)
+ * could not see either case.
+ */
+function isStableBetween(expr, ctorCall, site, checker) {
+  if (crossesLoopOrCallback(site, ctorCall)) {
+    return { ok: false, why: "resource-set-runs-in-a-loop-or-callback-the-constructor-does-not" };
+  }
+  if (readsThroughMutatedObject(expr, ctorCall, checker)) {
+    return { ok: false, why: "resource-value-reads-through-a-mutated-object" };
+  }
+  return { ok: true };
+}
+
 /**
  * Would `expr` still mean the same thing if it were evaluated at `target`? Requires every free
  * identifier to be declared before `target`, in a scope that encloses `target`, in the same file.
@@ -623,6 +716,9 @@ function planSite(site, ctx) {
     }
     const movable = isMovableTo(p.valueExpr, ctor.call, checker);
     if (!movable.ok) return { classification: `ambiguous-${movable.why}` };
+    // Movable is not the same as stable: see isStableBetween().
+    const stable = isStableBetween(p.valueExpr, ctor.call, site.call, checker);
+    if (!stable.ok) return { classification: `ambiguous-${stable.why}` };
     ctorBindings.push({ binding: g.binding, valueText: p.valueText });
   }
 

@@ -47,7 +47,7 @@ test("corrected playbook and post-processing patterns run against vgpu/mock", as
     samp: sampler(gpu, { minFilter: "linear", magFilter: "linear" }),
   } });
 
-  wave.set("params", { time: clock(gpu).time });
+  wave.set({ params: { time: clock(gpu).time } });
   frame(gpu, (currentFrame) => {
     currentFrame.pass(colorTarget, wave);
     currentFrame.pass(output, post);
@@ -64,7 +64,7 @@ test("corrected playbook and post-processing patterns run against vgpu/mock", as
   `, set: { params: { resolution: bloom.size } } });
   canvasSurface.onResize(({ width, height }) => {
     bloom.resize([width / 2, height / 2]);
-    bright.set("params", { resolution: bloom.size });
+    bright.set({ params: { resolution: bloom.size } });
   });
   frame(gpu, (currentFrame) => currentFrame.pass(bloom, bright));
   gpu.dispose();

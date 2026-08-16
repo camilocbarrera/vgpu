@@ -211,7 +211,8 @@ test("the pass target's depth texture can be sampled inside its own depthReadOnl
   const colorTarget = target(gpu, { size: [2, 2], depth: true });
   expect(colorTarget.depth?.usage).toContain("texture_binding");
 
-  const drawable = draw(gpu, { shader: DEPTH_SAMPLING_SHADER, label: "depth-sampler", depth: { write: false }, bindings: { depthTex: colorTarget.depth! } });
+  const drawable = draw(gpu, { shader: DEPTH_SAMPLING_SHADER, label: "depth-sampler", depth: { write: false } });
+  drawable.set({ depthTex: colorTarget.depth! });
 
   expect(() => frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget, depthReadOnly: true }, (pass) => pass.draw(drawable)))).not.toThrow();
   expect(descriptors[0]?.depthStencilAttachment).toMatchObject({ depthReadOnly: true });

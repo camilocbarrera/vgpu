@@ -45,6 +45,9 @@ export declare function texture(gpu: Gpu, opts: Record<string, unknown>): Textur
 export declare function sampler(gpu: Gpu, opts?: Record<string, unknown>): GPUSampler;
 export declare function storage(gpu: Gpu, n: number): StorageBuffer;
 export declare function uniforms<T extends Record<string, unknown>>(gpu: Gpu, values: T): SharedUniforms<T>;
+export interface PingPongTargets { readonly read: Target; readonly write: Target; swap(): void }
+export declare function pingPong(gpu: Gpu, w: number, h: number, opts?: Record<string, unknown>): PingPongTargets;
+export declare function frame(gpu: Gpu, cb: (f: unknown) => void): void;
 export declare const gpu: Gpu;
 `;
 
@@ -257,6 +260,51 @@ describe("resources move to the constructor", () => {
     });
     expect(bucketOf(entries, 6)).toBe("auto-resource-rebind");
     expect(fileTexts.get("a.ts")).toContain(`fx.bind("src", b.color);`);
+  });
+
+  it("refuses to pin a resource read through an object something MUTATES", async () => {
+    // The bug shipped by this codemod's first version and caught by #344-style QA. `pingPong()` hands
+    // back `.read`/`.write` as GETTERS over a parity flag (ping-pong.ts: `get read() { return
+    // this.halves[this.#parity] }`) that `swap()` flips. Pinning `buf.read` in `bindings` freezes the
+    // half that was current at CONSTRUCTION, so the effect samples the target it draws into and the
+    // feedback never accumulates. Nothing about the expression is impure — only the object it reads
+    // through is mutable — which is exactly what counting syntactic assignment sites cannot see.
+    const { entries, fileTexts } = await run({
+      "a.ts": `import { effect, pingPong, gpu } from "./api";\nconst SRC = \`${WGSL_POST}\`;\nconst buf = pingPong(gpu, 8, 8);\nconst fx = effect(gpu, { shader: SRC });\nfx.set({ src: buf.read });\nbuf.swap();\n`,
+    });
+    expect(bucketOf(entries, 5)).toBe("ambiguous-resource-value-reads-through-a-mutated-object");
+    expect(fileTexts.has("a.ts")).toBe(false);
+  });
+
+  it("still pins a resource read through an object nothing mutates", async () => {
+    // The other half of the rule: `scene.color` is also a property read, and it MUST stay migratable.
+    // Without this the rule above would degenerate into "never hoist a member expression".
+    const { entries, fileTexts } = await run({
+      "a.ts": `import { effect, target, gpu } from "./api";\nconst SRC = \`${WGSL_POST}\`;\nconst scene = target(gpu, { size: [8, 8] });\nconst fx = effect(gpu, { shader: SRC });\nfx.set({ src: scene.color });\n`,
+    });
+    expect(bucketOf(entries, 5)).toBe("auto-resource-to-constructor");
+    expect(fileTexts.get("a.ts")).toContain("bindings: { src: scene.color }");
+  });
+
+  it("refuses to pin a resource whose `.set()` runs in a loop the constructor does not", async () => {
+    // ONE syntactic site, FOUR evaluations. The constructor runs once, so hoisting turns a per-
+    // iteration refresh into a one-time freeze even before `swap()` is considered.
+    const { entries, fileTexts } = await run({
+      "a.ts": `import { effect, target, gpu } from "./api";\nconst SRC = \`${WGSL_POST}\`;\nconst scene = target(gpu, { size: [8, 8] });\nconst fx = effect(gpu, { shader: SRC });\nfor (let i = 0; i < 4; i += 1) {\n  fx.set({ src: scene.color });\n}\n`,
+    });
+    expect(bucketOf(entries, 6)).toBe("ambiguous-resource-set-runs-in-a-loop-or-callback-the-constructor-does-not");
+    expect(fileTexts.has("a.ts")).toBe(false);
+  });
+
+  it("refuses to pin a resource whose `.set()` runs inside a per-frame callback", async () => {
+    // Same rule, the shape this corpus actually uses: a `.set()` inside `frame(gpu, () => …)` is a
+    // per-frame refresh by intent. The value may be constant today, but the codemod cannot prove the
+    // target is never resized, and pinning it would silently convert the refresh into a freeze.
+    const { entries, fileTexts } = await run({
+      "a.ts": `import { effect, target, frame, gpu } from "./api";\nconst SRC = \`${WGSL_POST}\`;\nconst scene = target(gpu, { size: [8, 8] });\nconst fx = effect(gpu, { shader: SRC });\nframe(gpu, () => {\n  fx.set({ src: scene.color });\n});\n`,
+    });
+    expect(bucketOf(entries, 6)).toBe("ambiguous-resource-set-runs-in-a-loop-or-callback-the-constructor-does-not");
+    expect(fileTexts.has("a.ts")).toBe(false);
   });
 
   it("refuses to move a resource declared AFTER the constructor", async () => {

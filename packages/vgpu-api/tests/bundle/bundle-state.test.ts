@@ -184,7 +184,7 @@ test(".set() byte updates keep a ready bundle ready, .bind() identity updates ma
   // Row 4, the real thing: .set() writes bytes into the buffer the bundle already captured, so every
   // recorded command and bind group stays valid — the bundle must NOT move, and must keep the very
   // same native bundle (that is the whole point of R3: value updates are free for bundles).
-  fx.set("fog", { fogDensity: 0.9 });
+  fx.set({ fogDensity: 0.9 });
   expect(recorded.status).toBe("ready");
   expect(recorded.gpu).toBe(native);
 

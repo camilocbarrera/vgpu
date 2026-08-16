@@ -33,7 +33,7 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
     try {
       const colorTarget = target(gpu, { size: [8, 8], format: "rgba8unorm" });
       const wave = effect(gpu, { shader: WAVE, label: "wave", set: { speed: 2 } });
-      wave.set("params", { time: Math.PI / 4 });
+      wave.set({ time: Math.PI / 4 });
       frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(wave)));
       const pixels = await colorTarget.read();
       const pixel = [...pixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
@@ -55,12 +55,12 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
       expect(msaaScene.depth?.sampleCount).toBe(4);
       const output = target(gpu, { size: [8, 8], format: "rgba8unorm", label: "output" });
       const solid = effect(gpu, { shader: SOLID, label: "solid" });
-      const post = effect(gpu, { shader: POST, label: "post", bindings: { src: scene } });
+      const post = effect(gpu, { shader: POST, label: "post" });
       frame(gpu, (currentFrame) => {
         currentFrame.pass({ target: msaaScene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
         currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
         currentFrame.pass({ target: output }, (p) => {
-          post.set("params", { texel: scene.texelSize });
+          post.set({ src: scene, texel: scene.texelSize });
           p.draw(post);
         });
       });
@@ -86,10 +86,10 @@ describe.skipIf(process.env.VGPU_DOCKER_TEST !== "1")("vgpu ring-1 Docker GPU ac
       expect(scene.sampleCount).toBe(4);
       const output = target(gpu, { size: [8, 8], format: "rgba8unorm", label: "outputHdrMsaa" });
       const solid = effect(gpu, { shader: SOLID, label: "solidHdrMsaa" });
-      const post = effect(gpu, { shader: POST, label: "postHdrMsaa", bindings: { src: scene } });
+      const post = effect(gpu, { shader: POST, label: "postHdrMsaa" });
       frame(gpu, (currentFrame) => {
         currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
-        currentFrame.pass({ target: output }, (p) => { post.set("params", { texel: scene.texelSize }); p.draw(post); });
+        currentFrame.pass({ target: output }, (p) => { post.set({ src: scene, texel: scene.texelSize }); p.draw(post); });
       });
       const pixels = await output.read();
       const pixel = [...pixels.slice(4 * (4 * 8 + 4), 4 * (4 * 8 + 4) + 4)];
