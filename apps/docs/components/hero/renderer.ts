@@ -983,7 +983,7 @@ export function createRenderer(options: HeroRendererOptions): HeroRenderer {
     targets = createTargets(vgpu, gpu, surface.size, 'black-hole-live');
     setBindings(effects, targets);
     setPostUniforms(effects, targets, settings);
-    await prewarm(effects, targets, surface);
+    await prewarm(vgpu, gpu, effects, targets, surface);
     if (disposed) return;
     // The ONLY resize input: with the dpr pinned to RENDER_DPR, physical size is
     // CSS size, so the canvas box is the whole story — there is no
@@ -1295,22 +1295,38 @@ function summarizeMeasurement(m: Measurement, resolution: readonly [number, numb
   };
 }
 
-async function prewarm(effects: Effects, targets: Targets, output: Output): Promise<void> {
+/**
+ * THIRTEEN effects, ONE await (T04-19). The count is worth stating because the plan said twelve:
+ * `bake`, `refine`, `shade`, `bloomExtract`, `bloomBlurH0/V0`, `bloomDown1`, `bloomBlurH1/V1`,
+ * `bloomDown2`, `bloomBlurH2/V2`, `composite` — thirteen constructions in `createEffects()`.
+ *
+ * Grouping criterion: one `prepare()` with an array, never thirteen separate awaits. The array
+ * form exists precisely so a post chain of this size warms as a batch and reports its failures as
+ * a batch (`VGPU-PREPARE-FAILED` enumerates every one, instead of the first rejection hiding the
+ * other twelve — which is what the `Promise.all` this replaces did).
+ *
+ * The nine bloom passes share ONE signature literal rather than naming nine Targets, and that is
+ * the honest key: the chain ping-pongs across `bloom0/bloomPing0/bloom1/bloomPing1/bloom2/
+ * bloomPing2`, six targets of three different sizes but one format, and a target signature does
+ * not carry size. Naming any one of them would imply a specificity the pipeline key does not have.
+ * `bake`/`refine`/`shade` do name their targets — those really are single-destination passes.
+ */
+async function prewarm(api: VgpuApi, gpu: Gpu, effects: Effects, targets: Targets, output: Output): Promise<void> {
   const bloomOutput = { colors: [targets.bloom0.format] };
-  await Promise.all([
-    effects.bake.compile(targets.gbuffer),
-    effects.refine.compile(targets.aa),
-    effects.shade.compile(targets.scene),
-    effects.bloomExtract.compile(bloomOutput),
-    effects.bloomBlurH0.compile(bloomOutput),
-    effects.bloomBlurV0.compile(bloomOutput),
-    effects.bloomDown1.compile(bloomOutput),
-    effects.bloomBlurH1.compile(bloomOutput),
-    effects.bloomBlurV1.compile(bloomOutput),
-    effects.bloomDown2.compile(bloomOutput),
-    effects.bloomBlurH2.compile(bloomOutput),
-    effects.bloomBlurV2.compile(bloomOutput),
-    effects.composite.compile({ colors: [output.format] }),
+  await api.prepare(gpu, [
+    { draw: effects.bake, target: targets.gbuffer },
+    { draw: effects.refine, target: targets.aa },
+    { draw: effects.shade, target: targets.scene },
+    { draw: effects.bloomExtract, target: bloomOutput },
+    { draw: effects.bloomBlurH0, target: bloomOutput },
+    { draw: effects.bloomBlurV0, target: bloomOutput },
+    { draw: effects.bloomDown1, target: bloomOutput },
+    { draw: effects.bloomBlurH1, target: bloomOutput },
+    { draw: effects.bloomBlurV1, target: bloomOutput },
+    { draw: effects.bloomDown2, target: bloomOutput },
+    { draw: effects.bloomBlurH2, target: bloomOutput },
+    { draw: effects.bloomBlurV2, target: bloomOutput },
+    { draw: effects.composite, target: output },
   ]);
 }
 

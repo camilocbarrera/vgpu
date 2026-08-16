@@ -6,7 +6,7 @@ const vgpuFns = vi.hoisted(() => Object.fromEntries(
     // Each test's gpu double carries its factory fakes in `fns`; these route the free functions to them.
     .map((name) => [name, (gpu: any, ...args: any[]) => gpu.fns[name](...args)]),
 )) as Record<string, unknown>;
-vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, clock: (gpu: any) => gpu.clock ?? { time: 0, deltaTime: 0, frameCount: 0, advance() {} } }));
+vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, prepare: (gpu: any, ...args: any[]) => (gpu?.fns?.prepare ? gpu.fns.prepare(...args) : Promise.resolve([])), clock: (gpu: any) => gpu.clock ?? { time: 0, deltaTime: 0, frameCount: 0, advance() {} } }));
 
 import { createRenderer, renderThumbnail } from './renderer';
 
@@ -20,11 +20,10 @@ afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 test('thumbnail prewarm failure waits for submitted work and destroys all targets', async () => {
   const failure = new Error('prewarm failed');
-  let effectIndex = 0;
-  const effect = vi.fn(() => ({
-    set: vi.fn(),
-    compile: effectIndex++ === 0 ? vi.fn(async () => { throw failure; }) : vi.fn(async () => {}),
-  }));
+  // One `prepare()` now covers all five combinations, so the failure is injected once instead of
+  // being aimed at the first effect's `compile` — `prepare()` rejects as a batch by design.
+  const prepare = vi.fn(async () => { throw failure; });
+  const effect = vi.fn(() => ({ set: vi.fn() }));
   const destroyed = [vi.fn(), vi.fn(), vi.fn()];
   let targetIndex = 0;
   const target = vi.fn(() => ({
@@ -32,7 +31,7 @@ test('thumbnail prewarm failure waits for submitted work and destroys all target
     color: { destroy: destroyed[targetIndex++]! }, resize: vi.fn(),
   }));
   const onSubmittedWorkDone = vi.fn(async () => {});
-  const gpu = { gpu: { queue: { onSubmittedWorkDone } } , fns: { effect, sampler: vi.fn(() => ({})), target }};
+  const gpu = { gpu: { queue: { onSubmittedWorkDone } } , fns: { prepare, effect, sampler: vi.fn(() => ({})), target }};
   await expect(renderThumbnail(gpu as never, { size: [100, 50], format: 'rgba8unorm' } as never)).rejects.toBe(failure);
   expect(onSubmittedWorkDone).toHaveBeenCalledOnce();
   for (const destroy of destroyed) expect(destroy).toHaveBeenCalledOnce();

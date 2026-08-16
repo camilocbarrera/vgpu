@@ -1,4 +1,4 @@
-import { init, effect, target } from "vgpu/mock";
+import { init, effect, prepare, target } from "vgpu/mock";
 
 const NEEDS_SAMPLER = /* wgsl */ `
 @group(0) @binding(0) var samp: sampler;
@@ -18,7 +18,16 @@ export async function collectFixitMessages() {
     const missing = effect(gpu, { shader: NEEDS_SAMPLER, label: "lighting" });
     const ownership = effect(gpu, { shader: SPEED, label: "wave", set: { speed: 2 } });
     const messages: string[] = [];
-    try { missing.draw({ target: target(gpu, { size: [4, 4] }) }); } catch (error) { messages.push(String((error as Error).message)); }
+    const colorTarget = target(gpu, { size: [4, 4] });
+    // This example was originally left out of T04-19 on the theory that preparing `missing` would
+    // make prepare() itself reject and REPLACE the fix-it this file exists to demonstrate. That
+    // theory was never executed, and it is wrong in both halves: prepare() succeeds here (an unset
+    // binding is a bind-time error, not a pipeline-creation one), and WITHOUT it the throw default
+    // raises VGPU-PIPELINE-PENDING first, shadowing the fix-it entirely. So the await is what keeps
+    // the lesson intact under T04-21: it settles the readiness question so the encode can reach the
+    // binding check that is the actual subject.
+    await prepare(gpu, [{ draw: missing, target: colorTarget }]);
+    try { missing.draw({ target: colorTarget }); } catch (error) { messages.push(String((error as Error).message)); }
     try { ownership.set({ speed: gpu.device.createBuffer({ size: 4, usage: ["uniform", "copy_dst"] }) }); } catch (error) { messages.push(String((error as Error).message)); }
     return messages;
   } finally {

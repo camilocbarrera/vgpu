@@ -8,7 +8,7 @@ const vgpuFns = vi.hoisted(() => Object.fromEntries(
     // Each test's gpu double carries its factory fakes in `fns`; these route the free functions to them.
     .map((name) => [name, (gpu: any, ...args: any[]) => gpu.fns[name](...args)]),
 )) as Record<string, unknown>;
-vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, clock: (gpu: any) => gpu.clock ?? { time: 0, deltaTime: 0, frameCount: 0, advance() {} } }));
+vi.mock('vgpu', () => ({ init: mocks.init, ...vgpuFns, prepare: (gpu: any, ...args: any[]) => (gpu?.fns?.prepare ? gpu.fns.prepare(...args) : Promise.resolve([])), clock: (gpu: any) => gpu.clock ?? { time: 0, deltaTime: 0, frameCount: 0, advance() {} } }));
 
 import { createRenderer, renderThumbnail } from './renderer';
 

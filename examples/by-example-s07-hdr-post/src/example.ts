@@ -1,4 +1,4 @@
-import { init, effect, frame, target } from "vgpu/node";
+import { init, effect, frame, prepare, target } from "vgpu/node";
 
 export const SOLID = /* wgsl */ `
 @fragment fn main(@location(0) uv: vec2f) -> @location(0) vec4f { return vec4f(0.25 + uv.x * 0.5, 0.5, 0.75, 1.0); }
@@ -19,6 +19,12 @@ export async function runHdrPostExample() {
   const output = target(gpu, { size: [8, 8], format: "rgba8unorm", label: "output" });
   const solid = effect(gpu, { shader: SOLID, label: "solid" });
   const post = effect(gpu, { shader: POST, label: "post" });
+  // Two DIFFERENT signatures (rgba16float+depth scene, rgba8unorm output): the target is half the
+  // combination, so this array cannot collapse to one request per renderable.
+  await prepare(gpu, [
+    { draw: solid, target: scene },
+    { draw: post, target: output },
+  ]);
   frame(gpu, (currentFrame) => {
     currentFrame.pass({ target: scene, clear: [0, 0, 0, 1] }, (p) => p.draw(solid));
     currentFrame.pass({ target: output }, (p) => { post.set({ src: scene.color, texel: scene.texelSize }); p.draw(post); });
