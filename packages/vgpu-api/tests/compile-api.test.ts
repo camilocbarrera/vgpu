@@ -45,7 +45,9 @@ test("surface encoding is rejected outside frame(gpu) with an offscreen precompi
 
   expectOutsideFrame(() => drawable.draw(canvasSurface));
   expectOutsideFrame(() => shader1.draw(canvasSurface));
-  expectOutsideFrame(() => bundle(gpu, { target: canvasSurface }, () => undefined));
+  // Contract #8 / §4: recording a bundle needs only formats, never `getCurrentTexture()` — legal
+  // outside frame(), exactly like compiling (see bundle-signature.test.ts for the dedicated coverage).
+  expect(() => bundle(gpu, { target: canvasSurface }, () => undefined)).not.toThrow();
   await expect(drawable.compile(canvasSurface)).resolves.toBe(drawable);
   expect(() => drawable.compileSync(canvasSurface)).not.toThrow();
   await expect(shader1.compile(canvasSurface)).resolves.toBe(shader1);
