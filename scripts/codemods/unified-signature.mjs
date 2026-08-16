@@ -175,16 +175,18 @@ function spreadText(text, node, sourceFile) {
 }
 
 /**
- * A property value also parses an AssignmentExpression, so the ONLY shape that has to be
- * parenthesized when it moves into `shader: <here>` is a comma/sequence expression, whose comma
- * would otherwise read as the property separator.
+ * The source argument's text, for use as the `shader: <here>` property value.
+ *
+ * No parenthesization is needed or possible here: a property value parses an AssignmentExpression,
+ * so the only shape whose top-level comma could be misread as the property separator is a
+ * sequence/comma expression — and a bare sequence expression cannot BE an argument (its comma would
+ * have made it two arguments). Any sequence expression reaching this point is therefore already
+ * parenthesized in the source text, and slicing preserves those parens. An earlier revision carried
+ * a defensive `isBinaryExpression(CommaToken)` wrap here; the mutation pass showed it to be
+ * unreachable, so it was removed rather than kept as an unkillable branch.
  */
 function propertyValueText(text, node, sourceFile) {
-  const raw = text.slice(node.getStart(sourceFile), node.end);
-  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.CommaToken) {
-    return `(${raw})`;
-  }
-  return raw;
+  return text.slice(node.getStart(sourceFile), node.end);
 }
 
 /** Offset just past the `,` that follows `from`, skipping whitespace. `-1` if there is none. */

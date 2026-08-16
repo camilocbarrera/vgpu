@@ -200,6 +200,22 @@ describe("transformSource — callee shapes", () => {
     expect(out(text)).toBe(text);
   });
 
+  it("only ever matches EXACTLY 3 arguments, never 4 or more", () => {
+    // Load-bearing, and the corpus proves it: `FramePass.compute` is called with 4 and 5 arguments
+    // in frame-unified.test.ts, and in `f.compute(sim, 1, undefined, undefined, { … })` the THIRD
+    // argument is the identifier `undefined` — which is options-bag-shaped. Matching `>= 3` would
+    // therefore rewrite it to `f.compute(sim, { shader: 1, ...undefined }, undefined, { … })`, i.e.
+    // corrupt a call to an entirely different API. A mutation pass caught this as an untested guard.
+    const text = [
+      `f.compute(sim, 1, 2, 3);`,
+      `f.compute(sim, 1, undefined, undefined, { pendingPipelines: "skip" });`,
+      `effect(gpu, SRC, { label: "a" }, extra);`,
+    ].join("\n");
+    const result = run(text);
+    expect(result.text).toBe(text);
+    expect(result.entries).toEqual([]);
+  });
+
   it("ignores matching text inside strings, templates and comments", () => {
     const text = [
       `const doc = "effect(gpu, SRC, { blend: 'additive' })";`,
