@@ -58,8 +58,8 @@
     {
       "path": "/docs/guides/performance-playbook",
       "prodAnchor": "2-pipeline-pre-warm-",
-      "newAnchor": "2-pipeline-pre-warm-compile",
-      "heading": "2. Pipeline pre-warm ( compile )"
+      "newAnchor": "2-pipeline-pre-warm-prepare",
+      "heading": "2. Pipeline pre-warm ( prepare )"
     },
     {
       "path": "/docs/guides/performance-playbook",
@@ -82,8 +82,8 @@
     {
       "path": "/docs/guides/performance-playbook",
       "prodAnchor": "7-shared-values",
-      "newAnchor": "7-uniformsgpu-shared-values",
-      "heading": "7. uniforms(gpu) shared values"
+      "newAnchor": "7-uniformgpu-shared-values",
+      "heading": "7. uniform(gpu) shared values"
     },
     {
       "path": "/docs/guides/performance-playbook",
