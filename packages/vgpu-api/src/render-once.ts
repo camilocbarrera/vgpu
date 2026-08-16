@@ -31,7 +31,7 @@
  */
 import { encodeDraw, InternalDraw, type Draw, type DrawCallOptions } from "./draw.ts";
 import { effectDraw, InternalEffect, type Effect } from "./effect.ts";
-import { prepareFailedError, type PrepareFailure } from "./errors.ts";
+import { prepareFailedError, unsupportedError, type PrepareFailure } from "./errors.ts";
 import type { Gpu } from "./kernel.ts";
 import { assertDeviceUsable } from "./lifecycle.ts";
 import { liveKernel } from "./live-kernel.ts";
@@ -68,7 +68,14 @@ interface RecordedDraw {
  */
 class CollectingPass implements RenderOncePass {
   readonly commands: RecordedDraw[] = [];
+  #closed = false;
+  /** Ends the recording: the body returned, so nothing may be added to the command list any more. */
+  close(): void { this.#closed = true; }
   draw(drawable: Draw | Effect, opts: DrawCallOptions = {}): void {
+    // A retained recorder is the same lifecycle bug `FramePass` refuses through its frame guard: a
+    // `p.draw()` from an async continuation would either be silently dropped (after the submit) or
+    // silently join a render the caller already described (before it). Refuse it where it is written.
+    if (this.#closed) throw unsupportedError("renderOnce", "p.draw() ran after the renderOnce() body returned.", "Name every draw inside the body.");
     const draw = drawable instanceof InternalEffect ? effectDraw(drawable) : drawable as InternalDraw;
     // The options bag is snapshotted (shallow, like the bundle replay's own `{ ...opts }`) because
     // the encode happens after an await: a caller that reuses one options object across draws must
@@ -121,7 +128,8 @@ export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOn
 
   // --- Phase 1: collect. Nothing native is touched, nothing is compiled.
   const recorder = new CollectingPass();
-  body(recorder);
+  try { body(recorder); }
+  finally { recorder.close(); }
   const commands = recorder.commands;
 
   // --- Phase 2: async readiness for every distinct combination, in parallel.

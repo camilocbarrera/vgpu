@@ -327,6 +327,23 @@ test("an identity update between the body and the submit is reflected by the enc
   }
 });
 
+test("a recorder retained past the body refuses to record more draws", async () => {
+  const gpu = await init();
+  try {
+    const screen = target(gpu, { size: [4, 4] });
+    const quad = draw(gpu, { shader: WGSL, label: "retained" });
+    let escaped: { draw: (drawable: typeof quad) => void } | undefined;
+
+    await renderOnce(gpu, screen, (p) => { escaped = p; p.draw(quad); });
+
+    // A p.draw() from an async continuation would either be dropped silently (after the submit) or
+    // silently join a render the caller already described (before it): it is refused instead.
+    expect(() => escaped!.draw(quad)).toThrowError(/ran after the renderOnce\(\) body returned/);
+  } finally {
+    gpu.dispose();
+  }
+});
+
 // --- gpu.settled() sees the compile a renderOnce started (improvement over #332) ----------------
 
 test("gpu.settled() waits for a renderOnce compile that is still in flight", async () => {
