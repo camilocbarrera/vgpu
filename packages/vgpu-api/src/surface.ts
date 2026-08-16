@@ -1,6 +1,6 @@
 import { Texture, createResourceIdentity, DestroySignal, type Device, type ResourceDestroyCallback, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
 import { BUILT_IN_CLEAR_COLOR, colorAttachment, copyClearColor, depthAttachment, sameSize, surfaceAttachmentsFor, validateClearColor, type ClearColor } from "./target-utils.ts";
-import type { RenderPassDescriptorOptions, Target, TargetSignature } from "./target.ts";
+import type { RenderDestination, RenderPassDescriptorOptions, Target, TargetSignature } from "./target.ts";
 import {
   surfaceAutoResizeUnsupportedError,
   surfaceContextError,
@@ -44,7 +44,23 @@ export interface SurfaceResizeEvent {
   readonly surface: Surface;
 }
 
-export interface Surface extends Target {
+/**
+ * Presentation destination of a canvas — **not** a bindable resource.
+ *
+ * **Normative distinction** (design §4c). A `Surface` and a {@link Target} are both render destinations,
+ * accepted by `f.pass()` and by `prepare()` as a target signature, which is what {@link RenderDestination}
+ * spells. `Surface` does **not** extend `Target`: it is **presentation-only and is NOT a texture binding**.
+ * Passing one as a binding fails with `VGPU-SURFACE-NOT-BINDABLE` — its presentation texture is
+ * **frame-scoped**: it may change every frame, so a bind group built over it would retain a view of a
+ * texture that is already invalid, and any bundle recorded over it would be continuously stale. There is
+ * no `withSurface()` / current-texture borrowing API.
+ *
+ * Readback from a surface stays an explicit copy, not a binding: `surface.read()` / `surface.readFloats()`
+ * (the canvas is configured `COPY_SRC`). To post-process what you rendered, render into a
+ * `target(gpu, { … })`, bind **that**, and draw it to the surface — "bind the Target, not its texture
+ * snapshot" (§4b).
+ */
+export interface Surface extends RenderDestination {
   readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   readonly context: GPUCanvasContext;
   readonly autoResize: boolean;
@@ -155,6 +171,17 @@ export class CanvasSurface implements Surface {
   get gpu(): unknown { return this.context; }
   get size(): readonly [number, number] { this.#assertLive(); return canvasSize(this.canvas); }
   get texelSize(): readonly [number, number] { const size = this.size; return [1 / size[0], 1 / size[1]]; }
+  /**
+   * Current presentation texture, wrapped fresh on every access.
+   *
+   * KNOWN-DEBT (adj-lifecycle V4, tracked from T04-10): each access fabricates a new `Texture` with a NEW
+   * `resourceIdentity` over `getCurrentTexture()`, so two accesses inside one frame are two identities for
+   * one texture. It is not part of the public `Surface` type (§4c: a surface is presentation-only) and no
+   * binding can reach it any more — `normalizeTextureResource` rejects the surface itself with
+   * `VGPU-SURFACE-NOT-BINDABLE` before it can be dereferenced. What remains is a documented footgun: an
+   * app that reads `surface.color` by hand and binds THAT `Texture` still gets a frame-scoped view.
+   * Memoizing per current-texture epoch is a separate change; no contract of this wave asks for it.
+   */
   get color(): Texture {
     this.#assertLive();
     return new Texture(this.device, this.context.getCurrentTexture(), {

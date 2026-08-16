@@ -628,6 +628,45 @@ export function surfaceSampleCountError(sampleCount: unknown): VGPUError {
   });
 }
 
+/**
+ * A `Surface` reached a texture binding (`{ bindings: { src: surface } }` or `.bind("src", surface)`).
+ *
+ * Nominal, at runtime, and deliberately not a type error: `bindings` is `Record<string, unknown>`, so
+ * structural typing is not the enforcement mechanism (design §4c). A surface's presentation texture is
+ * frame-scoped — a bind group built over it would retain a view of a texture that is already invalid.
+ */
+export function surfaceNotBindableError(where: string): VGPUError {
+  return new VGPUError({
+    code: "VGPU-SURFACE-NOT-BINDABLE",
+    message: "Surfaces are presentation-only: their frame-scoped texture is not a binding.",
+    fix: "Bind a target(gpu, { size }) you rendered into.",
+    where,
+  });
+}
+
+/** One sample-count vocabulary for `target()`: `sampleCount` is the spelling, `msaa` its legacy alias. */
+function targetSampleCountIssue(code: string, message: string, fix: string): VGPUError {
+  return new VGPUError({ code, message, fix, where: "target" });
+}
+
+/** `target({ msaa })` and `target({ sampleCount })` describe the same attachment and may not disagree. */
+export function targetSampleCountConflictError(msaa: unknown, sampleCount: unknown): VGPUError {
+  return targetSampleCountIssue(
+    "VGPU-TARGET-SAMPLE-COUNT-CONFLICT",
+    `msaa: ${String(msaa)} and sampleCount: ${String(sampleCount)} disagree.`,
+    "Spell it once: sampleCount: 4.",
+  );
+}
+
+/** `target({ sampleCount })` takes the WebGPU render-target counts only, exactly like `surface()`. */
+export function targetSampleCountError(sampleCount: unknown): VGPUError {
+  return targetSampleCountIssue(
+    "VGPU-TARGET-SAMPLE-COUNT-INVALID",
+    `sampleCount received ${String(sampleCount)}; WebGPU render targets are 1 or 4.`,
+    "Use sampleCount: 4, or omit it.",
+  );
+}
+
 export function clearColorInvalidError(where: string): VGPUError {
   return new VGPUError({
     code: "VGPU-CLEAR-COLOR-INVALID",

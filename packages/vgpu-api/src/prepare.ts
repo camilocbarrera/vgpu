@@ -25,7 +25,7 @@ import { effectDraw, InternalEffect, type Effect } from "./effect.ts";
 import type { Bundle } from "./bundle.ts";
 import type { Compute } from "./api-types.ts";
 import type { Gpu } from "./kernel.ts";
-import type { CompileTarget, TargetSignature } from "./target.ts";
+import type { CompileTarget, Target, TargetSignature } from "./target.ts";
 import { normalizeSignature, signatureKeyOf } from "./pipeline-store.ts";
 import { prepareFailedError, unsupportedError, type PrepareFailure } from "./errors.ts";
 import { liveKernel } from "./live-kernel.ts";
@@ -100,7 +100,11 @@ async function prepareOne(request: PrepareRequest): Promise<PreparedDraw | Prepa
     const internal = drawable instanceof InternalEffect ? effectDraw(drawable) : drawable as InternalDraw;
     // Deliberately the draw's own async resolution path — same signature normalization, same
     // pipeline key, same store dedupe. `prepare()` is a second door to it, never a second compile.
-    const gpu = await internal.pipelineForAsync(request.target);
+    // A `RenderDestination` that is not a `Target` (a `Surface`) resolves its signature through
+    // `normalizeSignature`'s `pipelineSignature` path, exactly like the `Target` branch — the widening is
+    // safe. `pipelineForAsync` still spells its parameter `Target | TargetSignature` because `draw.ts` is
+    // out of scope for this branch; widening it there is a follow-up.
+    const gpu = await internal.pipelineForAsync(request.target as Target | TargetSignature);
     return { draw: drawable, signature: normalizeSignature(request.target), gpu };
   }
   if ("compute" in request) {

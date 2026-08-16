@@ -4,7 +4,7 @@ import { endRenderPassWithClaimValidation } from "./claim-validation-encode.ts";
 import type { Bundle } from "./bundle.ts";
 import type { Draw, DrawCallOptions } from "./draw.ts";
 import type { Effect } from "./effect.ts";
-import type { Target } from "./target.ts";
+import type { RenderDestination, Target } from "./target.ts";
 import { assertDeviceUsable } from "./lifecycle.ts";
 import { asyncFrameCallbackError, claimedGroupNativeValidationError, copyBufferInvalidError, frameAlreadySubmittedError, frameCanceledError, frameClosedError, frameEncoderLockedError, framePassActiveError, frameReentrantError, passClearDepthInvalidError, passClearStencilInvalidError, passDepthReadOnlyError, passDepthReadOnlyMsaaError, passPreserveClearDepthError, passPreserveClearStencilError, passPreserveMsaaError, passScissorInvalidError, passViewportInvalidError, queryNestedError, queryNoVisibilityError, surfaceNotInFrameError, targetRequiredError, timerInvalidError, VGPUError, visibilityInvalidError } from "./errors.ts";
 import { enterFrame, isSurface, isSurfaceResizeCallbackActive, leaveFrame } from "./surface.ts";
@@ -130,7 +130,8 @@ function frameRunner(kernel: Kernel): FrameRunner {
 }
 
 export interface FramePassOptions {
-  readonly target: Target;
+  /** Where the pass draws: a `target(gpu, …)` or a `surface(gpu, canvas)` — both are render destinations (§4c). */
+  readonly target: RenderDestination;
   /** Omit or pass true to clear with `target.clearColor`; pass false to preserve color/depth; pass a color to clear this pass with it. */
   readonly clear?: boolean | ClearColor;
   /** Depth clear value used when the pass clears. Defaults to 1. Use 0 with depth: { compare: "greater" } for reversed-Z. */
@@ -212,9 +213,9 @@ export class Frame {
     this.#encoder = device.gpu.createCommandEncoder({ label: "vgpu.frame" });
   }
 
-  pass(target: Target, body: Effect | Draw | ((pass: FramePass) => void)): void;
+  pass(target: RenderDestination, body: Effect | Draw | ((pass: FramePass) => void)): void;
   pass(options: FramePassOptions, body: Effect | Draw | ((pass: FramePass) => void)): void;
-  pass(target: Target | FramePassOptions, body: Effect | Draw | ((pass: FramePass) => void)): void {
+  pass(target: RenderDestination | FramePassOptions, body: Effect | Draw | ((pass: FramePass) => void)): void {
     // A canceled frame dropped its encoder: encoding into it would silently never run (and would
     // re-take the telemetry retains cancel() just released), so reject the call instead. Checked
     // before the device: `gpu.dispose()` cancels outstanding frames and *then* drops the device, so
@@ -224,15 +225,24 @@ export class Frame {
     if (this.#asyncAborted) throw frameClosedError("Frame.pass");
     if (this.#canceled) throw frameCanceledError("Frame.pass");
     assertDeviceUsable(this.device, "Frame.pass");
-    const targetOnly = isTarget(target);
+    // Which overload was called: `isTarget` duck-types on `renderPassDescriptor`, which every render
+    // destination has and no options bag does. A `Surface` answers it too, and must — both halves of
+    // `RenderDestination` are legal pass destinations (§4c).
+    const passOptions = isTarget(target) ? undefined : target as FramePassOptions;
     const cb = typeof body === "function" ? body : (p: FramePass) => p.draw(body);
-    const resolvedTarget = targetOnly ? target : target.target ?? this.defaultTarget;
-    if (!resolvedTarget) throw targetRequiredError("Frame.pass");
-    if (isSurface(resolvedTarget) && this.#submitted) throw surfaceNotInFrameError("Frame.pass");
-    const clear = targetOnly ? undefined : target.clear;
+    const destination = passOptions ? passOptions.target ?? this.defaultTarget : target as RenderDestination;
+    if (!destination) throw targetRequiredError("Frame.pass");
+    if (isSurface(destination) && this.#submitted) throw surfaceNotInFrameError("Frame.pass");
+    // The encode path reads the attachments of the destination it is opening a pass over (`depth` for the
+    // dead-option rules below, the colors through `renderPassDescriptor()`). A `Surface` keeps those
+    // accessors out of its PUBLIC type — they are frame-scoped, which is exactly why they are not
+    // bindable API (§4c) — but `CanvasSurface` implements every one of them. This is the only place that
+    // needs them, and it never hands them to a binding.
+    const resolvedTarget = destination as Target;
+    const clear = passOptions?.clear;
     const preserve = clear === false;
     if (preserve && resolvedTarget.sampleCount === 4) throw passPreserveMsaaError();
-    const clearDepth = targetOnly ? undefined : target.clearDepth;
+    const clearDepth = passOptions?.clearDepth;
     if (clearDepth !== undefined) {
       if (typeof clearDepth !== "number" || !(clearDepth >= 0 && clearDepth <= 1)) throw passClearDepthInvalidError(clearDepth);
       if (preserve) throw passPreserveClearDepthError();
@@ -242,7 +252,7 @@ export class Frame {
         throw passClearDepthInvalidError(clearDepth, "but the target has no depth attachment, so clearDepth would have no effect.", "Create the target with depth: true (or a depth format), or drop clearDepth.");
       }
     }
-    const clearStencil = targetOnly ? undefined : target.clearStencil;
+    const clearStencil = passOptions?.clearStencil;
     if (clearStencil !== undefined) {
       // WebGPU stencilClearValue is GPUStencilValue ([EnforceRange] u32); in-range values are masked to the stencil
       // aspect's bit width by taking the LSBs, so values above 0xFF on stencil8 aspects are legal, not errors.
@@ -253,7 +263,7 @@ export class Frame {
       const depthFormat = resolvedTarget.depth?.format;
       if (!hasStencilAspect(depthFormat)) throw passClearStencilInvalidError(`received ${String(clearStencil)}, but the target's depth format ${depthFormat ? `"${depthFormat}"` : "(none)"} has no stencil aspect, so clearStencil would have no effect.`);
     }
-    const depthReadOnly = targetOnly ? undefined : target.depthReadOnly;
+    const depthReadOnly = passOptions?.depthReadOnly;
     if (depthReadOnly !== undefined && typeof depthReadOnly !== "boolean") {
       throw passDepthReadOnlyError(`received ${previewValue(depthReadOnly)}; expected a boolean.`, "Pass depthReadOnly: true to open the pass with a read-only depth attachment, or omit it.");
     }
@@ -270,8 +280,8 @@ export class Frame {
       if (clearDepth !== undefined) throw passDepthReadOnlyError("cannot be combined with clearDepth; a read-only depth aspect omits its load/store ops and is never cleared.", "Remove clearDepth, or drop depthReadOnly.");
       if (clearStencil !== undefined) throw passDepthReadOnlyError("cannot be combined with clearStencil; a read-only stencil aspect omits its load/store ops and is never cleared.", "Remove clearStencil, or drop depthReadOnly.");
     }
-    const viewport = targetOnly ? undefined : validatedViewport(target.viewport, this.device.gpu.limits, resolvedTarget.size);
-    const scissor = targetOnly ? undefined : validatedScissor(target.scissor, resolvedTarget.size);
+    const viewport = passOptions ? validatedViewport(passOptions.viewport, this.device.gpu.limits, resolvedTarget.size) : undefined;
+    const scissor = passOptions ? validatedScissor(passOptions.scissor, resolvedTarget.size) : undefined;
     // Owners this pass attached, in attach order: the rollback set if anything below throws.
     const attached: FrameOwner[] = [];
     let encoder: GPURenderPassEncoder | undefined;
@@ -279,8 +289,8 @@ export class Frame {
       // Attaching telemetry mutates per-frame bookkeeping before the native pass opens. Keep the whole
       // attach/setup/body sequence atomic so any later validation/native setup failure rolls it back,
       // not only exceptions thrown by the user callback.
-      const timer = targetOnly || target.timer === undefined ? undefined : this.#attach(target.timer, resolvedTarget, attached, timerAttachmentInvalidError);
-      const visibility = targetOnly || target.visibility === undefined ? undefined : this.#attach(target.visibility, resolvedTarget, attached, visibilityAttachmentInvalidError);
+      const timer = passOptions?.timer === undefined ? undefined : this.#attach(passOptions.timer, resolvedTarget, attached, timerAttachmentInvalidError);
+      const visibility = passOptions?.visibility === undefined ? undefined : this.#attach(passOptions.visibility, resolvedTarget, attached, visibilityAttachmentInvalidError);
       const occlusion = visibility?.occlusion;
       // timestampWrites and occlusionQuerySet are target-independent pass state: decorate the descriptor after obtaining it from the target.
       // Clear color precedence: the pass color, then the target's own default, then the built-in.

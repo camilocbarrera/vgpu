@@ -10,6 +10,17 @@ export interface TargetTextureOptions {
   readonly clearColor?: ClearColor;
   readonly colors?: readonly { readonly format: GPUTextureFormat }[];
   readonly depth?: boolean | GPUTextureFormat;
+  /**
+   * Sample count of the render pass this target opens: `4` renders into internal multisample color
+   * attachments and resolves into the sampleable ones, `1` (the default) renders straight into them.
+   * This is the WebGPU platform vocabulary `surface()` already uses — the one spelling of multisampling.
+   */
+  readonly sampleCount?: 1 | 4;
+  /**
+   * Legacy 0.3.0 spelling of {@link TargetTextureOptions.sampleCount} — `msaa: true` means
+   * `sampleCount: 4`. Still honored so existing code keeps working; prefer `sampleCount`. Supplying both
+   * with different meanings throws `VGPU-TARGET-SAMPLE-COUNT-CONFLICT`.
+   */
   readonly msaa?: boolean | 4;
   readonly label?: string;
 }
@@ -24,7 +35,7 @@ export interface TargetSignature {
   readonly sampleCount?: 1 | 4;
 }
 
-export type CompileTarget = Target | TargetSignature;
+export type CompileTarget = RenderDestination | TargetSignature;
 
 /** Options bag for `Target.renderPassDescriptor()`. `Frame.pass` supplies these from `FramePassOptions`. */
 export interface RenderPassDescriptorOptions {
@@ -40,13 +51,26 @@ export interface RenderPassDescriptorOptions {
   readonly depthReadOnly?: boolean;
 }
 
-export interface Target {
+/**
+ * What `Target` and `Surface` share: a place a render pass can draw into.
+ *
+ * **Normative distinction** (design §4c). Both are *render destinations*: accepted by `f.pass()` and by
+ * `prepare()` as a target signature. `RenderDestination` is the shared supertype — size, formats, sample
+ * count, clear color, resize, render-pass descriptor.
+ * - **{@link Target}** additionally has **persistent resource identity**: it exposes `.color`/`.colors`/
+ *   `.depth`, may be used as a texture binding, and auto-heals bindings across resize/recreation.
+ * - **`Surface` is presentation-only and is NOT a texture binding.** `Surface` does **not** extend
+ *   `Target`; passing one as a binding fails with `VGPU-SURFACE-NOT-BINDABLE`.
+ * - **Resize invalidation is by signature, not by identity.** A resize that preserves color format, depth
+ *   format and sample count does **not** invalidate a prepared pipeline or a render bundle — only a change
+ *   to that render-pass signature invalidates the corresponding prepared combinations.
+ *
+ * The design rule that follows from it: **bind the `Target`, not its texture snapshot.**
+ */
+export interface RenderDestination {
   readonly gpu: unknown;
   readonly size: readonly [number, number];
   readonly texelSize: readonly [number, number];
-  readonly color: Texture;
-  readonly colors: readonly [Texture, ...Texture[]];
-  readonly depth?: Texture;
   readonly format: GPUTextureFormat;
   readonly sampleCount: 1 | 4;
   /**
@@ -63,6 +87,18 @@ export interface Target {
   readFloats(): Promise<Float32Array>;
   onDestroy(cb: ResourceDestroyCallback<Target>): UnsubscribeResourceDestroy;
   renderPassDescriptor(opts?: RenderPassDescriptorOptions): GPURenderPassDescriptor;
+}
+
+/**
+ * A render destination with **persistent resource identity**: its attachments are textures the target
+ * owns, so it can be bound (`bindings: { src: scene }`) and vgpu re-binds them for you when a resize
+ * recreates them. This is the half of the destination pair a `Surface` deliberately is not — see
+ * {@link RenderDestination} for the normative distinction.
+ */
+export interface Target extends RenderDestination {
+  readonly color: Texture;
+  readonly colors: readonly [Texture, ...Texture[]];
+  readonly depth?: Texture;
 }
 
 export { OffscreenTarget } from "./target-offscreen.ts";

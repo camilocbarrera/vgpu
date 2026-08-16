@@ -1,4 +1,4 @@
-import { clearColorInvalidError, surfaceSampleCountError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
+import { clearColorInvalidError, surfaceSampleCountError, targetSampleCountConflictError, targetSampleCountError, targetSizeRequiredError, targetStencilOnlyDepthError, unsupportedError } from "./errors.ts";
 import type { Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 
 export const DEFAULT_FORMAT: GPUTextureFormat = "rgba8unorm";
@@ -36,8 +36,30 @@ export function depthFormatFor(options: TargetTextureOptions): GPUTextureFormat 
   return options.depth === true ? "depth24plus" : options.depth || undefined;
 }
 
+/**
+ * Sample count of a target. `sampleCount: 1 | 4` is the WebGPU platform spelling — the same vocabulary
+ * `surface()` already uses — and `msaa: boolean | 4` is its legacy 0.3.0 spelling, kept alive so the
+ * corpus that spells `msaa: true` keeps compiling and rendering identically. They describe one option,
+ * so supplying both with different meanings is a conflict rather than a precedence puzzle.
+ */
 export function sampleCountFor(options: TargetTextureOptions): 1 | 4 {
   const msaa = options.msaa as unknown;
+  const sampleCount = (options as { readonly sampleCount?: unknown }).sampleCount;
+  if (sampleCount !== undefined) {
+    const resolved = targetSampleCountFor(sampleCount);
+    if (msaa !== undefined && msaaSampleCountFor(msaa) !== resolved) throw targetSampleCountConflictError(msaa, sampleCount);
+    return resolved;
+  }
+  return msaaSampleCountFor(msaa);
+}
+
+function targetSampleCountFor(sampleCount: unknown): 1 | 4 {
+  if (sampleCount === 4) return 4;
+  if (sampleCount === 1) return 1;
+  throw targetSampleCountError(sampleCount);
+}
+
+function msaaSampleCountFor(msaa: unknown): 1 | 4 {
   if (msaa === true || msaa === 4) return 4;
   if (msaa === undefined || msaa === false) return 1;
   const e = targetSizeRequiredError();

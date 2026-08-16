@@ -37,7 +37,7 @@ import { assertDeviceUsable } from "./lifecycle.ts";
 import { liveKernel } from "./live-kernel.ts";
 import { normalizeSignature, signatureKeyOf } from "./pipeline-store.ts";
 import { enterFrame, leaveFrame } from "./surface.ts";
-import type { Target } from "./target.ts";
+import type { RenderDestination, Target } from "./target.ts";
 import { BUILT_IN_CLEAR_COLOR } from "./target-utils.ts";
 
 /**
@@ -120,7 +120,7 @@ class CollectingPass implements RenderOncePass {
  * are `frame()`'s `f.pass(options, body)` surface, and a one-shot that grew them would be a second
  * spelling of it.
  */
-export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOncePass) => void): Promise<void> {
+export async function renderOnce(gpu: Gpu, target: RenderDestination, body: (pass: RenderOncePass) => void): Promise<void> {
   // Same entry guard as every other free function: a disposed gpu fails here, not inside a driver call.
   const kernel = liveKernel(gpu, "renderOnce");
   const device = kernel.device;
@@ -131,6 +131,11 @@ export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOn
   try { body(recorder); }
   finally { recorder.close(); }
   const commands = recorder.commands;
+  // `pipelineForAsync()` and `encodeDraw()` still spell their parameter `Target | TargetSignature`
+  // because `draw.ts` is out of scope for the Surface/Target split (§4c); both only read the render-pass
+  // signature and the attachments every `RenderDestination` answers, and a surface destination is
+  // precisely what phase 3 below documents. One named narrowing instead of a cast per call site.
+  const destination = target as Target;
 
   // --- Phase 2: async readiness for every distinct combination, in parallel.
   const draws = [...new Set(commands.map((command) => command.draw))];
@@ -146,7 +151,7 @@ export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOn
     // unhandled, which is a crash under Node's defaults and, being order-dependent, an intermittent
     // one. Wrapping turns the sync throw into the rejection of the array's own entry, so it is
     // reported with its siblings instead of racing them.
-    const settled = await Promise.allSettled(draws.map(async (draw) => draw.pipelineForAsync(target)));
+    const settled = await Promise.allSettled(draws.map(async (draw) => draw.pipelineForAsync(destination)));
     // The device can be lost — or the gpu disposed — while a compile is in flight, and that is the
     // proximate cause of every rejection in `settled`: report it as itself instead of burying a
     // `VGPU-DEVICE-LOST` inside a compile-failure batch. Same re-check `dispatchOnce()` does after
@@ -172,7 +177,7 @@ export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOn
     const pass = encoder.beginRenderPass(descriptor);
     // Every pipeline is warm, so this hits the store's ready path: no `createRenderPipeline` here,
     // whatever the resolved `pendingPipelines` default is.
-    for (const command of commands) encodeDraw(command.draw, pass, target, command.opts);
+    for (const command of commands) encodeDraw(command.draw, pass, destination, command.opts);
     pass.end();
     device.gpu.queue.submit([encoder.finish()]);
   } finally {
@@ -181,7 +186,7 @@ export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOn
 }
 
 /** Resolved signature key for the failure report only; a target that is itself the problem must not shadow the real failure. */
-function signatureKeyFor(target: Target): string | undefined {
+function signatureKeyFor(target: RenderDestination): string | undefined {
   try { return signatureKeyOf(normalizeSignature(target)); }
   catch { return undefined; }
 }

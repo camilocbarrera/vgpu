@@ -1,7 +1,8 @@
 import { Buffer, Texture, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
 import type { BindingInfo } from "@vgpu/wgsl/reflect-source";
 import type { BindGroupIdentityPart } from "./bind-cache.ts";
-import { incompatibleResourceError, textureFilterabilityError } from "./errors.ts";
+import { incompatibleResourceError, surfaceNotBindableError, textureFilterabilityError } from "./errors.ts";
+import { isSurface } from "./surface.ts";
 import type { Target } from "./target.ts";
 import { assertBufferUsable } from "./lifecycle.ts";
 import { BINDING_RESOURCE, bindingResourceOf } from "./draw-protocols.ts";
@@ -70,6 +71,13 @@ function normalizeBufferResource(binding: BindingInfo, value: unknown, context: 
 }
 
 function normalizeTextureResource(binding: BindingInfo, value: unknown, context: ResourceNormalizationContext): NormalizedBindingResource {
+  // Nominal, and deliberately BEFORE the structural `asTarget()` below: a `CanvasSurface` satisfies that
+  // duck-type (identity + color + onDestroy), so only an identity check can keep it out. Design §4c: a
+  // surface is presentation-only, its presentation texture is frame-scoped, and `bindings` is
+  // `Record<string, unknown>` — structural typing is not the enforcement mechanism, this line is.
+  // The choke point is shared by `{ bindings }`, `.set()` and `.bind()` (set-core.ts), so all three fail
+  // here, including through the JS/`unknown` path where no type was ever involved.
+  if (isSurface(value)) throw surfaceNotBindableError(context.sourceHint);
   const target = asTarget(value);
   if (target) {
     const color = target.color;
