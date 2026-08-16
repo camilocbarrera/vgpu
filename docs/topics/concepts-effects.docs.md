@@ -16,9 +16,11 @@ order: 40
 
 # Effects
 
-An [`Effect`](/reference/vgpu/effect#effect) is a full-screen fragment shader created with `effect(gpu, source)`. Its pipeline compiles lazily on first use; call `await effect.compile(target)` during load if you want to pre-warm it. See [Compilation](/concepts/compilation) for the full pre-warm flow. Every draw fills the whole target — you only write the fragment.
+An [`Effect`](/reference/vgpu/effect#effect) is a full-screen fragment shader created with `effect(gpu, input)` — one positional input after `gpu`: a bare WGSL string (shorthand for `{ shader }`) or the full `EffectOptions` object. Every draw fills the whole target; you only write the fragment.
 
-Effects chain through targets: render one effect into an offscreen [`Target`](/reference/vgpu/target#target), then bind that target as a texture input of the next effect with `set()`.
+Nothing compiles at construction. Warm the `(effect, target)` combination with `await prepare(gpu, [{ draw: fx, target }])` before you encode it — under the default `pendingPipelines: "throw"` policy an unprepared combination fails fast instead of compiling inside your frame. See [Compilation](/concepts/compilation) for the full flow.
+
+Effects chain through targets: render one effect into an offscreen [`Target`](/reference/vgpu/target#target), then declare that target as a texture **binding** of the next effect. Bind the `Target` itself, not `target.color` — the target re-binds its new texture identity when it resizes, a texture snapshot does not.
 
 The `uv` varying that `effect(gpu)` injects is top-origin: `(0, 0)` is the
 top-left corner and `v` grows downward — the same convention as WebGPU texture
@@ -29,7 +31,7 @@ image exactly. If you are porting a WebGL or Shadertoy shader that assumes
 everything else flip-free.
 
 ```ts
-import { init, effect, sampler, surface, target } from "vgpu";
+import { init, effect, frame, prepare, sampler, surface, target } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -56,31 +58,50 @@ const postSource = `
 const scene = target(gpu, { size: [1280, 720] });
 
 const sceneEffect = effect(gpu, sceneSource);
-const post = effect(gpu, postSource);
-post.set({
-  src: scene,
-  samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
-}); // the offscreen result becomes the post input
+const post = effect(gpu, {
+  shader: postSource,
+  // Ownership is fixed here: both are EXTERNAL resources, so they live in `bindings`
+  // and are swapped (never `.set()`) with `post.bind("src", other)`.
+  bindings: {
+    src: scene,
+    samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
+  },
+});
 
-sceneEffect.draw(scene); // render the scene offscreen
-post.draw(canvasSurface); // invert it onto the canvas
+await prepare(gpu, [
+  { draw: sceneEffect, target: scene },
+  { draw: post, target: canvasSurface },
+]);
+
+frame(gpu, (f) => {
+  f.pass(scene, (p) => p.draw(sceneEffect));        // render the scene offscreen
+  f.pass(canvasSurface, (p) => p.draw(post));      // invert it onto the canvas
+});                                                 // both passes, one submit, in program order
 ```
 
 Reach for `textureLoad` only when you need exact texels or an unfilterable
 format — for ordinary sampling, a filtering sampler is simpler and faster.
 
-`post.set(...)` exposes the offscreen result and filtering sampler to WGSL as bindings named `src` and `samp`. Each one-shot `draw()` encodes and submits its own work immediately, in call order.
+`bindings` exposes the offscreen result and the filtering sampler to WGSL under the names `src` and `samp`. Both passes are encoded into one command buffer and submitted once, so the second pass is guaranteed to read what the first one wrote. For a standalone render outside any frame, `await renderOnce(gpu, target, (p) => p.draw(fx))` owns its encoder and submits once.
 
 ## Updating bindings
 
-You can update bindings at any time by using `.set`.
+There are exactly two update spellings, and ownership — fixed at construction — decides which one
+applies: **`.set(binding, value)` writes bytes** of a binding this instance owns, and
+**`.bind(binding, resource)` swaps the identity** of a binding declared in `bindings`. A binding
+declared in neither `values` nor `bindings` is instance-owned by default, with zero-initialized
+storage, so `.set()` works on it right away. Calling `.set()` on an external binding is an error
+(`VGPU-R1-EXTERNAL-BINDING`) that names the resource to update instead — the old order-dependent
+ownership latch is unrepresentable in this model.
 
 `set()` writes immediately — there is no change detection, so every call is a
-real GPU write. Match your calls to how often values actually change: constants
-once at creation, size- and resolution-class uniforms at init and on resize,
-and per-frame calls only for genuinely dynamic values like time or pointer
-input. Rebinding the same resources is free — bind groups are cached by
-resource identity — so this rule is purely about avoiding redundant writes.
+real GPU write, but it never rebuilds a bind group (so a render bundle that
+captured this effect stays `ready`). Match your calls to how often values
+actually change: constants once at creation, size- and resolution-class uniforms
+at init and on resize, and per-frame calls only for genuinely dynamic values like
+time or pointer input. `.bind()` dedupes by identity, so re-binding the same
+resource is free; a real identity change rebuilds exactly that group and moves
+dependent bundles to `stale`.
 
 One more rule keeps multi-pass frames predictable: a frame records into a
 single command buffer, and `set()` writes land before any of it executes — so
@@ -90,7 +111,7 @@ vertical blur, say), create two effects; they are cheap, and each owns its
 uniforms.
 
 ```ts
-import { clock, init, effect, surface } from "vgpu";
+import { clock, init, effect, frameLoop, prepare, surface } from "vgpu";
 
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
@@ -107,9 +128,10 @@ const pulseSource = `
   }
 `;
 
-const pulse = effect(gpu, pulseSource, {
-  // initial uniform defaults
-  set: {
+const pulse = effect(gpu, {
+  shader: pulseSource,
+  // initial values of an INSTANCE-OWNED binding
+  values: {
     params: {
       time: 0,
       width: canvasSurface.size[0],
@@ -118,14 +140,13 @@ const pulse = effect(gpu, pulseSource, {
   },
 });
 
-// update uniforms before drawing
-pulse.set({
-  params: {
-    time: clock(gpu).time,
-  },
-});
+await prepare(gpu, [{ draw: pulse, target: canvasSurface }]);
 
-pulse.draw(canvasSurface);
+frameLoop(gpu, (f) => {
+  // binding-scoped, and a partial: `width`/`height` keep their last value
+  pulse.set("params", { time: clock(gpu).time });
+  f.pass(canvasSurface, (p) => p.draw(pulse));
+});
 ```
 
 You should also only update uniforms when they need to change, for example, react to canvas size changes:
@@ -136,18 +157,21 @@ import { clock, init, effect, surface } from "vgpu";
 const gpu = await init();
 const canvas = document.querySelector("canvas")!;
 const canvasSurface = surface(gpu, canvas);
-const pulse = effect(gpu, `
-  struct Params { time: f32, width: f32, height: f32 }
-  @group(0) @binding(0) var<uniform> params: Params;
+const pulse = effect(gpu, {
+  shader: `
+    struct Params { time: f32, width: f32, height: f32 }
+    @group(0) @binding(0) var<uniform> params: Params;
 
-  @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-    return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
-  }
-`, { set: { params: { time: 0, width: canvasSurface.size[0], height: canvasSurface.size[1] } } });
+    @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+      return vec4f(uv, sin(params.time) * 0.5 + 0.5, 1.0);
+    }
+  `,
+  values: { params: { time: 0, width: canvasSurface.size[0], height: canvasSurface.size[1] } },
+});
 
 // ---cut---
 const unsubscribe = canvasSurface.onResize(({ width, height }) => {
-  pulse.set({ params: { width, height } }); // partial update: time keeps its value
+  pulse.set("params", { width, height }); // partial update: time keeps its value
 });
 ```
 
