@@ -396,7 +396,7 @@ function crossesLoopOrCallback(site, ctorCall) {
  * analysis this codemod has no business attempting, and the cost of a false positive is one site left
  * on the flat bag, while the cost of a false negative is a silently wrong render.
  */
-function readsThroughMutatedObject(expr, ctorCall, checker) {
+export function readsThroughMutatedObject(expr, ctorCall, checker) {
   const root = rootIdentifierOf(expr);
   // A bare identifier (`const tex = texture(...); fx.set({ src: tex })`) reads through nothing.
   if (!root || unwrap(expr) === root) return false;
