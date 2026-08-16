@@ -30,7 +30,7 @@
 //       redundant `prepare()`.
 //
 // Hence: this script's `--dry-run` report is the INPUT to the human pass, and the branch's
-// `T04-19-DECISIONS.md` is its OUTPUT. There is no `--apply`: an automatic writer would have to
+// `t04-19-decisions.md` is its OUTPUT. There is no `--apply`: an automatic writer would have to
 // invent the grouping and the async propagation it cannot decide, and this train has already paid
 // for one codemod that "looked right" and moved a call site into a shape nobody had read
 // (T04-17's five unpinned resources). Insertions are made by hand, from this report, and the
@@ -319,7 +319,7 @@ export function requestsOf(scan) {
  * statically-named renderable with a statically-named target, there is exactly one frame
  * boundary, and nothing is constructed in a loop — a mechanical insertion would be correct.
  * Everything else is `manual-reviewed`: the report says WHY, and the human decision is recorded
- * in `T04-19-DECISIONS.md`.
+ * in `t04-19-decisions.md`.
  */
 export function classify(scan) {
   const reasons = [];
