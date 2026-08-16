@@ -20,6 +20,16 @@ import { readsThroughMutatedObject } from "./ownership-binding-scoped.mjs";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
+/**
+ * The one file allowed to pin a mutable resource, because it holds the deliberate pinned
+ * counter-example this invariant describes: `ping-pong-binding-identity.test.ts` constructs
+ * `bindings: { src: buf.read }` on purpose, next to a `buf.swap()`, to prove that form samples the
+ * wrong half. The rule reads text, not reachability, so it cannot tell that arm from a real site —
+ * and it should not try. Naming the file is the honest fix; hoisting the expression to hide it from
+ * the rule would make the counter-example pass by accident of shape and quietly stop being one.
+ */
+const ALLOWLIST = new Set(["packages/vgpu-api/tests/ping-pong-binding-identity.test.ts"]);
+
 /** The construction call a `bindings:` bag belongs to, or null if it is some other object. */
 function owningConstruction(bindingsProp: ts.Node): ts.CallExpression | null {
   const bag = bindingsProp.parent;
@@ -35,6 +45,7 @@ describe("the migrated corpus", () => {
     const offenders: string[] = [];
 
     for (const rel of corpus) {
+      if (ALLOWLIST.has(rel)) continue;
       const sf = program.getSourceFile(path.join(REPO_ROOT, rel));
       if (!sf) continue;
       const visit = (node: ts.Node): void => {
@@ -61,6 +72,19 @@ describe("the migrated corpus", () => {
 
     // Named rather than counted: a regression should say which site and why, not just "1 != 0".
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps the allowlist honest", () => {
+    // An allowlist that outlives its reason is an exemption nobody re-reads. Both halves are pinned:
+    // the file must still be IN the corpus (or the entry is dead and hiding nothing), and it must
+    // still CONTAIN the pinned counter-example (or the exemption is now blanket cover for whatever
+    // that file grows into next).
+    const { program, corpus } = createCorpusProgram(REPO_ROOT);
+    for (const rel of ALLOWLIST) {
+      expect(corpus, `${rel} is allowlisted but not in the corpus`).toContain(rel);
+      const sf = program.getSourceFile(path.join(REPO_ROOT, rel));
+      expect(sf?.text ?? "", `${rel} no longer holds a pinned counter-example`).toMatch(/bindings:\s*\{\s*src:\s*buf\.read\s*\}/u);
+    }
   });
 
   it("still sees the corpus it is supposed to be checking", () => {
