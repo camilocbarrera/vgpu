@@ -644,6 +644,29 @@ export function surfaceNotBindableError(where: string): VGPUError {
   });
 }
 
+/** One sample-count vocabulary for `target()`: `sampleCount` is the spelling, `msaa` its legacy alias. */
+function targetSampleCountIssue(code: string, message: string, fix: string): VGPUError {
+  return new VGPUError({ code, message, fix, where: "target" });
+}
+
+/** `target({ msaa })` and `target({ sampleCount })` describe the same attachment and may not disagree. */
+export function targetSampleCountConflictError(msaa: unknown, sampleCount: unknown): VGPUError {
+  return targetSampleCountIssue(
+    "VGPU-TARGET-SAMPLE-COUNT-CONFLICT",
+    `msaa: ${String(msaa)} and sampleCount: ${String(sampleCount)} disagree.`,
+    "Spell it once: sampleCount: 4.",
+  );
+}
+
+/** `target({ sampleCount })` takes the WebGPU render-target counts only, exactly like `surface()`. */
+export function targetSampleCountError(sampleCount: unknown): VGPUError {
+  return targetSampleCountIssue(
+    "VGPU-TARGET-SAMPLE-COUNT-INVALID",
+    `sampleCount received ${String(sampleCount)}; WebGPU render targets are 1 or 4.`,
+    "Use sampleCount: 4, or omit it.",
+  );
+}
+
 export function clearColorInvalidError(where: string): VGPUError {
   return new VGPUError({
     code: "VGPU-CLEAR-COLOR-INVALID",

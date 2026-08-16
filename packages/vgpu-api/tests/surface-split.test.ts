@@ -9,6 +9,9 @@
  *  2. Resize invalidation is by **signature**, not by identity: a resize that preserves colors, depth and
  *     sample count compiles no new pipeline and leaves prepared bundles `ready`; a destination whose
  *     signature differs is a different prepared combination.
+ *
+ * Plus the multisampling vocabulary unification: `target({ sampleCount })` is the WebGPU spelling of the
+ * legacy `target({ msaa })`, and the two may not disagree.
  */
 import { expect, test, vi } from "vitest";
 import { getMockGPUDeviceInstrumentation } from "@vgpu/core";
@@ -190,5 +193,42 @@ test("changing the sample count is a different signature, so the prepared combin
   expect(codeOf(() => frame(gpu, (f) => f.pass(single, (p) => p.draw(fx)), { pendingPipelines: "throw" }))).toBe("NO-THROW");
   expect(codeOf(() => frame(gpu, (f) => f.pass(multi, (p) => p.draw(fx)), { pendingPipelines: "throw" }))).toBe("VGPU-PIPELINE-PENDING");
 
+  gpu.dispose();
+});
+
+// ---------------------------------------------------------------------------
+// Multisampling vocabulary: `sampleCount` is the WebGPU spelling of the legacy `msaa`.
+// ---------------------------------------------------------------------------
+
+test("target({ sampleCount: 4 }) and the legacy target({ msaa: true }) are the same target", async () => {
+  const gpu = await init();
+  const legacy = target(gpu, { size: [8, 4], depth: true, msaa: true, label: "legacyMsaa" });
+  const modern = target(gpu, { size: [8, 4], depth: true, sampleCount: 4, label: "modernSampleCount" });
+
+  expect(modern.sampleCount).toBe(4);
+  expect(legacy.sampleCount).toBe(4);
+  expect(signatureKeyOf(normalizeSignature(modern))).toBe(signatureKeyOf(normalizeSignature(legacy)));
+  // Same attachment shape: an MSAA color that resolves into the sampleable one.
+  const modernColor = (modern.renderPassDescriptor().colorAttachments as GPURenderPassColorAttachment[])[0];
+  const legacyColor = (legacy.renderPassDescriptor().colorAttachments as GPURenderPassColorAttachment[])[0];
+  expect(!!modernColor?.resolveTarget).toBe(!!legacyColor?.resolveTarget);
+  expect(modernColor?.storeOp).toBe(legacyColor?.storeOp);
+
+  expect(target(gpu, { size: [8, 4], sampleCount: 1, label: "explicitSingle" }).sampleCount).toBe(1);
+  expect(target(gpu, { size: [8, 4], label: "defaultSingle" }).sampleCount).toBe(1);
+  gpu.dispose();
+});
+
+test("msaa and sampleCount may not disagree, and each keeps its own invalid-value error", async () => {
+  const gpu = await init();
+
+  expect(codeOf(() => target(gpu, { size: [8, 4], msaa: true, sampleCount: 1 }))).toBe("VGPU-TARGET-SAMPLE-COUNT-CONFLICT");
+  expect(codeOf(() => target(gpu, { size: [8, 4], msaa: false, sampleCount: 4 }))).toBe("VGPU-TARGET-SAMPLE-COUNT-CONFLICT");
+  // Agreeing spellings are accepted — they describe the same target.
+  expect(target(gpu, { size: [8, 4], msaa: true, sampleCount: 4 }).sampleCount).toBe(4);
+  expect(target(gpu, { size: [8, 4], msaa: false, sampleCount: 1 }).sampleCount).toBe(1);
+
+  expect(codeOf(() => target(gpu, { size: [8, 4], sampleCount: 2 as unknown as 1 | 4 }))).toBe("VGPU-TARGET-SAMPLE-COUNT-INVALID");
+  expect(codeOf(() => target(gpu, { size: [8, 4], msaa: 2 as unknown as 4 }))).toBe("VGPU-TARGET-MSAA-INVALID");
   gpu.dispose();
 });
