@@ -10,7 +10,7 @@
  * (see tests/surface-split.test.ts). Structural typing cannot carry that contract.
  */
 import type { CompileTarget, Frame, RenderDestination, Surface, Target, TargetOptions } from "../../src/index.ts";
-import { bundle, effect, frame, prepare, target } from "../../src/index.ts";
+import { bundle, effect, frame, prepare, renderOnce, target } from "../../src/index.ts";
 import type { Gpu } from "../../src/kernel.ts";
 
 declare const gpu: Gpu;
@@ -44,6 +44,9 @@ frame(gpu, (f: Frame) => {
 void prepare(gpu, [{ draw: fx, target: screen }]);
 void prepare(gpu, [{ draw: fx, target: scene }]);
 void prepare(gpu, [{ draw: fx, target: { colors: ["rgba8unorm"], sampleCount: 4 } }]);
+// `renderOnce()` (§7) documents a surface destination outside any frame — the split must not close it.
+void renderOnce(gpu, screen, (p) => p.draw(fx));
+void renderOnce(gpu, scene, (p) => p.draw(fx));
 void fx.compile(screen);
 void fx.compileSync(scene);
 frame(gpu, () => { bundle(gpu, { target: screen }, (b) => b.draw(fx)); });
