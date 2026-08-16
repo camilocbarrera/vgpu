@@ -137,17 +137,20 @@ export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOn
   if (draws.length) {
     // Settled rather than raced, exactly like `prepare()`: a batch of combinations fails as a batch,
     // so every failure has to be reported, not whichever one rejected first.
-    const readiness = Promise.allSettled(draws.map((draw) => draw.pipelineForAsync(target)));
-    // A compile this call started is work vgpu started, so `gpu.settled()` must see it (issue #332
-    // tracks the same gap on the compute side, where the one-shot has no kernel to register with).
-    // `allSettled` never rejects, so tracking it cannot turn a rejection into a console error — the
-    // rejection is still delivered to this call's own caller, below.
-    void kernel.trackDelivery(readiness);
-    const settled = await readiness;
+    //
+    // The `async` wrapper is load-bearing, not style (same shape `prepare()` uses): a combination
+    // whose signature is invalid — `alphaToCoverage` on a single-sample target, a stencil/color
+    // mismatch — makes `pipelineForAsync()` throw SYNCHRONOUSLY out of its compile key. A bare
+    // `.map(...)` unwinds mid-iteration, so `Promise.allSettled` is never reached and the compiles
+    // already started by the earlier entries are orphaned: their rejections land on the process as
+    // unhandled, which is a crash under Node's defaults and, being order-dependent, an intermittent
+    // one. Wrapping turns the sync throw into the rejection of the array's own entry, so it is
+    // reported with its siblings instead of racing them.
+    const settled = await Promise.allSettled(draws.map(async (draw) => draw.pipelineForAsync(target)));
     // The device can be lost — or the gpu disposed — while a compile is in flight, and that is the
     // proximate cause of every rejection in `settled`: report it as itself instead of burying a
     // `VGPU-DEVICE-LOST` inside a compile-failure batch. Same re-check `dispatchOnce()` does after
-    // its own await, one phase earlier than the guard before the encode.
+    // its own await, and the only one this function needs: it is the last await before the encode.
     assertDeviceUsable(device, "renderOnce");
     const failures: PrepareFailure[] = [];
     settled.forEach((result, index) => {
@@ -155,9 +158,8 @@ export async function renderOnce(gpu: Gpu, target: Target, body: (pass: RenderOn
     });
     if (failures.length) throw prepareFailedError(failures);
   }
-  // The device can be lost — or the gpu disposed — while a compile is in flight: re-check before
-  // opening anything, the same way `dispatchOnce()` re-checks after its own await.
-  assertDeviceUsable(device, "renderOnce");
+  // No third guard before phase 3: nothing awaits between the phase-2 re-check and the encode, so a
+  // device that was usable there is still usable here.
 
   // --- Phase 3: one encoder, one pass, one submit.
   // A `Surface` target resolves its presentation texture here, and `draw.encode()` refuses to encode

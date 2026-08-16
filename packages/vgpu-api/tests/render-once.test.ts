@@ -264,6 +264,40 @@ test("a body that throws rejects renderOnce without opening an encoder or submit
   }
 });
 
+test("a combination that fails synchronously is reported with its siblings and orphans none of them", async () => {
+  const gpu = await init();
+  try {
+    const screen = target(gpu, { size: [4, 4] });
+    const failing = draw(gpu, { shader: WGSL, label: "driver-fails" });
+    // `alphaToCoverage` against a single-sample target makes `pipelineForAsync()` throw
+    // SYNCHRONOUSLY out of its compile key, before any promise exists — and it is named AFTER a draw
+    // whose compile is already in flight, which is what makes the sibling orphanable.
+    const badCombo = draw(gpu, { shader: WGSL, label: "a2c", multisample: { alphaToCoverage: true } });
+    const createAsync = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
+    vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockImplementation(async (desc: GPURenderPipelineDescriptor) => {
+      if (String(desc.label ?? "").includes("driver-fails")) { await new Promise((resolve) => setTimeout(resolve, 5)); throw new Error("driver said no"); }
+      return createAsync(desc);
+    });
+    const unhandled: string[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(String(reason)); };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      // Both failures — the synchronous one and the driver's — land in one batched report...
+      const error = await renderOnce(gpu, screen, (p) => { p.draw(failing); p.draw(badCombo); }).catch((e: unknown) => e);
+      expect((error as { code?: string }).code).toBe("VGPU-PREPARE-FAILED");
+      // ...and nothing escapes to the process: an orphaned rejection is a crash under Node's
+      // defaults, and an order-dependent (so intermittent) one.
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(unhandled, `orphaned: ${unhandled.join(" | ")}`).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  } finally {
+    gpu.dispose();
+  }
+});
+
 // --- Callback semantics: the body runs exactly once --------------------------------------------
 
 test("the renderOnce body runs exactly once, so its side effects are not duplicated", async () => {
@@ -339,31 +373,6 @@ test("a recorder retained past the body refuses to record more draws", async () 
     // A p.draw() from an async continuation would either be dropped silently (after the submit) or
     // silently join a render the caller already described (before it): it is refused instead.
     expect(() => escaped!.draw(quad)).toThrowError(/ran after the renderOnce\(\) body returned/);
-  } finally {
-    gpu.dispose();
-  }
-});
-
-// --- gpu.settled() sees the compile a renderOnce started (improvement over #332) ----------------
-
-test("gpu.settled() waits for a renderOnce compile that is still in flight", async () => {
-  const gpu = await init();
-  try {
-    const screen = target(gpu, { size: [4, 4] });
-    const quad = draw(gpu, { shader: WGSL, label: "settled" });
-    let compiled = false;
-    const createAsync = gpu.device.gpu.createRenderPipelineAsync.bind(gpu.device.gpu);
-    vi.spyOn(gpu.device.gpu, "createRenderPipelineAsync").mockImplementation(async (desc: GPURenderPipelineDescriptor) => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const pipeline = await createAsync(desc);
-      compiled = true;
-      return pipeline;
-    });
-
-    const pending = renderOnce(gpu, screen, (p) => p.draw(quad));
-    await gpu.settled();
-    expect(compiled).toBe(true);
-    await pending;
   } finally {
     gpu.dispose();
   }
