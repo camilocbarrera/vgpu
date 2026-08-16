@@ -15,12 +15,33 @@
 //
 // When T04-21 lands, this mock becomes a no-op and the file keeps passing — it is a regression
 // gate for both sides of the flip, not scaffolding to delete.
+//
+// HERMETICITY (fixed after CI, second lesson of the same shape). The first version of this file
+// acquired a device through the REAL `vgpu/node`, i.e. Dawn via `@vgpu/adapter-node`. It passed
+// locally only because this sandbox happens to have a software renderer installed from earlier
+// dogfooding; `test-fast` has no adapter, so all twelve runners died on VGPU-NODE-NO-ADAPTER. The
+// test was reading the ENVIRONMENT, not the code.
+//
+// The property under test — "does a synchronous encode meet a pipeline that is not ready?" — is
+// decided by `pending-pipelines.ts`, `prepare.ts`, `pipeline-store.ts` and `bundle.ts`. Not one of
+// them can tell a Dawn device from a mock one. So the device acquisition boundary is swapped and
+// nothing else: `vgpu/node` resolves to `src/mock.ts`, which is the SAME public API re-exported
+// over the mock adapter — identical `prepare`, `frame`, `bundle`, `draw`, `pipeline-store`; only
+// `init()` differs. That is the pattern the T04-19 QA harness used to execute the docs corpus, and
+// it is why this file is now a policy test rather than a hardware test.
+//
+// Real-device execution is not lost, it is just not THIS file's job: `examples/*/example.test.ts`
+// render and read back pixels under `skipIf(VGPU_DOCKER_TEST !== "1")`, which is the repo's
+// existing convention for work that needs an adapter, and those run in ci.yml's `docker-gpu`.
 import { expect, test, vi } from "vitest";
 
 vi.mock("../src/pending-pipelines.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/pending-pipelines.ts")>();
   return { ...actual, DEFAULT_PENDING_PIPELINES: "throw" as const };
 });
+
+// The device boundary, and only it. `src/mock.ts` re-exports the same modules `src/node.ts` does.
+vi.mock("vgpu/node", async () => await import("../src/mock.ts"));
 
 /** Every `examples/*` entry point that encodes something, with the gpu it hands back for cleanup. */
 const RUNNERS: readonly { name: string; run: () => Promise<{ gpu: { dispose(): void } }> }[] = [
@@ -44,6 +65,38 @@ test("the mocked flip is actually in effect", async () => {
   expect(DEFAULT_PENDING_PIPELINES).toBe("throw");
 });
 
+// The second half of that guard, and the one the adapter swap makes necessary. The constant being
+// "throw" proves the mock applied; it does NOT prove the throw still REACHES an encode once the
+// device is a mock. If the mock adapter resolved pipelines eagerly, or never consulted the policy,
+// all twelve runners below would go green by construction and this file would be decoration.
+//
+// So: a combination that nobody prepared, over the very same mock gpu the runners use, must still
+// raise VGPU-PIPELINE-PENDING. This is the mutation test made permanent — deleting a `prepare()`
+// from any example has to fail, and this proves the mechanism that would make it fail is live.
+test("an unprepared combination still throws over the mock adapter", async () => {
+  const { init, effect, frame, target } = await import("../src/mock.ts");
+  const gpu = await init();
+  try {
+    const colorTarget = target(gpu, { size: [8, 8], format: "rgba8unorm" });
+    const never = effect(gpu, {
+      shader: "@fragment fn main() -> @location(0) vec4f { return vec4f(1.0, 0.0, 0.0, 1.0); }",
+      label: "never-prepared",
+    });
+    let thrown: unknown;
+    try {
+      frame(gpu, (currentFrame) => currentFrame.pass({ target: colorTarget }, (p) => p.draw(never)));
+    } catch (error) {
+      thrown = error;
+    }
+    // Asserted on the CODE, not on the message. `pipelinePendingError()` puts the code on
+    // `error.code` and never repeats it in the prose -- which is exactly the trap the s05
+    // assertion below had fallen into, and the reason this control had to be written to find out.
+    expect((thrown as { code?: string } | undefined)?.code).toBe("VGPU-PIPELINE-PENDING");
+  } finally {
+    gpu.dispose();
+  }
+});
+
 test.each(RUNNERS)("$name runs clean under a throw default", async ({ run }) => {
   const result = await run();
   expect(result.gpu).toBeTruthy();
@@ -58,5 +111,16 @@ test("s05-fixits still reports fix-its, not a pending-pipeline error", async () 
   const { collectFixitMessages } = await import("../../../examples/by-example-s05-fixits/src/example.ts");
   const messages = await collectFixitMessages();
   expect(messages.length).toBeGreaterThan(0);
-  expect(messages.join("\n")).not.toContain("VGPU-PIPELINE-PENDING");
+  const joined = messages.join("\n");
+  // The negative half. This line used to read `.not.toContain("VGPU-PIPELINE-PENDING")`, which was
+  // VACUOUS: the example collects `error.message`, and `pipelinePendingError()` carries that string
+  // as `error.code` while its message never repeats it, so the assertion could not fail for any
+  // input. Rewritten against the message the error actually produces, it failed immediately and
+  // exposed a real defect -- under the throw default the pending error fired FIRST and shadowed the
+  // sampler fix-it -- which is why s05 now has a prepare() of its own.
+  expect(joined).not.toMatch(/has no pipeline ready for target signature/u);
+  // The positive half, which is the assertion that should have been here from the start: naming the
+  // fix-its that must survive is what makes shadowing detectable, rather than trusting an absence.
+  expect(joined).toContain("Unset `samp`");
+  expect(joined).toContain("is lib-owned by its first JS set()");
 });

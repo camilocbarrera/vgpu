@@ -48,7 +48,7 @@ That test found one real gap during development (`s09-bundles` had no `prepare()
 | s02-fullscreen | `{draw: wave, target: colorTarget}` | after `wave.set()`, before `frame()` | ✅ executed |
 | s03-sharing | `cube→colorTarget`, `floor→colorTarget` | after both `.set()`, before `frame()` | ✅ executed |
 | s04-shared-uniforms | `wave→colorTarget`, `tint→colorTarget` | after `globals.set()`, before `frame()` | ✅ executed |
-| s05-fixits | **none — documented skip** | — | ✅ executed (own assertion) |
+| s05-fixits | `{draw: missing, target: colorTarget}` | added after CI proved the skip was wrong | ✅ executed (own assertions) |
 | s06-scene | `cube→colorTarget` | after the three `.set()`, before `frame()` | ✅ executed |
 | s07-hdr-post | `solid→scene`, `post→output` | after construction, before `frame()` | ✅ executed |
 | s08-ping-pong | `fill→buf.write`, `copy→buf.read` | before the first `frame()` | ✅ executed |
@@ -60,12 +60,27 @@ That test found one real gap during development (`s09-bundles` had no `prepare()
 
 Criteria worth stating:
 
-- **s05-fixits is a deliberate skip.** Its whole job is to *collect* fix-it error messages, so
-  "it did not throw" is not evidence. Preparing `missing` would make `prepare()` itself reject and
-  replace the fix-it the example exists to demonstrate. Instead it gets a dedicated assertion:
-  under `"throw"` the collected messages must still be fix-its and must **not** contain
-  `VGPU-PIPELINE-PENDING`. They do not — pipeline resolution is reached only after the binding
-  validation the example triggers.
+- **s05-fixits WAS a documented skip, and the documentation was wrong.** The claim was that
+  preparing `missing` would make `prepare()` itself reject and replace the fix-it the example
+  exists to demonstrate, and that pipeline resolution is reached only *after* binding validation.
+  Both halves are false, and the only reason they survived review is that the assertion defending
+  them was **vacuous**: it asserted the collected messages do not contain the string
+  `VGPU-PIPELINE-PENDING`, but the example collects `error.message` and `pipelinePendingError()`
+  carries that string as `error.code` and never repeats it in the prose. The assertion could not
+  fail for any input, so it "verified" the claim by construction.
+  Rewritten against the message the error actually produces, it failed on the first run:
+
+  ```
+  'lighting' has no pipeline ready for target signature rgba8unorm:none:1, and pendingPipelines is
+  "throw", so this encode did not start compilation.
+  ```
+
+  Pipeline resolution runs FIRST and shadows the fix-it — under T04-21 this example would have
+  stopped teaching the thing it exists to teach. Probed directly: `prepare()` here **succeeds**
+  (an unset binding is a bind-time error, not a pipeline-creation one) and the encode then raises
+  the intended `VGPU-R1-BINDING-NEVER-SET` / ``Unset `samp` ``. So s05 gets a real `prepare()`, and
+  the test now asserts the fix-its **positively** by name — naming what must survive is what makes
+  shadowing detectable, where an absence-check was not.
 - **s11-compute is a skip by contract, not by omission.** `dispatchOnce()` always takes the async
   readiness path regardless of the default (contract #20), so a `prepare()` here would be the
   redundant insertion the ticket's Prohibitions forbid.
@@ -238,6 +253,36 @@ rather than trust `--verify` alone.**
 | `apps/docs` (21 incl. hero) | extended QA harness, real prepare/frame/bundle, pumped rAF | 21/21 |
 | control (mock neutralized) | same harness, `"sync"` default | 21/21 — failures were real |
 | still not executed | `fft-ocean-surface` / `nextjs-flare` (need `document.createElement`), 3 ML renderers (no `createRenderer`) | `--verify` + typecheck only |
+
+## The gate list is derived from CI, not from memory (three instances)
+
+Three separate red CI runs on this branch had the same root cause: **I assembled the local gate
+list from what seemed relevant instead of from what CI actually runs.**
+
+1. `check:filenames` — runs inside `test-fast`, was not in my list. A file I added was rejected.
+2. `prepare-corpus-throw.test.ts` — **the test I wrote as the ticket's correctness gate was not
+   hermetic.** It acquired a real device through `vgpu/node` (Dawn via `@vgpu/adapter-node`) and
+   passed locally only because this sandbox has a software renderer left over from earlier
+   dogfooding. `test-fast` has no adapter, so all twelve runners died on `VGPU-NODE-NO-ADAPTER`.
+   The test was reading the ENVIRONMENT, not the code. The property it checks — does a synchronous
+   encode meet an unready pipeline — is decided by `pending-pipelines.ts`, `prepare.ts`,
+   `pipeline-store.ts` and `bundle.ts`, none of which can tell a Dawn device from a mock one. Fixed
+   by swapping the device acquisition boundary and nothing else (`vgpu/node` -> `src/mock.ts`, the
+   same public API over the mock adapter), which is the pattern the QA harness had already proven.
+3. The vacuous s05 assertion above, which is the same disease in a third form: a check that cannot
+   fail is a gate that does not exist.
+
+**Two rules this earns, for T04-21 and the rest of the train:**
+
+- Derive the local gate list from the CI workflow, not from memory.
+- **A new test must run in CI's ENVIRONMENT, not just the author's.** If it needs a real adapter it
+  is either hermetic by mock or it lives in the GPU-gated suite behind
+  `skipIf(process.env.VGPU_DOCKER_TEST !== "1")` — the convention `examples/*/example.test.ts`
+  already follows. A test that silently depends on a locally-installed renderer is worse than no
+  test: it reports green on hardware nobody else has.
+
+The corollary that cost the most here: **when a test defends a claim, check that it can fail.** Two
+of the three were assertions that were structurally incapable of going red.
 
 ## What was deliberately NOT touched
 
