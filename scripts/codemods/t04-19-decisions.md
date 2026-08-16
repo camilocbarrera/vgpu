@@ -286,7 +286,7 @@ list from what seemed relevant instead of from what CI actually runs.**
 3. The vacuous s05 assertion above, which is the same disease in a third form: a check that cannot
    fail is a gate that does not exist.
 
-**Three rules this earns, for T04-21 and the rest of the train:**
+**Four rules this earns, for T04-21 and the rest of the train:**
 
 - Derive the local gate list from the CI workflow, not from memory — **and that list INCLUDES the
   conditional jobs.** `docker-gpu` runs vitest with `VGPU_DOCKER_TEST=1`, so a plain `vitest run`
@@ -297,6 +297,25 @@ list from what seemed relevant instead of from what CI actually runs.**
   changes what runs, run it BOTH ways and diff against the same two-way run on the base commit —
   the base run is what separates your regressions from the environment's pre-existing noise (in the
   sandbox: 7 snapshot/adapter failures that have nothing to do with the change).
+- **A test you classified "pre-existing environmental noise" is NOT verified — it is unread.** The
+  base-vs-branch diff that separates your regressions from the environment's own failures answers
+  "did this test's STATUS change", which is a different question from "did this test's SUBJECT run".
+  A test that dies before reaching the code under test has an identical status on both commits and
+  a regression hiding behind it. T04-21 shipped exactly that: `surface-gpu.test.ts` §7.15 runs its
+  scenario in a worker thread, the worker acquires no adapter in the sandbox, so it went red at
+  `requestAdapter` on both sides of the diff and was filed as environmental. In Docker the adapter
+  exists, the scenario advances, and it hit VGPU-PIPELINE-PENDING on an unprepared `effect` — a
+  third red CI for a one-line fix. **Read the failure's LOCATION, not its status:** red at
+  acquisition/setup means unverified (decide the treatment by reading the code), red at the
+  assertion the test exists for means the subject did run. Applied to the other six of that diff:
+  the wireframe and primitive batteries went red at `pixelmatch`, so they had already encoded under
+  `"throw"`, and reading confirms why they can — `primitive-renderer.ts` and the inspect helpers
+  drive raw `device.gpu.createRenderPipeline`, never the pipeline store. `minify-execution` went
+  red in an `inspect()` callback that runs BEFORE `requestDevice()` — unverified by execution, so
+  read: it imports only `@vgpu/adapter-node` and `@vgpu/wgsl/runtime` and issues raw compute, so
+  `pendingPipelines` is not in its path either. When the environment blocks execution, a
+  main-thread transcription of the scenario is usually enough to execute the claim anyway; that is
+  how §7.15's fix was verified here without a worker-capable adapter.
 - **A new test must run in CI's ENVIRONMENT, not just the author's.** If it needs a real adapter it
   is either hermetic by mock or it lives in the GPU-gated suite behind
   `skipIf(process.env.VGPU_DOCKER_TEST !== "1")` — the convention `examples/*/example.test.ts`
