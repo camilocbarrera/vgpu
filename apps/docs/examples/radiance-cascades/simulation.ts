@@ -125,15 +125,15 @@ export function createScene(gpu: Gpu, size: Vec2, label: string): RadianceScene 
       sdf,
       cascades,
       effects: {
-        paint: effect(gpu, paintEmitterWgsl, { label: `${label}-paint` }),
-        jfaInit: effect(gpu, jfaInitWgsl, { label: `${label}-jfa-init` }),
+        paint: effect(gpu, { shader: paintEmitterWgsl, label: `${label}-paint` }),
+        jfaInit: effect(gpu, { shader: jfaInitWgsl, label: `${label}-jfa-init` }),
         // One effect instance per pass: `set()` writes immediately, so passes sharing an
         // instance inside a frame would all run with the last jump distance written.
-        jfaSteps: jumps.map((_, index) => effect(gpu, jfaPassWgsl, { label: `${label}-jfa-${index}` })),
-        sdfFinalize: effect(gpu, sdfFinalizeWgsl, { label: `${label}-sdf-finalize` }),
+        jfaSteps: jumps.map((_, index) => effect(gpu, { shader: jfaPassWgsl, label: `${label}-jfa-${index}` })),
+        sdfFinalize: effect(gpu, { shader: sdfFinalizeWgsl, label: `${label}-sdf-finalize` }),
         cascade: Array.from({ length: cascadeCount }, (_, index) =>
-          effect(gpu, radianceCascadeWgsl, { label: `${label}-cascade-${index}` })),
-        present: effect(gpu, presentWgsl, { label: `${label}-present` }),
+          effect(gpu, { shader: radianceCascadeWgsl, label: `${label}-cascade-${index}` })),
+        present: effect(gpu, { shader: presentWgsl, label: `${label}-present` }),
       },
       sampler: sampler(gpu, {
         minFilter: 'linear',

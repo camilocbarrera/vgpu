@@ -64,11 +64,11 @@ function createEffects(gpu: Gpu, label: string): EffectChain {
       },
     }),
     sceneVertexBuffer: buffer.gpu,
-    threshold: effect(gpu, thresholdWgsl, { label: `${label}-threshold` }),
+    threshold: effect(gpu, { shader: thresholdWgsl, label: `${label}-threshold` }),
     // Separate effect instances avoid same-frame uniform/bind-group aliasing between directions.
-    blurH: effect(gpu, blurWgsl, { label: `${label}-blur-h` }),
-    blurV: effect(gpu, blurWgsl, { label: `${label}-blur-v` }),
-    grade: effect(gpu, gradeWgsl, { label: `${label}-grade` }),
+    blurH: effect(gpu, { shader: blurWgsl, label: `${label}-blur-h` }),
+    blurV: effect(gpu, { shader: blurWgsl, label: `${label}-blur-v` }),
+    grade: effect(gpu, { shader: gradeWgsl, label: `${label}-grade` }),
     sampler: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
   }; } catch (error) { buffer.gpu.destroy(); throw error; }
 }

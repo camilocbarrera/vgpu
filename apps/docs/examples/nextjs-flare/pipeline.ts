@@ -38,15 +38,18 @@ export class FlarePipeline {
     });
     this.blueNoiseTexture = createBlueNoiseTexture(gpu);
     this.effects = {
-      logo: effect(gpu, withTopLeftFullscreen(logoWgsl), { label: 'nextjs-flare-logo' }),
-      rim: effect(gpu, withTopLeftFullscreen(rimWgsl), { label: 'nextjs-flare-rim' }),
-      rimBlurH: effect(gpu, withTopLeftFullscreen(blurWgsl), {
+      logo: effect(gpu, { shader: withTopLeftFullscreen(logoWgsl), label: 'nextjs-flare-logo' }),
+      rim: effect(gpu, { shader: withTopLeftFullscreen(rimWgsl), label: 'nextjs-flare-rim' }),
+      rimBlurH: effect(gpu, {
+        shader: withTopLeftFullscreen(blurWgsl),
         label: 'nextjs-flare-rim-horizontal',
       }),
-      rimBlurV: effect(gpu, withTopLeftFullscreen(blurWgsl), {
+      rimBlurV: effect(gpu, {
+        shader: withTopLeftFullscreen(blurWgsl),
         label: 'nextjs-flare-rim-vertical',
       }),
-      composite: effect(gpu, withTopLeftFullscreen(compositeWgsl), {
+      composite: effect(gpu, {
+        shader: withTopLeftFullscreen(compositeWgsl),
         label: 'nextjs-flare-composite',
       }),
     };

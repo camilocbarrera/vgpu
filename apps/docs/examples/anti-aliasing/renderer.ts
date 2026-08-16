@@ -72,8 +72,8 @@ function createEffects(gpu: Gpu, label: string): AaEffects {
       },
     }),
     vertexBuffer: buffer.gpu,
-    resolve: effect(gpu, resolveWgsl, { label: `${label}-resolve` }),
-    fxaa: effect(gpu, fxaaWgsl, { label: `${label}-fxaa` }),
+    resolve: effect(gpu, { shader: resolveWgsl, label: `${label}-resolve` }),
+    fxaa: effect(gpu, { shader: fxaaWgsl, label: `${label}-fxaa` }),
     sampler: sampler(gpu, {
       minFilter: 'linear',
       magFilter: 'linear',

@@ -191,15 +191,15 @@ export async function renderThumbnail(gpu: Gpu, colorTarget: Target, opts: Thumb
 
 function createEffects(gpu: Gpu, label: string): Effects {
   return {
-    scene: effect(gpu, blackHoleWgsl, { label: `${label}-scene` }),
-    brightPass: effect(gpu, brightPassWgsl, { label: `${label}-bright-pass` }),
+    scene: effect(gpu, { shader: blackHoleWgsl, label: `${label}-scene` }),
+    brightPass: effect(gpu, { shader: brightPassWgsl, label: `${label}-bright-pass` }),
     // Each pass owns its uniform buffer; mutating one effect repeatedly in a frame
     // would make all encoded passes observe the final direction and radius.
-    blurH1: effect(gpu, blurWgsl, { label: `${label}-blur-h1` }),
-    blurV1: effect(gpu, blurWgsl, { label: `${label}-blur-v1` }),
-    blurH2: effect(gpu, blurWgsl, { label: `${label}-blur-h2` }),
-    blurV2: effect(gpu, blurWgsl, { label: `${label}-blur-v2` }),
-    composite: effect(gpu, compositeWgsl, { label: `${label}-composite` }),
+    blurH1: effect(gpu, { shader: blurWgsl, label: `${label}-blur-h1` }),
+    blurV1: effect(gpu, { shader: blurWgsl, label: `${label}-blur-v1` }),
+    blurH2: effect(gpu, { shader: blurWgsl, label: `${label}-blur-h2` }),
+    blurV2: effect(gpu, { shader: blurWgsl, label: `${label}-blur-v2` }),
+    composite: effect(gpu, { shader: compositeWgsl, label: `${label}-composite` }),
     sampler: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
   };
 }

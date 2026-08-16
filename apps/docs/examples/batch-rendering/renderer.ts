@@ -184,7 +184,7 @@ function camera(time: number, output: Output): Float32Array {
   }).viewProjection;
 }
 function createBlit(gpu: Gpu, source: Target, output: Output): Effect {
-  const blit = effect(gpu, blitWgsl, { label: 'batch-rendering-blit' });
+  const blit = effect(gpu, { shader: blitWgsl, label: 'batch-rendering-blit' });
   blit.set({ linear_samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }) });
   setBlitSource(blit, source, output);
   return blit;

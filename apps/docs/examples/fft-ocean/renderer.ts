@@ -129,7 +129,7 @@ export async function renderThumbnail(gpu: Gpu, output: Target, opts: ThumbOptio
       const displacement = graph.ifft.at(-1)!.output;
       const previewTarget = target(gpu, { size: displacement.size, format: 'rgba8unorm', label: 'fft-ocean-displacement-preview' });
       try {
-        const preview = effect(gpu, stagePreviewWgsl, { label: 'fft-ocean-displacement-preview' });
+        const preview = effect(gpu, { shader: stagePreviewWgsl, label: 'fft-ocean-displacement-preview' });
         preview.set({ u: { outputWidth: displacement.size[0], outputHeight: displacement.size[1], stage: 1, gain: 16 }, u_input: displacement });
         await preview.compile(previewTarget);
         frame(gpu, (currentFrame) => currentFrame.pass({ target: previewTarget, clear: CLEAR }, (pass) => pass.draw(preview)));
@@ -170,20 +170,20 @@ async function createGraph(gpu: Gpu, output: Output, label: string): Promise<Oce
   const bright = own(target(gpu, { size: sizes[0]!, format: HDR_FORMAT, label: `${label}-bright` }));
   const composite = own(target(gpu, { size: sizes[0]!, format: HDR_FORMAT, label: `${label}-composite` }));
   const samplerState = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
-  const noiseEffect = effect(gpu, noiseWgsl, { label: `${label}-noise` });
+  const noiseEffect = effect(gpu, { shader: noiseWgsl, label: `${label}-noise` });
   noiseEffect.set({ u: { seed: 0x6f636561, resolution } });
-  const initialSpectrum = effect(gpu, initialSpectrumWgsl, { label: `${label}-initial-spectrum` });
+  const initialSpectrum = effect(gpu, { shader: initialSpectrumWgsl, label: `${label}-initial-spectrum` });
   initialSpectrum.set({ u: { resolution, size: OCEAN_TUNING.simulation.oceanSize, windSpeed: OCEAN_TUNING.simulation.windSpeed, windAngle: OCEAN_TUNING.simulation.windAngle, amplitude: OCEAN_TUNING.simulation.amplitude }, u_noise: noise });
-  const evolveSpectrum = effect(gpu, spectrumWgsl, { label: `${label}-spectrum` });
+  const evolveSpectrum = effect(gpu, { shader: spectrumWgsl, label: `${label}-spectrum` });
   evolveSpectrum.set({ u: { resolution, size: OCEAN_TUNING.simulation.oceanSize, time: 0, choppiness: OCEAN_TUNING.simulation.choppiness }, u_initialSpectrum: h0 });
   const targets: Record<SimulationTargetName, Target> = { spectrum, ping, pong };
   const ifft = createIfftStageTable().map((spec) => {
-    const shader1 = effect(gpu, ifftStageWgsl, { label: `${label}-ifft-${spec.index}-${spec.horizontal ? 'h' : 'v'}` });
+    const shader1 = effect(gpu, { shader: ifftStageWgsl, label: `${label}-ifft-${spec.index}-${spec.horizontal ? 'h' : 'v'}` });
     shader1.set({ u: { resolution, subtransformSize: spec.subtransformSize, horizontal: spec.horizontal ? 1 : 0 }, u_input: targets[spec.input] });
     return { spec, effect: shader1, output: targets[spec.output] };
   });
   const displacement = targets[ifft.at(-1)!.spec.output];
-  const normals = effect(gpu, normalFoamWgsl, { label: `${label}-normal-foam` });
+  const normals = effect(gpu, { shader: normalFoamWgsl, label: `${label}-normal-foam` });
   normals.set({ u: { resolution, worldSize: OCEAN_TUNING.simulation.worldSize, displacementScale: OCEAN_TUNING.simulation.displacementScale, choppiness: OCEAN_TUNING.simulation.choppiness, foamThreshold: OCEAN_TUNING.simulation.foamThreshold }, u_displacement: displacement });
   const particles = draw(gpu, {
     shader: particlesWgsl,
@@ -194,7 +194,7 @@ async function createGraph(gpu: Gpu, output: Output, label: string): Promise<Oce
   });
   particles.set({ u_displacement: displacement, u_normalFoam: normalFoam });
   setParticleConstants(particles, output);
-  const brightEffect = effect(gpu, bloomBrightWgsl, { label: `${label}-bloom-bright` });
+  const brightEffect = effect(gpu, { shader: bloomBrightWgsl, label: `${label}-bloom-bright` });
   brightEffect.set({ uniforms: { luminosityThreshold: OCEAN_TUNING.bloom.threshold, smoothWidth: OCEAN_TUNING.bloom.smoothWidth }, tDiffuse: scene, linearSampler: samplerState });
   let bloomInput = bright;
   const levels = sizes.map((size, index) => {
@@ -206,13 +206,13 @@ async function createGraph(gpu: Gpu, output: Output, label: string): Promise<Oce
     bloomInput = vertical;
     return { horizontal, vertical, horizontalEffect, verticalEffect };
   });
-  const compositeEffect = effect(gpu, bloomCompositeWgsl, { label: `${label}-bloom-composite` });
+  const compositeEffect = effect(gpu, { shader: bloomCompositeWgsl, label: `${label}-bloom-composite` });
   compositeEffect.set({
     uniforms: { bloomStrength: OCEAN_TUNING.bloom.strength, bloomRadius: OCEAN_TUNING.bloom.radius, bloomFactors0: [1, 0.8, 0.6, 0.4], bloomFactors1: [0.2, 0, 0, 0] },
     blurTexture1: levels[0]!.vertical, blurTexture2: levels[1]!.vertical, blurTexture3: levels[2]!.vertical,
     blurTexture4: levels[3]!.vertical, blurTexture5: levels[4]!.vertical, linearSampler: samplerState,
   });
-  const present = effect(gpu, presentWgsl, { label: `${label}-present` });
+  const present = effect(gpu, { shader: presentWgsl, label: `${label}-present` });
   present.set({ sceneHDR: scene, bloomTexture: composite, linearSampler: samplerState });
   const graph: OceanGraph = { noise, h0, spectrum, ping, pong, normalFoam, scene, bright, composite, levels, noiseEffect, initialSpectrum, evolveSpectrum, ifft, normals, particles, brightEffect, compositeEffect, present, needsInitialSpectrum: true };
   await prewarm(graph, output);
@@ -224,7 +224,7 @@ async function createGraph(gpu: Gpu, output: Output, label: string): Promise<Oce
 }
 
 function makeBlur(gpu: Gpu, label: string, source: Target, colorTarget: Target, samplerState: GPUSampler, direction: readonly [number, number], kernelRadius: number): Effect {
-  const shader1 = effect(gpu, bloomBlurWgsl, { label });
+  const shader1 = effect(gpu, { shader: bloomBlurWgsl, label });
   const c = gaussianCoefficients(kernelRadius);
   shader1.set({ uniforms: { direction, invSize: colorTarget.texelSize, gaussianCoefficients0: c.slice(0, 4), gaussianCoefficients1: c.slice(4, 8), gaussianCoefficients2: c.slice(8, 12), gaussianCoefficients3: c.slice(12, 16), gaussianCoefficients4: c.slice(16, 20), gaussianCoefficients5: c.slice(20, 24) }, colorTexture: source, linearSampler: samplerState });
   return shader1;

@@ -136,19 +136,23 @@ export function buildOcean(
   const disp = api.storage(gpu, VEC4_BYTES, "read-write");
 
   // --- compute passes --------------------------------------------------------
-  const initPass = api.compute(gpu, shaders.spectrumInit, {
+  const initPass = api.compute(gpu, {
+    shader: shaders.spectrumInit,
     label: "spectrum-init",
     set: { h0, sim: simUniform(0) },
   });
-  const updatePass = api.compute(gpu, shaders.spectrumUpdate, {
+  const updatePass = api.compute(gpu, {
+    shader: shaders.spectrumUpdate,
     label: "spectrum-update",
     set: { h0, specX, specY, specZ, sim: simUniform(0) },
   });
-  const rowPass = api.compute(gpu, shaders.fftRow, {
+  const rowPass = api.compute(gpu, {
+    shader: shaders.fftRow,
     label: "fft-row",
     set: { inX: specX, inY: specY, inZ: specZ, outX: tmpX, outY: tmpY, outZ: tmpZ },
   });
-  const colPass = api.compute(gpu, shaders.fftCol, {
+  const colPass = api.compute(gpu, {
+    shader: shaders.fftCol,
     label: "fft-col",
     set: { inX: tmpX, inY: tmpY, inZ: tmpZ, disp },
   });
@@ -162,7 +166,7 @@ export function buildOcean(
     minFilter: "linear",
     magFilter: "linear",
   });
-  const bake = api.effect(gpu, shaders.bake, { label: "bake-displacement", set: { disp } });
+  const bake = api.effect(gpu, { shader: shaders.bake, label: "bake-displacement", set: { disp } });
 
   // --- geometry / draws / composite -----------------------------------------
   const skyGeo = api.geometry(gpu, sphere({ radius: 1 }));
@@ -199,7 +203,8 @@ export function buildOcean(
 
   const hdr = api.target(gpu, { size: [opts.size[0], opts.size[1]], format: "rgba16float", depth: true });
   const samp = api.sampler(gpu, { minFilter: "linear", magFilter: "linear" });
-  const composite = api.effect(gpu, shaders.composite, {
+  const composite = api.effect(gpu, {
+    shader: shaders.composite,
     label: "composite",
     set: { src: hdr, samp },
   });

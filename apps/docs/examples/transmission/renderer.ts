@@ -326,14 +326,14 @@ async function createScene(gpu: Gpu, output: Output, label: string): Promise<Sce
   const glass = draw(gpu, { shader: glassWgsl, geometry: cubeGeometry, cull: 'back', label: `${label}-glass` });
   glass.set({ env_tex: env, env_samp: envSampler });
 
-  const present = effect(gpu, presentWgsl, { label: `${label}-present` });
+  const present = effect(gpu, { shader: presentWgsl, label: `${label}-present` });
   present.set({ present: { exposure: EXPOSURE } });
 
   const blurs: BlurPair[] = [];
   for (let level = 1; level < SCENE_LEVELS; level++) {
     blurs.push({
-      horizontal: effect(gpu, blurWgsl, { label: `${label}-scene-blur-h${level}` }),
-      vertical: effect(gpu, blurWgsl, { label: `${label}-scene-blur-v${level}` }),
+      horizontal: effect(gpu, { shader: blurWgsl, label: `${label}-scene-blur-h${level}` }),
+      vertical: effect(gpu, { shader: blurWgsl, label: `${label}-scene-blur-v${level}` }),
     });
   }
 
@@ -373,9 +373,9 @@ async function bakeEnvironment(gpu: Gpu, samplerState: GPUSampler, label: string
     label: `${label}-env`,
   });
 
-  const sky = effect(gpu, skyWgsl, { label: `${label}-sky` });
+  const sky = effect(gpu, { shader: skyWgsl, label: `${label}-sky` });
   sky.set({ sky: SKY });
-  const blur = effect(gpu, blurWgsl, { label: `${label}-env-blur` });
+  const blur = effect(gpu, { shader: blurWgsl, label: `${label}-env-blur` });
 
   let source = target(gpu, { size: [...ENV_SIZE], format: HDR_FORMAT, label: `${label}-env-level0` });
   await Promise.all([sky.compile(source), blur.compile(source)]);

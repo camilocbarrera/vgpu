@@ -219,7 +219,7 @@ async function createScene(gpu: Gpu, output: Output): Promise<Scene> {
   const cube = draw(gpu, { shader: metalWgsl, geometry: geo, label: 'environment-map-metal' });
   cube.set({ ...METAL, env_tex: env, env_samp: envSampler });
 
-  const present = effect(gpu, presentWgsl, { label: 'environment-map-present' });
+  const present = effect(gpu, { shader: presentWgsl, label: 'environment-map-present' });
   present.set({ env_tex: env, env_samp: envSampler, scene_tex: hdr, scene_samp: sceneSampler });
 
   await Promise.all([cube.compile(hdr), present.compile({ colors: [output.format] })]);
@@ -252,9 +252,9 @@ async function bakeEnvironment(gpu: Gpu, samplerState: GPUSampler): Promise<Text
     label: 'environment-map-env',
   });
 
-  const sky = effect(gpu, skyWgsl, { label: 'environment-map-sky' });
+  const sky = effect(gpu, { shader: skyWgsl, label: 'environment-map-sky' });
   sky.set({ sky: SKY });
-  const blur = effect(gpu, blurWgsl, { label: 'environment-map-blur' });
+  const blur = effect(gpu, { shader: blurWgsl, label: 'environment-map-blur' });
 
   let source = target(gpu, { size: [...ENV_SIZE], format: HDR_FORMAT, label: 'environment-map-level0' });
   await Promise.all([sky.compile(source), blur.compile(source)]);

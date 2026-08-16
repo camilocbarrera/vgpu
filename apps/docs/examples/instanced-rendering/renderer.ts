@@ -68,7 +68,7 @@ function render(currentFrame: Frame, scene: Scene, blit: Effect, colorTarget: Ta
 }
 
 function createBlit(gpu: Gpu, source: Target, output: Output): Effect {
-  const blit = effect(gpu, blitWgsl, { label: 'instanced-rendering-blit' });
+  const blit = effect(gpu, { shader: blitWgsl, label: 'instanced-rendering-blit' });
   blit.set({ linear_samp: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }) });
   setBlitSource(blit, source, output);
   return blit;

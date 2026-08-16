@@ -165,11 +165,11 @@ async function renderAndWait(gpu: Gpu, effects: Effects, targets: Targets, outpu
 
 function createEffects(gpu: Gpu, label: string): Effects {
   return {
-    scene: effect(gpu, fractalWgsl, { label: `${label}-scene` }),
-    brightPass: effect(gpu, brightPassWgsl, { label: `${label}-bright-pass` }),
-    blurH: effect(gpu, blurWgsl, { label: `${label}-blur-h` }),
-    blurV: effect(gpu, blurWgsl, { label: `${label}-blur-v` }),
-    composite: effect(gpu, compositeWgsl, { label: `${label}-composite` }),
+    scene: effect(gpu, { shader: fractalWgsl, label: `${label}-scene` }),
+    brightPass: effect(gpu, { shader: brightPassWgsl, label: `${label}-bright-pass` }),
+    blurH: effect(gpu, { shader: blurWgsl, label: `${label}-blur-h` }),
+    blurV: effect(gpu, { shader: blurWgsl, label: `${label}-blur-v` }),
+    composite: effect(gpu, { shader: compositeWgsl, label: `${label}-composite` }),
     sampler: sampler(gpu, { minFilter: 'linear', magFilter: 'linear' }),
   };
 }

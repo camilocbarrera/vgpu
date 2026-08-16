@@ -225,18 +225,18 @@ function createScene(gpu: Gpu, maps: Maps, label: string): Scene {
     // `alpha` blending over the transparent clear is what turns the shell's
     // fresnel alpha into the rim glow, and leaves coverage in the target's alpha.
     atmosphere: draw(gpu, { shader: atmosphereWgsl, geometry: atmosphereGeometry, blend: 'alpha', label: `${label}-atmosphere` }),
-    sky: effect(gpu, skyWgsl, { label: `${label}-sky` }),
-    overlay: effect(gpu, overlayWgsl, { blend: 'premultiplied', label: `${label}-overlay` }),
-    bright: effect(gpu, brightPassWgsl, { label: `${label}-bright` }),
+    sky: effect(gpu, { shader: skyWgsl, label: `${label}-sky` }),
+    overlay: effect(gpu, { shader: overlayWgsl, blend: 'premultiplied', label: `${label}-overlay` }),
+    bright: effect(gpu, { shader: brightPassWgsl, label: `${label}-bright` }),
     // One effect per blur pass: sharing a single effect would make every encoded
     // pass observe the last direction and radius written to its uniform buffer.
     blur: [
-      effect(gpu, blurWgsl, { label: `${label}-blur-h1` }),
-      effect(gpu, blurWgsl, { label: `${label}-blur-v1` }),
-      effect(gpu, blurWgsl, { label: `${label}-blur-h2` }),
-      effect(gpu, blurWgsl, { label: `${label}-blur-v2` }),
+      effect(gpu, { shader: blurWgsl, label: `${label}-blur-h1` }),
+      effect(gpu, { shader: blurWgsl, label: `${label}-blur-v1` }),
+      effect(gpu, { shader: blurWgsl, label: `${label}-blur-h2` }),
+      effect(gpu, { shader: blurWgsl, label: `${label}-blur-v2` }),
     ],
-    composite: effect(gpu, compositeWgsl, { label: `${label}-composite` }),
+    composite: effect(gpu, { shader: compositeWgsl, label: `${label}-composite` }),
     mapSampler: sampler(gpu, {
       minFilter: 'linear',
       magFilter: 'linear',
@@ -304,8 +304,8 @@ function setSizeBindings(scene: Scene, targets: Targets): void {
  * never repeated. Both bakes go in a single submit.
  */
 async function bakeMaps(gpu: Gpu, maps: Maps): Promise<void> {
-  const canvasSurface = effect(gpu, bakeSurfaceWgsl, { label: 'earth-bake-surface' });
-  const clouds = effect(gpu, bakeCloudsWgsl, { label: 'earth-bake-clouds' });
+  const canvasSurface = effect(gpu, { shader: bakeSurfaceWgsl, label: 'earth-bake-surface' });
+  const clouds = effect(gpu, { shader: bakeCloudsWgsl, label: 'earth-bake-clouds' });
   await Promise.all([canvasSurface.compile(maps.surface), clouds.compile(maps.clouds)]);
   frame(gpu, (currentFrame) => {
     currentFrame.pass({ target: maps.surface, clear: TRANSPARENT }, (pass) => pass.draw(canvasSurface));

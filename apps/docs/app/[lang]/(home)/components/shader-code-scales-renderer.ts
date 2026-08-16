@@ -9,7 +9,8 @@ export async function renderShaderPreview(
 
   try {
     const output = surface(gpu, canvas, { autoResize: false, dpr: 1 });
-    const shader = effect(gpu, shaderSource, {
+    const shader = effect(gpu, {
+      shader: shaderSource,
       label: "homepage-shader-code-scales-preview",
     });
     let resizeFrame = 0;

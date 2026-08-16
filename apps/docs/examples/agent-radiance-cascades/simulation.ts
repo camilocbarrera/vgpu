@@ -88,13 +88,13 @@ export function createScene(gpu: Gpu, size: Vec2, label: string, directionBase =
       sdf,
       cascades,
       effects: {
-        dots: effect(gpu, agentDotsWgsl, { label: `${label}-dots` }),
-        jfaInit: effect(gpu, jfaInitWgsl, { label: `${label}-jfa-init` }),
-        jfaSteps: jumps.map((_, index) => effect(gpu, jfaPassWgsl, { label: `${label}-jfa-${index}` })),
-        sdfFinalize: effect(gpu, sdfFinalizeWgsl, { label: `${label}-sdf-finalize` }),
+        dots: effect(gpu, { shader: agentDotsWgsl, label: `${label}-dots` }),
+        jfaInit: effect(gpu, { shader: jfaInitWgsl, label: `${label}-jfa-init` }),
+        jfaSteps: jumps.map((_, index) => effect(gpu, { shader: jfaPassWgsl, label: `${label}-jfa-${index}` })),
+        sdfFinalize: effect(gpu, { shader: sdfFinalizeWgsl, label: `${label}-sdf-finalize` }),
         cascade: Array.from({ length: cascadeCount }, (_, index) =>
-          effect(gpu, radianceCascadeWgsl, { label: `${label}-cascade-${index}` })),
-        present: effect(gpu, presentWgsl, { label: `${label}-present` }),
+          effect(gpu, { shader: radianceCascadeWgsl, label: `${label}-cascade-${index}` })),
+        present: effect(gpu, { shader: presentWgsl, label: `${label}-present` }),
       },
       sampler: sampler(gpu, {
         minFilter: 'linear',
