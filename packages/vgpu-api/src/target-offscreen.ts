@@ -1,6 +1,7 @@
 import { Texture, createResourceIdentity, DestroySignal, type Device, type ResourceDestroyCallback, type ResourceIdentity, type UnsubscribeResourceDestroy } from "@vgpu/core";
 import type { RenderPassDescriptorOptions, Target, TargetOptions, TargetTextureOptions } from "./target.ts";
 import { BUILT_IN_CLEAR_COLOR, colorAttachment, copyClearColor, colorSpecsFor, depthAttachment, depthFormatFor, sampleCountFor, sameSize, validateClearColor, validateTargetOptions, type ClearColor } from "./target-utils.ts";
+import { assertDeviceUsable } from "./lifecycle.ts";
 import { liveKernel } from "./live-kernel.ts";
 import type { Gpu } from "./kernel.ts";
 
@@ -50,17 +51,21 @@ export class OffscreenTarget implements Target {
   get sampleCount(): 1 | 4 { return sampleCountFor(this.options); }
 
   resize(size: readonly [number, number]): void {
+    // Contract #19: after a real device loss the target is terminal like everything else in the graph,
+    // and it names `target.resize` rather than failing inside the `Device.createTexture` it would reach.
+    assertDeviceUsable(this.device, "target.resize");
     if (sameSize(this.#currentSize, size)) return;
     this.#recreateTextures(size);
   }
 
-  async read(): Promise<Uint8Array> { return this.color.read(); }
-  async readFloats(): Promise<Float32Array> { return this.color.readFloats(); }
+  async read(): Promise<Uint8Array> { assertDeviceUsable(this.device, "target.read"); return this.color.read(); }
+  async readFloats(): Promise<Float32Array> { assertDeviceUsable(this.device, "target.readFloats"); return this.color.readFloats(); }
   onDestroy(cb: ResourceDestroyCallback<Target>): UnsubscribeResourceDestroy { return this.#destroySignal.onDestroy(this, cb); }
   onTexturesRecreated(cb: () => void): () => void { this.#texturesRecreatedCallbacks.add(cb); return () => { this.#texturesRecreatedCallbacks.delete(cb); }; }
   destroy(): void { this.#destroySignal.emit(this); this.#texturesRecreatedCallbacks.clear(); this.#destroyTextures(); }
 
   renderPassDescriptor(opts: RenderPassDescriptorOptions = {}): GPURenderPassDescriptor {
+    assertDeviceUsable(this.device, "target.renderPassDescriptor");
     const { clear = [0, 0, 0, 1], preserve, clearDepth, clearStencil, depthReadOnly } = opts;
     return {
       colorAttachments: this.#currentColors.map((resolved, index) => colorAttachment(resolved, this.#currentMsaaColors?.[index], clear, preserve)),

@@ -31,18 +31,48 @@ export interface MockGPUDeviceInstrumentation {
 }
 
 const mockInstrumentationKey = "__vgpuMockInstrumentation";
+const mockLossKey = "__vgpuMockLoss";
 
-type InstrumentedGPUDevice = GPUDevice & { [mockInstrumentationKey]?: MockGPUDeviceInstrumentation };
+type MockLossResolver = (info: GPUDeviceLostInfo) => void;
+type InstrumentedGPUDevice = GPUDevice & { [mockInstrumentationKey]?: MockGPUDeviceInstrumentation; [mockLossKey]?: MockLossResolver };
 
 export interface MockGPUDeviceOptions {
   /** Features the mock device reports through GPUDevice.features. Defaults to none, matching a device requested without requiredFeatures. */
   readonly features?: readonly GPUFeatureName[];
 }
 
+/** How a simulated loss describes itself, mirroring `GPUDeviceLostInfo`. */
+export interface MockGPUDeviceLossOptions {
+  /** Defaults to `"unknown"` — a REAL loss. `"destroyed"` is what `device.destroy()` reports by itself. */
+  readonly reason?: GPUDeviceLostReason;
+  readonly message?: string;
+}
+
+/**
+ * Simulates a **real** device loss on a mock device: the native `GPUDevice.lost` promise resolves
+ * on its own, exactly as a driver reset or a TDR does — not as a consequence of `destroy()`.
+ *
+ * Genuinely async, like the real thing: the returned promise settles after the native promise did,
+ * so a test can await it (or `gpu.lost`) instead of guessing microtask counts. Resolving twice is a
+ * no-op — a device is lost once.
+ */
+export function loseMockGPUDevice(device: GPUDevice, options: MockGPUDeviceLossOptions = {}): Promise<GPUDeviceLostInfo> {
+  const resolve = (device as InstrumentedGPUDevice)[mockLossKey];
+  if (!resolve) throw new Error("GPUDevice was not created by createMockGPUDevice()");
+  const info = { reason: options.reason ?? "unknown", message: options.message ?? "" } as GPUDeviceLostInfo;
+  resolve(info);
+  return Promise.resolve(device.lost);
+}
+
 export function createMockGPUDevice(options: MockGPUDeviceOptions = {}): GPUDevice {
   const instrumentation = createMockGPUDeviceInstrumentation();
+  let loseDevice!: MockLossResolver;
+  // One promise per device, resolved at most once: WebGPU's `lost` never rejects and never resets.
+  const lost = new Promise<GPUDeviceLostInfo>((resolve) => { loseDevice = resolve; });
   const device: InstrumentedGPUDevice = {
     [mockInstrumentationKey]: instrumentation,
+    [mockLossKey]: loseDevice,
+    lost,
     limits: createMockSupportedLimits(),
     features: createMockSupportedFeatures(options.features),
     createBuffer(desc: GPUBufferDescriptor): MockGPUBuffer {
@@ -178,7 +208,11 @@ export function createMockGPUDevice(options: MockGPUDeviceOptions = {}): GPUDevi
       // Mock command encoder: only copy/render/finish methods used by core/render are implemented.
       } as unknown as GPUCommandEncoder;
     },
-    destroy() {},
+    destroy() {
+      // Faithful to WebGPU: destroy() resolves `lost` with reason "destroyed". It is NOT a real loss,
+      // and vgpu must suppress it (Device.destroy stops observing before it gets here).
+      loseDevice({ reason: "destroyed", message: "" } as GPUDeviceLostInfo);
+    },
     queue: {
       submit() {},
       writeBuffer(buffer: GPUBuffer, offset: number, data: BufferSource, dataOffset = 0, size?: number) {

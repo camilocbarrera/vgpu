@@ -13,8 +13,8 @@ export { VGPUError, ValidationError, unsupportedFeaturesError, validateRequiredF
 export { bind, createBindGroup, createBindGroupLayout, createPipelineLayout, createSampler } from "./bind.ts";
 export { attachBindGroupLayoutMetadata, attachBindGroupMetadata, bindGroupLayoutMetadata, bindGroupMetadataFor } from "./bind-group-metadata.ts";
 export type { BindGroupLayoutMetadata, BindGroupMetadata } from "./bind-group-metadata.ts";
-export { createMockGPUDevice, getMockGPUDeviceInstrumentation } from "./mock-gpu.ts";
-export type { MockGPUDeviceInstrumentation, MockGPUDeviceOptions } from "./mock-gpu.ts";
+export { createMockGPUDevice, getMockGPUDeviceInstrumentation, loseMockGPUDevice } from "./mock-gpu.ts";
+export type { MockGPUDeviceInstrumentation, MockGPUDeviceLossOptions, MockGPUDeviceOptions } from "./mock-gpu.ts";
 export type { BufferPingPong, PingPongCore, TexturePingPong } from "./ping-pong.ts";
 export type {
   BufferOptions,
