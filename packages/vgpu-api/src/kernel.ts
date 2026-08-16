@@ -57,6 +57,19 @@ export interface Gpu {
   readonly gpu: GPUDevice;
   /** True once `dispose()` ran. Reads stay legal; new work does not. */
   readonly disposed: boolean;
+  /**
+   * Resolves **only** when this device is really lost (design §9, contract #19) — a driver reset, a
+   * TDR, a tab evicted from the GPU process — with the native `GPUDeviceLostInfo` when the platform
+   * gives one. A deliberate `dispose()` leaves it pending forever: disposal is observed through
+   * `disposed`, loss through this promise, and there is deliberately no `onLost()` callback (one
+   * spelling per semantic).
+   *
+   * A real loss is terminal and graph-wide: by the time this resolves, every frame loop this gpu owns
+   * is stopped, and every operation on any object of this graph throws `VGPU-DEVICE-LOST`. vgpu never
+   * restores, reattaches or re-points anything at a replacement device — recovery is
+   * `init()` again, from scratch.
+   */
+  readonly lost: Promise<GPUDeviceLostInfo | undefined>;
   onError(cb: GpuErrorListener): () => void;
   settled(): Promise<void>;
   dispose(): void;
@@ -112,6 +125,13 @@ export interface Kernel {
   peekService<T>(token: ServiceToken<T>): T | undefined;
   /** Registers a teardown callback in `phase`; returns the release that unregisters it. */
   own(phase: OwnershipPhase, disposer: Disposer): Release;
+  /**
+   * A real device loss landed: stop the `scheduler` phase (the rAF/timer loops this gpu owns) and
+   * nothing else. Resources and services are deliberately left alone — a lost device has nothing to
+   * release, and every object of the graph is already terminal through `Device.assertUsable`.
+   * `disposed` stays `false`: loss is not disposal.
+   */
+  notifyDeviceLost(): void;
   addErrorListener(cb: GpuErrorListener): Release;
   /** Delivers asynchronously to the listeners (or `console.error`). Never rejects, never throws. */
   reportError(error: VGPUError): Promise<void>;
@@ -212,15 +232,21 @@ class KernelImpl implements Kernel {
     await Promise.allSettled(snapshot);
   }
 
+  notifyDeviceLost(): void {
+    this.#runPhase("scheduler");
+  }
+
+  #runPhase(phase: OwnershipPhase): void {
+    const set = this.#owners.get(phase)!;
+    // Copy: a disposer usually calls its own release(), mutating the set while we walk it.
+    for (const disposer of [...set]) disposer();
+    set.clear();
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    for (const phase of PHASES) {
-      const set = this.#owners.get(phase)!;
-      // Copy: a disposer usually calls its own release(), mutating the set while we walk it.
-      for (const disposer of [...set]) disposer();
-      set.clear();
-    }
+    for (const phase of PHASES) this.#runPhase(phase);
     this.#services.clear();
     this.#settledSources.clear();
     this.#errorListeners.clear();
@@ -231,10 +257,16 @@ class KernelImpl implements Kernel {
 /** Builds the minimal `Gpu` for an already-created device and registers its kernel. */
 export function attachKernel(device: Device, opts: Pick<InitOptions, "pendingPipelines"> = {}): Gpu {
   const kernel = new KernelImpl(device, opts.pendingPipelines ?? DEFAULT_PENDING_PIPELINES);
+  // One reaction to the loss, wired here and not per consumer: the loops are stopped inside this
+  // handler, so anyone awaiting `gpu.lost` already observes a graph that stopped ticking. `device.lost`
+  // stays pending after a deliberate `dispose()` (core suppresses it), which is exactly why no extra
+  // "was it disposed?" check is needed here.
+  const lost = device.lost.then((info) => { kernel.notifyDeviceLost(); return info; });
   const gpu: Gpu = {
     device,
     gpu: device.gpu,
     get disposed(): boolean { return kernel.disposed; },
+    lost,
     onError: (cb: GpuErrorListener) => kernel.addErrorListener(cb),
     settled: () => kernel.settled(),
     dispose: () => { kernel.dispose(); },
