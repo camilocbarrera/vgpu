@@ -90,13 +90,14 @@ import type { Buffer, Compute, Gpu } from "vgpu";
 declare const session: ort.InferenceSession;
 declare const input: ort.Tensor;
 declare const gpu: Gpu;
-declare const compute: Compute;
+declare const kernel: Compute;
 declare const destination: Buffer;
 declare const workgroups: number;
 
 const output = (await session.run({ input })).output;       // 1. retain the tensor
 const source = gpu.device.wrapBuffer(output.gpuBuffer);     // 2. wrap — zero copies
-compute.set({ source, destination }).dispatch(workgroups);  // 3. submit vgpu work
+kernel.bind("source", source).bind("destination", destination);
+await kernel.dispatchOnce(workgroups);                      // 3. submit vgpu work
 await gpu.device.queue.flush();                             // 4. flush — required
 source.dispose();                                           // 5. drop the wrapper
 output.dispose();                                           // 6. runtime may free its buffer now

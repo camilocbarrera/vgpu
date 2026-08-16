@@ -2,7 +2,7 @@
 
 # Compute
 
-Compute pipeline created by `compute(gpu)`. It uses the same WGSL reflection and `set()` ownership rules as render draws, then `dispatch(x, y?, z?)` — or `dispatch({ indirect })` for GPU-driven counts — encodes and submits one compute pass.
+Compute pipeline created by `compute(gpu)`. It uses the same WGSL reflection and the same `{ values, bindings }` ownership rules as render draws. Encoding has exactly two paths: `f.compute(kernel, x, y?, z?)` inside a frame — same encoder, same submit, program order preserved — and `await kernel.dispatchOnce(x, y?, z?)` for standalone work that owns its encoder and submits once.
 
 ## Import
 
@@ -13,9 +13,15 @@ import type { Compute, ComputeOptions, DispatchOptions, StorageAccess, StorageBu
 ## Signature
 
 ```ts
+import type { Gpu, ShaderSource } from "vgpu";
+
 interface ComputeOptions {
+  readonly shader?: string | ShaderSource;
+  /** Instance-owned bindings: storage created here, written with `.set()`. */
+  readonly values?: Record<string, unknown>;
+  /** Externally-owned bindings (storage buffers, shared uniforms): swapped with `.bind()`. */
+  readonly bindings?: Record<string, unknown>;
   readonly label?: string;
-  readonly set?: Record<string, unknown>;
   readonly constants?: Readonly<Record<string, number | boolean>>;
   readonly entry?: string;
 }
@@ -25,10 +31,17 @@ interface DispatchOptions {
 }
 
 interface Compute {
-  set(values: Record<string, unknown>): this;
-  dispatch(x: number, y?: number, z?: number): void;
-  dispatch(opts: DispatchOptions): void;
+  /** Binding-scoped byte write on an instance-owned binding. */
+  set(binding: string, value: unknown): this;
+  /** Identity swap of an externally-owned binding. */
+  bind(binding: string, resource: unknown): this;
+  /** Standalone dispatch: async pipeline readiness, own encoder, exactly one submit. */
+  dispatchOnce(x: number, y?: number, z?: number): Promise<void>;
+  dispatchOnce(opts: DispatchOptions): Promise<void>;
 }
+
+// One positional input after `gpu`: a bare shader (shorthand for `{ shader }`) or the options object.
+declare function compute(gpu: Gpu, input: string | ShaderSource | ComputeOptions): Compute;
 
 type StorageAccess = "read" | "read-write";
 
@@ -49,25 +62,26 @@ interface StorageBuffer {
 
 | Param | Type | Required | Default | Notes |
 |---|---|---:|---|---|
-| compute.source | `string \| ShaderSource` | ✔ | — | WGSL string or `ShaderSource`. Must include at least one `@compute` entry point. |
-| compute.opts | `ComputeOptions` | ✖ | `{}` | Initial compute options. |
-| opts.label | `string` | ✖ | `"compute"` | Used in shader reflection, GPU labels, and error `where` fields. |
-| opts.set | `Record<string, unknown>` | ✖ | `undefined` | Initial `.set()` call. |
-| opts.constants | `Readonly<Record<string, number \| boolean>>` | ✖ | WGSL defaults | Constructor-only values for WGSL `override` constants, applied to the compute stage. Use them to tune workgroup size per device or workload at pipeline creation: `@workgroup_size(WG)` with `override WG: u32`. Keying (`@id(N)` → decimal string of `N`) and number/boolean conversion match `DrawOptions.constants`. |
-| opts.entry | `string` | ✖ | first `@compute` entry point | Constructor-only entry point selection when one WGSL module packs several `@compute` kernels sharing structs and bindings (e.g. emit/simulate/compact). The name must exist in the shader with the `@compute` stage. Binding visibility, bind group layouts, and the storage-aliasing preflight follow the selected entry. |
-| compute.set.values | `Record<string, unknown>` | ✔ | — | Binding values by WGSL variable name. JS values are packed; buffers/resources are bound by identity. |
-| compute.dispatch.x | `number` | ✔ | — | Workgroup count X passed to `dispatchWorkgroups`. |
-| compute.dispatch.y | `number` | ✖ | `1` | Workgroup count Y. |
-| compute.dispatch.z | `number` | ✖ | `1` | Workgroup count Z. |
-| compute.dispatch.opts.indirect | `StorageBuffer \| { buffer, offset? }` | ✔ in the overload | — | GPU-driven dispatch via `dispatchWorkgroupsIndirect`: the GPU reads `[x, y, z]` workgroup counts (3 tightly packed u32, 12 bytes) from the buffer at the byte `offset` (default `0`). Use it when an earlier pass decides how much work exists — variable particle populations, stream compaction. Requires a buffer created with `storage(gpu, bytes, { indirect: true })`; `offset` must be a multiple of 4 and `offset + 12 <= size`. Cannot be combined with explicit counts. |
+| compute.input | `string \| ShaderSource \| ComputeOptions` | ✔ | — | **One positional input.** A bare WGSL string or `ShaderSource` is shorthand for `{ shader }`; otherwise the full options object. Must include at least one `@compute` entry point. |
+| input.shader | `string \| ShaderSource` | ✔ | — | WGSL string or `ShaderSource`. Same spelling as `draw`/`effect`. |
+| input.values | `Record<string, unknown>` | ✖ | `undefined` | Initial values of instance-owned bindings, keyed by WGSL binding name. Declaring a binding here pins it value-owned at construction; storage is created here, zero-initialized, and only `.set()` writes it. |
+| input.bindings | `Record<string, unknown>` | ✖ | `undefined` | Externally-owned resources (storage buffers, shared `uniform()`s, ping-pong halves), keyed by WGSL binding name. `.set()` on one throws `VGPU-R1-EXTERNAL-BINDING`; `.bind()` swaps identity. |
+| input.label | `string` | ✖ | `"compute"` | Used in shader reflection, GPU labels, and error `where` fields. |
+| input.constants | `Readonly<Record<string, number \| boolean>>` | ✖ | WGSL defaults | Constructor-only values for WGSL `override` constants, applied to the compute stage. Use them to tune workgroup size per device or workload at pipeline creation: `@workgroup_size(WG)` with `override WG: u32`. Keying (`@id(N)` → decimal string of `N`) and number/boolean conversion match `DrawOptions.constants`. |
+| input.entry | `string` | ✖ | first `@compute` entry point | Constructor-only entry point selection when one WGSL module packs several `@compute` kernels sharing structs and bindings (e.g. emit/simulate/compact). The name must exist in the shader with the `@compute` stage. Binding visibility, bind group layouts, and the storage-aliasing preflight follow the selected entry. |
+| compute.set.binding | `string` | ✔ | — | Names a complete instance-owned WGSL binding; struct-typed bindings accept a partial merged into one struct rewrite, non-struct bindings take their complete value. |
+| f.compute.x / dispatchOnce.x | `number` | ✔ | — | Workgroup count X passed to `dispatchWorkgroups`. Must be an integer ≥ 0. |
+| f.compute.y / dispatchOnce.y | `number` | ✖ | `1` | Workgroup count Y. |
+| f.compute.z / dispatchOnce.z | `number` | ✖ | `1` | Workgroup count Z. |
+| dispatchOnce.opts.indirect | `StorageBuffer \| { buffer, offset? }` | ✔ in the overload | — | GPU-driven dispatch via `dispatchWorkgroupsIndirect`: the GPU reads `[x, y, z]` workgroup counts (3 tightly packed u32, 12 bytes) from the buffer at the byte `offset` (default `0`). Use it when an earlier pass decides how much work exists — variable particle populations, stream compaction. Requires a buffer created with `storage(gpu, bytes, { indirect: true })`; `offset` must be a multiple of 4 and `offset + 12 <= size`. Cannot be combined with explicit counts. |
 | storage.bytes | `number` | ✔ | — | Byte size for a main API (`vgpu`) storage buffer. |
 | storage.access | `StorageAccess \| StorageOptions` | ✖ | `"read-write"` | Access string, or a `StorageOptions` bag with `access` and `indirect`. Stored on the resource facade and used by binding normalization. |
 | storage.access.indirect | `boolean` | ✖ | `false` | Appends the `"indirect"` buffer usage so the buffer can supply GPU-read draw/dispatch arguments. |
 | storage.write.data | `BufferSource` | ✔ | — | `ArrayBuffer` or `ArrayBufferView`; writes at offset `0` in the public main API (`vgpu`) type. |
 
-**Returns:** `compute(gpu)` returns `Compute`; `set()` returns the same `Compute`; `dispatch()` returns `void` after submitting; `storage(gpu)` returns a main API (`vgpu`) `StorageBuffer`; `StorageBuffer.read()` resolves an `ArrayBuffer` copy.
+**Returns:** `compute(gpu, input)` returns `Compute`; `set()` and `bind()` return the same `Compute`; `dispatchOnce()` returns a `Promise<void>` that resolves after pipeline readiness **and submission** — never after GPU completion (that is `await gpu.settled()`); `f.compute()` returns `void` after encoding into the frame; `storage(gpu)` returns a main API (`vgpu`) `StorageBuffer`; `StorageBuffer.read()` resolves an `ArrayBuffer` copy.
 
-**Throws:** `VGPU-RING1-UNSUPPORTED` when the shader has no `@compute` entry point; `VGPU-INDIRECT-INVALID` at dispatch time for a malformed `indirect` (neither a `StorageBuffer` nor `{ buffer, offset? }`), a buffer created without the indirect flag (use `storage(gpu, bytes, { indirect: true })`), an `offset` that is not a non-negative integer multiple of 4, counts that do not fit the buffer (`offset + 12 > size`), or `indirect` combined with explicit workgroup counts in the same call; `VGPU-CONSTANTS-INVALID` for a malformed `constants` option (non-object value, a key that matches no override in the shader — the message lists the available overrides — or a value that is neither a finite number nor a boolean), and for an override declared without a default that `constants` does not provide; `VGPU-ENTRY-INVALID` for a non-string `entry`, a name that matches no entry point in the shader, or a name whose entry point is not `@compute` — the message lists the shader's available entry points with their stages; `VGPU-R1-STORAGE-ALIASING` when the same storage buffer is bound more than once and at least one reflected binding is writable; `VGPU-R1-BINDING-NEVER-SET`, `VGPU-R1-OWNERSHIP-FLIP`, and `VGPU-R1-BINDING-INCOMPATIBLE-RESOURCE` for binding errors; `VGPU-SHADER-SOURCE-INVALID` for malformed `ShaderSource`; `TypeError` if `StorageBuffer.write()` receives a non-buffer source.
+**Throws:** `VGPU-RING1-UNSUPPORTED` when the shader has no `@compute` entry point; `VGPU-PIPELINE-PENDING` when `f.compute()` meets an unprepared kernel under the default `pendingPipelines: "throw"` — `await prepare(gpu, [{ compute: kernel }])` first, or use `dispatchOnce()`, which always takes the async readiness path; `VGPU-INDIRECT-INVALID` at dispatch time for a malformed `indirect` (neither a `StorageBuffer` nor `{ buffer, offset? }`), a buffer created without the indirect flag (use `storage(gpu, bytes, { indirect: true })`), an `offset` that is not a non-negative integer multiple of 4, counts that do not fit the buffer (`offset + 12 > size`), or `indirect` combined with explicit workgroup counts in the same call; `VGPU-CONSTANTS-INVALID` for a malformed `constants` option (non-object value, a key that matches no override in the shader — the message lists the available overrides — or a value that is neither a finite number nor a boolean), and for an override declared without a default that `constants` does not provide; `VGPU-ENTRY-INVALID` for a non-string `entry`, a name that matches no entry point in the shader, or a name whose entry point is not `@compute` — the message lists the shader's available entry points with their stages; `VGPU-R1-STORAGE-ALIASING` when the same storage buffer is bound more than once and at least one reflected binding is writable; `VGPU-R1-EXTERNAL-BINDING` when `.set()` names a binding declared in `bindings`; `VGPU-FRAME-ENCODER-LOCKED` when `f.compute()` is called inside an open `f.pass()` or `f.raw()` callback — encoder-level commands are legal only **between** managed passes; `VGPU-DEVICE-LOST` for every operation after the device was lost; `VGPU-R1-BINDING-NEVER-SET` and `VGPU-R1-BINDING-INCOMPATIBLE-RESOURCE` for binding errors; `VGPU-SHADER-SOURCE-INVALID` for malformed `ShaderSource`; `TypeError` if `StorageBuffer.write()` receives a non-buffer source.
 
 ## Examples
 
@@ -80,33 +94,85 @@ const src = storage(gpu, bytes, "read");
 const dst = storage(gpu, bytes, "read-write");
 src.write(new Float32Array(16));
 
-const sim = compute(gpu, `
-  @group(0) @binding(0) var<storage, read> src: array<vec4f>;
-  @group(0) @binding(1) var<storage, read_write> dst: array<vec4f>;
-  @compute @workgroup_size(1)
-  fn cs_main(@builtin(global_invocation_id) id: vec3u) {
-    dst[id.x] = src[id.x] + vec4f(1.0, 0.0, 0.0, 0.0);
-  }
-`, { label: "sim", set: { src, dst } });
+const sim = compute(gpu, {
+  label: "sim",
+  shader: `
+    @group(0) @binding(0) var<storage, read> src: array<vec4f>;
+    @group(0) @binding(1) var<storage, read_write> dst: array<vec4f>;
+    @compute @workgroup_size(1)
+    fn cs_main(@builtin(global_invocation_id) id: vec3u) {
+      dst[id.x] = src[id.x] + vec4f(1.0, 0.0, 0.0, 0.0);
+    }
+  `,
+  bindings: { src, dst },   // external resources: identity fixed at construction
+});
 
-sim.dispatch(4);
+// Standalone: own encoder, one submit, async pipeline readiness (no stall, no prepare() needed).
+await sim.dispatchOnce(4);
 ```
 
 ```ts
-import { init, compute, pingPongStorage } from "vgpu/mock";
+import { init, compute, draw, frame, prepare, storage, target } from "vgpu/mock";
+
+const gpu = await init();
+const N = 1024;
+const screen = target(gpu, { size: [128, 128] });
+const particles = storage(gpu, N * 8, "read-write");   // shared storage buffer
+
+const sim = compute(gpu, {
+  shader: `
+    struct Sim { dt: f32 }
+    @group(0) @binding(0) var<uniform> sim: Sim;
+    @group(0) @binding(1) var<storage, read_write> particles: array<vec2f>;
+    @compute @workgroup_size(64)
+    fn cs_main(@builtin(global_invocation_id) id: vec3u) {
+      particles[id.x] = particles[id.x] + vec2f(sim.dt, 0.0);
+    }
+  `,
+  values: { sim: { dt: 0.016 } },   // instance-owned → sim.set("sim", { dt })
+  bindings: { particles },
+});
+
+const dots = draw(gpu, {
+  shader: `
+    @group(0) @binding(0) var<storage, read> particles: array<vec2f>;
+    @vertex fn vs_main(@builtin(instance_index) i: u32) -> @builtin(position) vec4f {
+      return vec4f(particles[i], 0, 1);
+    }
+    @fragment fn fs_main() -> @location(0) vec4f { return vec4f(1); }
+  `,
+  instances: N,
+  vertices: 6,
+  bindings: { particles },
+});
+
+await prepare(gpu, [{ compute: sim }, { draw: dots, target: screen }]);
+
+frame(gpu, (f) => {
+  f.compute(sim, Math.ceil(N / 64));      // writes `particles` — same encoder
+  f.pass(screen, (p) => p.draw(dots));    // reads `particles` — guaranteed to run after
+});                                        // exactly ONE queue.submit(): program order IS execution order
+```
+
+```ts
+import { init, compute, frame, pingPongStorage, prepare } from "vgpu/mock";
 
 const gpu = await init();
 const particles = pingPongStorage(gpu, 1024);
-const step = compute(gpu, `
-  @group(0) @binding(0) var<storage, read> src: array<u32>;
-  @group(0) @binding(1) var<storage, read_write> dst: array<u32>;
-  @compute @workgroup_size(64)
-  fn cs_main(@builtin(global_invocation_id) id: vec3u) { dst[id.x] = src[id.x]; }
-`);
+const step = compute(gpu, {
+  shader: `
+    @group(0) @binding(0) var<storage, read> src: array<u32>;
+    @group(0) @binding(1) var<storage, read_write> dst: array<u32>;
+    @compute @workgroup_size(64)
+    fn cs_main(@builtin(global_invocation_id) id: vec3u) { dst[id.x] = src[id.x]; }
+  `,
+  bindings: { src: particles.read, dst: particles.write },
+});
 
-step.set({ src: particles.read, dst: particles.write });
-step.dispatch(Math.ceil(256 / 64));
+await prepare(gpu, [{ compute: step }]);
+frame(gpu, (f) => f.compute(step, Math.ceil(256 / 64)));
 particles.swap();
+step.bind("src", particles.read).bind("dst", particles.write);   // identity swap, not `.set()`
 ```
 
 ```ts
@@ -115,55 +181,98 @@ import { init, compute, storage } from "vgpu/mock";
 const gpu = await init();
 const wg = 64; // tune per device or workload without editing WGSL
 const data = storage(gpu, 4 * 256);
-const scale = compute(gpu, `
-  override WG: u32 = 64;
-  @group(0) @binding(0) var<storage, read_write> data: array<f32>;
-  @compute @workgroup_size(WG)
-  fn cs_main(@builtin(global_invocation_id) id: vec3u) { data[id.x] = data[id.x] * 2.0; }
-`, { constants: { WG: wg }, set: { data } });
+const scale = compute(gpu, {
+  shader: `
+    override WG: u32 = 64;
+    @group(0) @binding(0) var<storage, read_write> data: array<f32>;
+    @compute @workgroup_size(WG)
+    fn cs_main(@builtin(global_invocation_id) id: vec3u) { data[id.x] = data[id.x] * 2.0; }
+  `,
+  constants: { WG: wg },
+  bindings: { data },
+});
 
-scale.dispatch(Math.ceil(256 / wg));
+await scale.dispatchOnce(Math.ceil(256 / wg));
 ```
 
 One JS constant drives both the pipeline's workgroup size and the dispatch math, so retuning `wg` cannot desynchronize them.
 
 ```ts
-import { init, compute, storage } from "vgpu/mock";
+import { init, compute, frame, prepare, storage } from "vgpu/mock";
 
 const gpu = await init();
 const alive = storage(gpu, 4, "read");             // live-particle count, e.g. from emission/compaction
 const args = storage(gpu, 12, { indirect: true }); // [x, y, z] workgroup counts
 const particles = storage(gpu, 4 * 1024);
 
-const prepare = compute(gpu, `
-  @group(0) @binding(0) var<storage, read> alive: u32;
-  @group(0) @binding(1) var<storage, read_write> args: array<u32, 3>;
-  @compute @workgroup_size(1) fn cs_main() {
-    args[0] = (alive + 63u) / 64u; args[1] = 1u; args[2] = 1u; // one workgroup per 64 live particles
-  }
-`, { set: { alive, args } });
+const counts = compute(gpu, {
+  shader: `
+    @group(0) @binding(0) var<storage, read> alive: u32;
+    @group(0) @binding(1) var<storage, read_write> args: array<u32, 3>;
+    @compute @workgroup_size(1) fn cs_main() {
+      args[0] = (alive + 63u) / 64u; args[1] = 1u; args[2] = 1u; // one workgroup per 64 live particles
+    }
+  `,
+  bindings: { alive, args },
+});
 
-const step = compute(gpu, `
-  @group(0) @binding(0) var<storage, read_write> particles: array<f32>;
-  @compute @workgroup_size(64)
-  fn cs_main(@builtin(global_invocation_id) id: vec3u) { particles[id.x] = particles[id.x] + 0.016; }
-`, { set: { particles } });
+const step = compute(gpu, {
+  shader: `
+    @group(0) @binding(0) var<storage, read_write> particles: array<f32>;
+    @compute @workgroup_size(64)
+    fn cs_main(@builtin(global_invocation_id) id: vec3u) { particles[id.x] = particles[id.x] + 0.016; }
+  `,
+  bindings: { particles },
+});
 
-prepare.dispatch(1);               // GPU computes how much work exists
-step.dispatch({ indirect: args }); // GPU reads the counts; JS never sees them
+await prepare(gpu, [{ compute: counts }, { compute: step }]);
+
+frame(gpu, (f) => {
+  f.compute(counts, 1);   // GPU computes how much work exists
+  // GPU-driven dispatch inside the frame keeps both passes in one submit; JS never sees the counts.
+});
+await step.dispatchOnce({ indirect: args });
 ```
 
 GPU-driven dispatch: the first pass writes the workgroup counts from GPU-side state, so the population can vary every frame without a readback stall.
 
+## Readiness: `compute()` never compiles at construction
+
+`compute()` performs **no** pipeline creation. A missing compute pipeline is created with
+`createComputePipelineAsync()` by `prepare(gpu, [{ compute }])` and by `dispatchOnce()`, and by
+background `"skip"` preparation. `f.compute()` on an unprepared kernel follows the one
+`pendingPipelines` chain (call site → frame → gpu) exactly like a draw:
+
+| Policy | `f.compute()` on an unprepared kernel |
+|---|---|
+| `"throw"` *(default)* | Throws `VGPU-PIPELINE-PENDING` without starting compilation; the dispatch is not encoded. |
+| `"skip"` | Starts/continues async compilation, omits the dispatch this frame, never throws per frame. A skipped producer does not cascade: consumers read the resource's previous contents (or its zero-initialized state) — vgpu is not a render graph. |
+| `"sync"` | Immediate `createComputePipeline()` inline; may stall. |
+
+A compute request carries no target signature, so its handle has no `signature`:
+
+```ts
+import { init, compute, prepare } from "vgpu/mock";
+
+const gpu = await init();
+const sim = compute(gpu, `@compute @workgroup_size(1) fn cs_main() {}`);
+
+const prepared = await prepare(gpu, { compute: sim });
+prepared.compute;   // the kernel, echoed back
+prepared.gpu;       // GPUComputePipeline — the one low-level escape hatch (there is no `compute.pipeline`)
+```
+
 ## Notes
 
-- Use explicit `dispatch(x, y, z)` when the CPU already knows stable workgroup counts. Use `dispatch({ indirect })` when a preceding GPU pass decides the count (compaction, particles), so no CPU readback is needed.
-- Declare storage `read` for source-only buffers and `read-write` for state that a kernel updates. For iterative simulation, bind `pingPongStorage(gpu, ...)` read/write pairs and swap after each step instead of aliasing one writable buffer.
+- **`f.compute()` for work that belongs to a frame; `dispatchOnce()` for standalone work.** `f.compute()` encodes into the frame's single command encoder, so a dispatch and the pass that reads its output land in one ordered command list and exactly one `queue.submit()`. `dispatchOnce()` owns its encoder and submits independently — initialization, preprocessing, tests, headless work — and resolves after submit, not after GPU completion.
+- Encoder-level commands are legal only **between** managed passes: calling `f.compute()` (or `f.copyBuffer()` / `f.raw()`) inside an open `f.pass()` throws `VGPU-FRAME-ENCODER-LOCKED`, mirroring WebGPU's `"locked"` command-encoder state.
+- Use explicit workgroup counts when the CPU already knows them. Use `{ indirect }` when a preceding GPU pass decides the count (compaction, particles), so no CPU readback is needed.
+- Ownership is fixed at construction: storage buffers and shared uniforms go in `bindings` (`.bind()` swaps identity), instance-owned values go in `values` (`.set(binding, value)` writes bytes). Naming a binding that is not declared in either makes it instance-owned by default, and its storage is zero-initialized.
+- Declare storage `read` for source-only buffers and `read-write` for state that a kernel updates. For iterative simulation, bind `pingPongStorage(gpu, ...)` read/write pairs and `.bind()` the swapped halves after each step instead of aliasing one writable buffer.
 - `StorageBuffer.read()` is for tests, snapshots, and diagnostics; avoid awaiting it in a hot loop unless CPU synchronization is intentional.
-- Use `pingPongStorage(gpu, bytes)` when a compute step reads previous state and writes next state; binding the same writable storage identity twice is rejected before dispatch.
 - Bindings use compute visibility only when statically reachable from the selected compute entry point; unused declarations stay in the layout with visibility `0`.
-- `constants` maps to `GPUProgrammableStage.constants` of the compute stage; the pipeline is created inside `compute(gpu)`, so recreate the compute to change them.
-- Dispatch counts are forwarded to WebGPU; validate domain-specific bounds in your app.
+- `constants` maps to `GPUProgrammableStage.constants` of the compute stage; the pipeline is created for the constants fixed at construction, so recreate the compute to change them.
+- Workgroup counts must be integers ≥ 0; both encode paths validate them with a stable error code.
 - Write indirect counts from another compute pass (bind the same buffer as storage) or from JS via `write()`. The same option shape drives GPU-driven draws via `DrawCallOptions.indirect`.
 - `storage(gpu)` creates storage buffers with `copy_src` and `copy_dst`, so they can be read back and rewritten from JS.
-- **See also:** `compute`, `Draw.set`, `SharedUniforms`, `Target`, `StorageBuffer` from `vgpu/core`.
+- **See also:** `compute`, `prepare`, `Frame.compute`, `Draw.set`, `SharedUniforms`, `Target`, `StorageBuffer` from `vgpu/core`.
