@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "contractId": "vgpu-examples/v1",
+  "revision": "ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae",
+  "id": "prism-rainbow",
+  "title": "Prism Rainbow",
+  "description": "A spectral path tracer in two dimensions: every fragment fires 16 rays at random points across the glass, refracts each one through the prism, and keeps the ones that come out aimed at the lamp. Temporal accumulation turns that noise into a rainbow.",
+  "tags": [
+    "lighting",
+    "raycasting",
+    "rendering",
+    "shader",
+    "animation"
+  ],
+  "capabilities": [
+    "webgpu",
+    "fragment-shader",
+    "multi-pass",
+    "render-targets",
+    "textures",
+    "continuous-rendering",
+    "pointer-input",
+    "controls",
+    "select-control",
+    "checkbox-controls",
+    "responsive-canvas"
+  ],
+  "aggregateSha256": "507666013f5aa44244fbe0a129076483314df4fb9d89d692cc253f904f3cb7bf",
+  "files": [
+    {
+      "path": "index.tsx",
+      "contentType": "text/typescript",
+      "size": 1960,
+      "sha256": "5f589fd61bb0e834bfdc004eb7f6865e2ca9535b8d9c322bc7e2009507557ac1",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/index.tsx.raw"
+    },
+    {
+      "path": "controls.tsx",
+      "contentType": "text/typescript",
+      "size": 1789,
+      "sha256": "6144e37b8d68c6921a34e7903c113bff24357754264a9f7d03e104d58ad7a35d",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/controls.tsx.raw"
+    },
+    {
+      "path": "renderer.ts",
+      "contentType": "text/typescript",
+      "size": 7137,
+      "sha256": "19243d8e7ff4750d3e1a7ef334a881369fe99ac259e45ebe2621c6065694b11c",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/renderer.ts.raw"
+    },
+    {
+      "path": "scene.ts",
+      "contentType": "text/typescript",
+      "size": 7644,
+      "sha256": "8ab8cd72864f1a8e25abe199c911a347a049a56ac65a46e97b6330007eb341f3",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/scene.ts.raw"
+    },
+    {
+      "path": "types.ts",
+      "contentType": "text/typescript",
+      "size": 9068,
+      "sha256": "d092a4d5a652e16fe7752406f714068bfff5a1f2752f067e6f27d4f7ce2eeabb",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/types.ts.raw"
+    },
+    {
+      "path": "optics.ts",
+      "contentType": "text/typescript",
+      "size": 14798,
+      "sha256": "54a83e4952062b41e4c408c36ae3c89f96b5e3c8ce57e280cb25653d32e1e91e",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/optics.ts.raw"
+    },
+    {
+      "path": "validation.ts",
+      "contentType": "text/typescript",
+      "size": 8744,
+      "sha256": "41b73b3b2c4ebb623603fb67268478fd8326079f477a9364740d1cf0a67e4c46",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/validation.ts.raw"
+    },
+    {
+      "path": "optics.wgsl",
+      "contentType": "text/wgsl",
+      "size": 10260,
+      "sha256": "6f43f5b90d554841e19239e95e0f55aa4ac31a0d0fc84818024af094ff8eed85",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/optics.wgsl.raw"
+    },
+    {
+      "path": "scene.wgsl",
+      "contentType": "text/wgsl",
+      "size": 3844,
+      "sha256": "9c3143d07b7fbf8f686a3f01e5494c547b60a621890f676befae00504e65634b",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/scene.wgsl.raw"
+    },
+    {
+      "path": "trace.wgsl",
+      "contentType": "text/wgsl",
+      "size": 1418,
+      "sha256": "0efe93d41e3b7f657cf9dc1cea7aa59a25eb53b83d5afed10e37a3f08a420796",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/trace.wgsl.raw"
+    },
+    {
+      "path": "present.wgsl",
+      "contentType": "text/wgsl",
+      "size": 4514,
+      "sha256": "e512b22c9a635bd2345fcab60a625d7958824e63e1ff385c27f382b382286bad",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/present.wgsl.raw"
+    },
+    {
+      "path": "probe.wgsl",
+      "contentType": "text/wgsl",
+      "size": 2477,
+      "sha256": "1c75201d9c712c3bb03d247d52c7f170991c8a71d383e620766dcb4b407f4a37",
+      "url": "https://vgpu.sh/api/examples/v1/revisions/ddd5ebedeac6eb0d13c689becc3d3503b9c337360ff375b54edf961faa9e8fae/examples/prism-rainbow/files/probe.wgsl.raw"
+    }
+  ]
+}
