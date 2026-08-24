@@ -2,10 +2,10 @@
  * A decoded-frame source built on `HTMLVideoElement.requestVideoFrameCallback`.
  *
  * The point of the API is that it fires once per *presented* frame and hands back
- * the metadata of that exact frame, instead of once per display refresh. A 24 fps
- * clip on a 120 Hz display presents a new frame roughly every fifth rAF tick, so a
- * naive `requestAnimationFrame` upload loop would re-copy the same decoded picture
- * into the GPU texture four times out of five.
+ * the metadata of that exact frame, instead of once per display refresh. The 30 fps
+ * clip this example ships presents a new frame roughly every fourth rAF tick on a
+ * 120 Hz display, so a naive `requestAnimationFrame` upload loop would re-copy the
+ * same decoded picture into the GPU texture three times out of four.
  *
  * This module promises the renderer exactly two things: here is the newest decoded
  * frame, and here is a token that changes only when that frame changes. The
@@ -162,7 +162,7 @@ export async function loadVideo(options: VideoSourceOptions): Promise<VideoSourc
       return;
     }
     // Fallback: rAF plus a `currentTime` change test, so a 120 Hz loop over a
-    // 24 fps clip still produces one token per actual frame.
+    // 30 fps clip still produces one token per actual frame.
     rafHandle = requestAnimationFrame(() => {
       if (disposed || !running) return;
       if (video.readyState >= 2 && video.currentTime !== lastTime) {

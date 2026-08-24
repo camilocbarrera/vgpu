@@ -6,7 +6,7 @@
  * frame, and each firing bumps a token. `frameLoop` is the render clock, running at
  * the display's refresh rate so the cube's rotation is smooth regardless of the
  * clip's frame rate. The loop copies into the texture only when the token has
- * moved, which is what keeps a 24 fps clip from paying for 120 uploads a second.
+ * moved, which is what keeps a 30 fps clip from paying for 120 uploads a second.
  */
 import { clock, frameLoop, init, surface } from 'vgpu';
 
@@ -22,10 +22,23 @@ import { loadVideo, type VideoFrameInfo, type VideoSource } from './video-source
 
 /**
  * Big Buck Bunny, © 2008 Blender Foundation — CC BY 3.0 (peach.blender.org).
- * A 10 second, 640×360 excerpt is committed alongside the example so the demo has
- * no network dependency beyond its own origin and no licence ambiguity.
+ *
+ * A 10.4 second, 640×360, 30 fps excerpt is committed alongside the example so the
+ * demo has no network dependency beyond its own origin and no licence ambiguity. The
+ * cut is the flying-squirrel glide, chosen because it survives being a texture: a
+ * large subject that stays inside the square centre crop of each cube face, saturated
+ * colour, and continuous motion, so a stalled upload is obvious rather than plausible.
+ *
+ * Reproduce it from the Wikimedia Commons transcode of `Big Buck Bunny 4K.webm`:
+ *
+ *   ffmpeg -ss 398.95 -t 10.40 -i source.webm -an \
+ *     -vf "scale=640:360:flags=lanczos,setsar=1,fps=30" \
+ *     -c:v libx264 -profile:v high -crf 22 -preset veryslow -movflags +faststart out.mp4
+ *
+ * 398.95s and 409.35s are shot boundaries in the film, so the clip contains no
+ * half-cut shot and loops from empty sky back to the opening close-up.
  */
-export const VIDEO_URL = '/examples/video-to-texture/big-buck-bunny-360p-10s.mp4';
+export const VIDEO_URL = '/examples/video-to-texture/big-buck-bunny-360p-glide.mp4';
 
 export interface VideoStatus {
   readonly phase: 'loading' | 'playing' | 'failed';

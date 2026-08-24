@@ -8,7 +8,7 @@ import { createRenderer, type VideoStatus } from './renderer';
 /**
  * The readout is the point of the example as much as the cube is: `uploads` counts
  * texture copies and `rendered` counts drawn frames. On a 120 Hz display showing a
- * 24 fps clip the second number climbs about five times faster than the first,
+ * 30 fps clip the second number climbs about four times faster than the first,
  * which is exactly the redundancy `requestVideoFrameCallback` removes.
  */
 export function Example() {

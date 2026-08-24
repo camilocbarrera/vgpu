@@ -17,6 +17,16 @@ import { createTestPattern } from './test-pattern';
 /** The video plays onto a unit cube; the camera below is framed for that size. */
 const CUBE_SIZE = 1;
 const TILT = 0.42;
+/**
+ * Radians per second. Deliberately slow: the cube is a screen, so a face has to stay
+ * turned towards the viewer long enough to actually watch what is playing on it. At
+ * this rate a face holds a readable angle for roughly the length of the clip, and a
+ * full turn takes about 42 seconds.
+ *
+ * `meta.ts` pins the thumbnail to a fixed pose as a time in seconds, so changing this
+ * rate means changing `thumb.time` with it to keep the same angle.
+ */
+export const SPIN_RATE = 0.15;
 
 export interface VideoCubeScene {
   readonly geometry: Geometry;
@@ -105,7 +115,7 @@ export function renderScene(
   scene.cube.set({
     scene: {
       view_projection: camera.viewProjection,
-      spin: time * 0.45,
+      spin: time * SPIN_RATE,
       video_aspect: scene.width / Math.max(1, scene.height),
       tilt: TILT,
     },

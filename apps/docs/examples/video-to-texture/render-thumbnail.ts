@@ -10,10 +10,16 @@ import type { Gpu, Target } from 'vgpu';
 import { frame } from 'vgpu';
 
 import type { ThumbnailOptions } from '../../lib/example-renderer';
-import { createScene, destroyScene, renderScene, uploadTestPattern } from './scene';
+import { createScene, destroyScene, renderScene, SPIN_RATE, uploadTestPattern } from './scene';
 
 /** 16:9, matching the committed clip, so the face crop matches the live example. */
 const PATTERN_SIZE = { width: 640, height: 360 } as const;
+/**
+ * Three-quarter view: two faces visible, so the thumbnail reads as a cube rather than
+ * a flat picture. Expressed as the pose it wants and converted to a time, so changing
+ * `SPIN_RATE` cannot silently rotate the thumbnail.
+ */
+const THUMBNAIL_POSE = 0.405;
 
 export async function renderThumbnail(
   gpu: Gpu,
@@ -23,7 +29,9 @@ export async function renderThumbnail(
   const scene = createScene(gpu, { ...PATTERN_SIZE, label: 'video-to-texture-thumb' });
   try {
     uploadTestPattern(gpu, scene);
-    frame(gpu, (currentFrame) => renderScene(currentFrame, scene, target, options.time ?? 0.9));
+    frame(gpu, (currentFrame) =>
+      renderScene(currentFrame, scene, target, options.time ?? THUMBNAIL_POSE / SPIN_RATE),
+    );
   } finally {
     await Promise.allSettled([
       Promise.resolve().then(() => gpu.gpu.queue.onSubmittedWorkDone()),
