@@ -1,60 +1,20 @@
 /**
  * A decoded-frame source built on `HTMLVideoElement.requestVideoFrameCallback`.
  *
- * The point of the API is that it fires once per *presented* frame and hands back
- * the metadata of that exact frame, instead of once per display refresh. The 30 fps
- * clip this example ships presents a new frame roughly every fourth rAF tick on a
- * 120 Hz display, so a naive `requestAnimationFrame` upload loop would re-copy the
- * same decoded picture into the GPU texture three times out of four.
- *
- * This module promises the renderer exactly two things: here is the newest decoded
- * frame, and here is a token that changes only when that frame changes. The
- * renderer copies into its texture when the token moves and otherwise leaves the
- * texture alone, so texture uploads track the video's frame rate while the cube
- * keeps spinning at the display's.
- *
- * Browsers that do not implement `requestVideoFrameCallback` (Firefox at the time
- * of writing) fall back to rAF plus a `currentTime` change test, which produces the
- * same one-token-per-frame contract at slightly coarser resolution.
+ * The API fires once per *presented* frame rather than once per display refresh,
+ * which is the whole reason it exists: it tells the renderer when there are actually
+ * new bytes to copy. Browsers without it (Firefox at the time of writing) fall back
+ * to rAF plus a quantised clock, which approximates the same contract — see `fps`
+ * below for why nothing exact is available there.
  *
  * @see https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback
  */
 
-/** Minimal shape of `requestVideoFrameCallback`, which TypeScript's DOM lib still lacks. */
-interface VideoFrameMetadata {
-  readonly mediaTime: number;
-  readonly presentedFrames: number;
-  readonly width: number;
-  readonly height: number;
-  readonly expectedDisplayTime: number;
-}
-
+/** The part of `requestVideoFrameCallback` this needs; TypeScript's DOM lib lacks it. */
 type VideoFrameCallbackHost = HTMLVideoElement & {
-  requestVideoFrameCallback?: (
-    callback: (now: number, metadata: VideoFrameMetadata) => void,
-  ) => number;
+  requestVideoFrameCallback?: (callback: () => void) => number;
   cancelVideoFrameCallback?: (handle: number) => void;
 };
-
-export class VideoUnavailableError extends Error {
-  constructor(
-    message: string,
-    readonly reason: 'unsupported' | 'failed',
-    readonly detail?: unknown,
-  ) {
-    super(message);
-    this.name = 'VideoUnavailableError';
-  }
-}
-
-export interface VideoFrameInfo {
-  /** Presentation timestamp of the newest frame, in media seconds. */
-  readonly mediaTime: number;
-  /** Frames the compositor has presented since playback began. */
-  readonly presentedFrames: number;
-  /** True when the count comes from `requestVideoFrameCallback` rather than the rAF fallback. */
-  readonly precise: boolean;
-}
 
 export interface VideoSource {
   /** Intrinsic size of the decoded picture; the texture is allocated to match. */
@@ -62,160 +22,85 @@ export interface VideoSource {
   readonly height: number;
   /** The off-DOM element `copyExternalImageToTexture` reads from. */
   readonly frame: HTMLVideoElement;
-  /** Changes whenever a new frame has been decoded and presented. */
-  readonly token: number;
-  /** Metadata of the newest presented frame. */
-  readonly info: VideoFrameInfo;
-  /** Begins notifications. Idempotent. */
-  start(onFrame: (token: number) => void): void;
-  /** Stops notifications but keeps the element loaded. */
-  pause(): void;
-  /** Stops notifications and releases the element. Idempotent. */
+  /** True once per decoded frame, so the caller uploads exactly when bytes change. */
+  consume(): boolean;
   dispose(): void;
 }
 
-export interface VideoSourceOptions {
-  readonly url: string;
-  readonly loop?: boolean;
-}
-
 /**
- * Loads a video and resolves once its intrinsic size is known.
+ * Loads a clip and resolves once there is a frame to copy.
  *
  * The element is muted, `playsInline` and never attached to the DOM: it exists only
- * as a decode target for `copyExternalImageToTexture`, and a muted element is
- * allowed to autoplay without a user gesture.
+ * as a decode target, and a muted element may autoplay without a user gesture.
+ *
+ * `fps` is only consulted on the fallback path, where it is the least-bad way to
+ * recover a per-frame signal. Neither obvious alternative works: `currentTime` is a
+ * continuous clock that changes on *every* rAF tick, and `totalVideoFrames` counts
+ * decodes in batches well ahead of presentation. Quantising the clock by the known
+ * frame duration is an approximation, but it is the one that actually tracks frames.
  */
-export async function loadVideo(options: VideoSourceOptions): Promise<VideoSource> {
-  if (typeof document === 'undefined') {
-    throw new VideoUnavailableError('Video decoding is only available in a browser.', 'unsupported');
-  }
-
+export async function loadVideo(url: string, fps: number): Promise<VideoSource> {
   const video = document.createElement('video') as VideoFrameCallbackHost;
-  video.muted = true;
-  video.loop = options.loop ?? true;
-  video.playsInline = true;
-  video.autoplay = true;
-  video.preload = 'auto';
-  video.crossOrigin = 'anonymous';
-  video.src = options.url;
-
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      video.removeEventListener('loadeddata', onReady);
-      video.removeEventListener('error', onFail);
-    };
-    const onReady = () => {
-      cleanup();
-      resolve();
-    };
-    const onFail = () => {
-      cleanup();
-      reject(new VideoUnavailableError(`The video at ${options.url} failed to load.`, 'failed'));
-    };
-    // readyState >= 2 (HAVE_CURRENT_DATA) guarantees there is a frame to copy, so
-    // the first upload cannot land on an empty picture.
-    if (video.readyState >= 2 && video.videoWidth > 0) {
-      resolve();
-      return;
-    }
-    video.addEventListener('loadeddata', onReady, { once: true });
-    video.addEventListener('error', onFail, { once: true });
+  Object.assign(video, {
+    muted: true,
+    loop: true,
+    playsInline: true,
+    autoplay: true,
+    preload: 'auto',
+    src: url,
   });
 
-  await video.play().catch(() => {
-    // A muted, off-DOM element is allowed to autoplay; if play() is still rejected
-    // the frame callbacks below never fire and the cube spins on its first frame,
-    // which is honest rather than broken.
-  });
+  // readyState >= HAVE_CURRENT_DATA guarantees a frame exists, so the first upload
+  // cannot land on an empty picture.
+  if (video.readyState < 2) {
+    await new Promise<void>((resolve, reject) => {
+      video.addEventListener('loadeddata', () => resolve(), { once: true });
+      video.addEventListener('error', () => reject(new Error(`Cannot load ${url}`)), { once: true });
+    });
+  }
+  // A rejected play() leaves the cube on its first frame, which is honest rather
+  // than broken, so it is not worth failing the whole renderer over.
+  await video.play().catch(() => undefined);
 
-  const precise = typeof video.requestVideoFrameCallback === 'function';
-  let token = 0;
-  let info: VideoFrameInfo = { mediaTime: 0, presentedFrames: 0, precise };
+  let fresh = true;
   let disposed = false;
-  let running = false;
-  let rafHandle = 0;
-  let videoHandle = 0;
-  let lastTime = -1;
-  let notify: ((token: number) => void) | undefined;
+  let handle = 0;
+  let lastIndex = -1;
 
-  const publish = (next: VideoFrameInfo) => {
-    token++;
-    info = next;
-    notify?.(token);
-  };
-
-  const tick = () => {
-    if (disposed || !running) return;
-    if (precise) {
-      // The precise path: one callback per presented frame, with that frame's own
-      // metadata, so every token corresponds to bytes the renderer has not copied.
-      videoHandle = video.requestVideoFrameCallback!((_now, metadata) => {
-        if (disposed || !running) return;
-        publish({
-          mediaTime: metadata.mediaTime,
-          presentedFrames: metadata.presentedFrames,
-          precise: true,
-        });
-        tick();
+  const schedule = () => {
+    if (disposed) return;
+    if (video.requestVideoFrameCallback) {
+      handle = video.requestVideoFrameCallback(() => {
+        fresh = true;
+        schedule();
       });
       return;
     }
-    // Fallback: rAF plus a `currentTime` change test, so a 120 Hz loop over a
-    // 30 fps clip still produces one token per actual frame.
-    rafHandle = requestAnimationFrame(() => {
-      if (disposed || !running) return;
-      if (video.readyState >= 2 && video.currentTime !== lastTime) {
-        lastTime = video.currentTime;
-        publish({
-          mediaTime: video.currentTime,
-          presentedFrames: info.presentedFrames + 1,
-          precise: false,
-        });
+    handle = requestAnimationFrame(() => {
+      const index = Math.floor(video.currentTime * fps);
+      if (video.readyState >= 2 && index !== lastIndex) {
+        lastIndex = index;
+        fresh = true;
       }
-      tick();
+      schedule();
     });
   };
-
-  const stopNotifications = () => {
-    running = false;
-    if (rafHandle) cancelAnimationFrame(rafHandle);
-    rafHandle = 0;
-    if (videoHandle && video.cancelVideoFrameCallback) {
-      video.cancelVideoFrameCallback(videoHandle);
-    }
-    videoHandle = 0;
-  };
+  schedule();
 
   return {
-    width: video.videoWidth || 640,
-    height: video.videoHeight || 360,
+    width: video.videoWidth,
+    height: video.videoHeight,
     frame: video,
-    get token() {
-      return token;
-    },
-    get info() {
-      return info;
-    },
-    start(onFrame) {
-      if (disposed || running) return;
-      notify = onFrame;
-      running = true;
-      tick();
-    },
-    pause() {
-      stopNotifications();
+    consume() {
+      const hadFrame = fresh;
+      fresh = false;
+      return hadFrame;
     },
     dispose() {
-      if (disposed) return;
       disposed = true;
-      stopNotifications();
-      notify = undefined;
-      try {
-        video.pause();
-      } catch {
-        // Pausing a detached element can throw in some engines; irrelevant here.
-      }
+      if (video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(handle);
+      else cancelAnimationFrame(handle);
+      video.pause();
       video.removeAttribute('src');
       video.load();
     },

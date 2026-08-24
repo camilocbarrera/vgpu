@@ -1,30 +1,21 @@
-/**
- * The GPU side of the example: one texture the size of the decoded picture, one
- * cube that samples it, and the two ways bytes get into that texture.
- *
- * Uploads are deliberately separated from rendering. `renderScene` runs every
- * display frame so the cube spins smoothly, while `uploadVideoFrame` is only
- * called when `video-source.ts` reports a genuinely new decoded frame.
- */
 import type { Draw, Frame, Geometry, Gpu, Target } from 'vgpu';
 import { draw, geometry, sampler } from 'vgpu';
 import type { Texture } from 'vgpu/core';
 import { box, perspectiveCamera } from 'vgpu/scene';
 
 import cubeWgsl from './cube.wgsl';
-import { createTestPattern } from './test-pattern';
 
-/** The video plays onto a unit cube; the camera below is framed for that size. */
-const CUBE_SIZE = 1;
+/** Size of the committed clip, and the fallback when no video is available. */
+export const FRAME_SIZE = { width: 640, height: 360 } as const;
+
 const TILT = 0.42;
 /**
  * Radians per second. Deliberately slow: the cube is a screen, so a face has to stay
- * turned towards the viewer long enough to actually watch what is playing on it. At
- * this rate a face holds a readable angle for roughly the length of the clip, and a
- * full turn takes about 42 seconds.
+ * turned towards the viewer long enough to watch what is playing on it. At this rate
+ * a face holds a readable angle for roughly the length of the clip.
  *
- * `meta.ts` pins the thumbnail to a fixed pose as a time in seconds, so changing this
- * rate means changing `thumb.time` with it to keep the same angle.
+ * `render-thumbnail.ts` derives its fixed pose from this, so changing it cannot
+ * silently rotate the thumbnail.
  */
 export const SPIN_RATE = 0.15;
 
@@ -36,33 +27,29 @@ export interface VideoCubeScene {
   readonly height: number;
 }
 
-export interface VideoCubeSceneOptions {
-  /** Intrinsic size of the frames that will be uploaded. */
-  readonly width: number;
-  readonly height: number;
-  readonly label?: string;
-}
-
-export function createScene(gpu: Gpu, options: VideoCubeSceneOptions): VideoCubeScene {
-  const label = options.label ?? 'video-to-texture';
-  // `copyExternalImageToTexture` requires `render_attachment` on its destination,
-  // on top of the `copy_dst` the copy itself needs and the `texture_binding` the
-  // shader reads through.
+export function createScene(gpu: Gpu, size: { width: number; height: number }): VideoCubeScene {
+  // `copyExternalImageToTexture` requires `render_attachment` on its destination, on
+  // top of the `copy_dst` the copy needs and the `texture_binding` the shader reads.
   const texture = gpu.device.createTexture({
-    size: [options.width, options.height],
+    size: [size.width, size.height],
     format: 'rgba8unorm',
     usage: ['texture_binding', 'copy_dst', 'render_attachment'],
-    label: `${label}-frame`,
+    label: 'video-to-texture-frame',
   });
 
-  const geo = geometry(gpu, box({ size: CUBE_SIZE }));
-  const cube = draw(gpu, { shader: cubeWgsl, geometry: geo, cull: 'back', label });
+  const geo = geometry(gpu, box({ size: 1 }));
+  const cube = draw(gpu, {
+    shader: cubeWgsl,
+    geometry: geo,
+    cull: 'back',
+    label: 'video-to-texture',
+  });
   cube.set({
     video_tex: texture,
     video_samp: sampler(gpu, { magFilter: 'linear', minFilter: 'linear' }),
   });
 
-  return { geometry: geo, cube, texture, width: options.width, height: options.height };
+  return { geometry: geo, cube, texture, width: size.width, height: size.height };
 }
 
 export function destroyScene(scene: VideoCubeScene): void {
@@ -73,11 +60,11 @@ export function destroyScene(scene: VideoCubeScene): void {
 /**
  * Copies the newest decoded frame straight from the video element into the texture.
  *
- * This is the whole cost of a frame update: the browser already has the picture
- * decoded, and the copy stays inside the GPU process rather than travelling through
- * a canvas or an `ImageBitmap`.
+ * This is the entire cost of a frame update: the browser already holds the picture
+ * decoded, and the copy stays GPU-side rather than routing through a canvas or an
+ * `ImageBitmap`.
  */
-export function uploadVideoFrame(gpu: Gpu, scene: VideoCubeScene, source: HTMLVideoElement): void {
+export function uploadFrame(gpu: Gpu, scene: VideoCubeScene, source: HTMLVideoElement): void {
   gpu.gpu.queue.copyExternalImageToTexture(
     { source },
     { texture: scene.texture.gpu },
@@ -85,16 +72,50 @@ export function uploadVideoFrame(gpu: Gpu, scene: VideoCubeScene, source: HTMLVi
   );
 }
 
-/** Uploads the deterministic stand-in used before the first frame and by the thumbnail. */
+/**
+ * Colour bars with a *dark* top eighth, uploaded before the first decoded frame and
+ * by the codec-free thumbnail. The band has to be dark: the bars sit near saturation,
+ * so a brighter marker would clip and prove nothing, whereas this makes an upside
+ * down or transposed sampling obvious at a glance.
+ */
 export function uploadTestPattern(gpu: Gpu, scene: VideoCubeScene): void {
-  const pattern = createTestPattern(scene.width, scene.height);
-  const bytesPerRow = Math.ceil((scene.width * 4) / 256) * 256;
-  const rows = bytesPerRow === scene.width * 4 ? pattern.rgba : padRows(pattern.rgba, scene.width * 4, bytesPerRow, scene.height);
+  const { width, height } = scene;
+  const bars = [
+    [235, 235, 235],
+    [235, 210, 60],
+    [60, 210, 235],
+    [60, 200, 90],
+    [220, 80, 200],
+    [220, 70, 60],
+    [50, 70, 200],
+    [24, 24, 28],
+  ];
+  // `writeTexture` needs rows aligned to 256 bytes, so write straight at that stride.
+  const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+  const data = new Uint8Array(bytesPerRow * height);
+  const barWidth = width / bars.length;
+  const bandHeight = Math.max(1, Math.round(height / 8));
+  const gridX = Math.max(8, Math.round(width / 12));
+  const gridY = Math.max(8, Math.round(height / 8));
+
+  for (let y = 0; y < height; y += 1) {
+    const gain = y < bandHeight ? 0.35 : 1;
+    for (let x = 0; x < width; x += 1) {
+      const bar = bars[Math.min(bars.length - 1, Math.floor(x / barWidth))]!;
+      const grid = x % gridX === 0 || y % gridY === 0 ? 40 : 0;
+      const offset = y * bytesPerRow + x * 4;
+      data[offset] = clamp(bar[0]! * gain + grid);
+      data[offset + 1] = clamp(bar[1]! * gain + grid);
+      data[offset + 2] = clamp(bar[2]! * gain + grid);
+      data[offset + 3] = 255;
+    }
+  }
+
   gpu.gpu.queue.writeTexture(
     { texture: scene.texture.gpu },
-    rows,
-    { bytesPerRow, rowsPerImage: scene.height },
-    [scene.width, scene.height],
+    data,
+    { bytesPerRow, rowsPerImage: height },
+    [width, height],
   );
 }
 
@@ -123,16 +144,6 @@ export function renderScene(
   currentFrame.pass(output, (pass) => pass.draw(scene.cube));
 }
 
-function padRows(
-  data: Uint8Array<ArrayBuffer>,
-  sourceBytesPerRow: number,
-  destinationBytesPerRow: number,
-  height: number,
-): Uint8Array<ArrayBuffer> {
-  const padded = new Uint8Array(destinationBytesPerRow * height);
-  for (let row = 0; row < height; row += 1) {
-    const start = row * sourceBytesPerRow;
-    padded.set(data.subarray(start, start + sourceBytesPerRow), row * destinationBytesPerRow);
-  }
-  return padded;
+function clamp(value: number): number {
+  return Math.max(0, Math.min(255, Math.round(value)));
 }
