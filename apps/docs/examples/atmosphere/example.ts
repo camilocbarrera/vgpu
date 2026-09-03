@@ -12,10 +12,11 @@ import cloudShapeNoiseWgsl from './cloud-shape-noise.wgsl';
 import cloudDetailNoiseWgsl from './cloud-detail-noise.wgsl';
 import weatherMapWgsl from './weather-map.wgsl';
 import cloudsWgsl from './clouds.wgsl';
+import terrainHeightmapWgsl from './terrain-heightmap.wgsl';
 
 type Output = Surface | Target;
 type Vec3 = readonly [number, number, number];
-export type DebugView = 'transmittance' | 'multiscatter' | 'sky-view' | 'weather';
+export type DebugView = 'transmittance' | 'multiscatter' | 'sky-view' | 'weather' | 'terrain';
 
 type AtmosphereUniformValues = {
   rayleighScattering: Vec3; rayleighScaleHeight: number;
@@ -40,6 +41,7 @@ export interface AtmosphereGraph {
   readonly shapeNoise: Texture;
   readonly detailNoise: Texture;
   readonly weatherMap: Texture;
+  readonly terrainMap: Texture;
   readonly cloudsTarget: Target;
   readonly transmittance: Target;
   readonly multiScatter: Texture;
@@ -70,6 +72,8 @@ const CLEAR = [0, 0, 0, 1] as const;
 const AERIAL_WORKGROUP = 4;
 const NOISE_WORKGROUP = 4;
 const WEATHER_WORKGROUP = 8;
+/** Keep in sync with TERRAIN_MAP_SIZE in terrain.wgsl. */
+const TERRAIN_MAP_SIZE = 2048;
 
 export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   const { init } = await import('vgpu');
@@ -121,8 +125,9 @@ export async function renderStill(gpu: Gpu, output: Target, state: AtmosphereSta
     applyState(graph, state, output.size);
     bakeLuts(gpu, graph);
     gpu.frame((frame) => frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect)));
-    const source = debug === 'transmittance' ? graph.transmittance : debug === 'multiscatter' ? graph.multiScatter : debug === 'weather' ? graph.weatherMap : graph.skyView;
-    graph.lutPreview.set({ preview: { gain: debug === 'sky-view' ? 2 ** state.exposureEv : 1, channel: 0, pad: [0, 0] }, lut: source, linearSampler: graph.sampler });
+    const sources = { transmittance: graph.transmittance, multiscatter: graph.multiScatter, weather: graph.weatherMap, terrain: graph.terrainMap, 'sky-view': graph.skyView } as const;
+    const gains = { transmittance: 1, multiscatter: 1, weather: 1, terrain: 0.3, 'sky-view': 2 ** state.exposureEv } as const;
+    graph.lutPreview.set({ preview: { gain: gains[debug], channel: 0, pad: [0, 0] }, lut: sources[debug], linearSampler: graph.sampler });
     await graph.lutPreview.compile(output);
     gpu.frame((frame) => frame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(graph.lutPreview)));
   } else {
@@ -149,12 +154,13 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const shapeNoise = gpu.texture({ size: [noise.shape, noise.shape, noise.shape], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-shape` });
   const detailNoise = gpu.texture({ size: [noise.detail, noise.detail, noise.detail], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-detail` });
   const weatherMap = gpu.texture({ size: [noise.weather, noise.weather], format: 'rgba8unorm', label: `${label}-weather` });
+  const terrainMap = gpu.texture({ size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: HDR_FORMAT, label: `${label}-terrain` });
 
   const transmittanceEffect = gpu.effect(transmittanceLutWgsl, { label: `${label}-transmittance`, set: { atmosphere } });
   const multiScatterCompute = gpu.compute(multiScatterLutWgsl, { label: `${label}-multiscatter`, set: { atmosphere, transmittanceLut: transmittance, lutSampler: sampler, multiScatterLut: multiScatter } });
   const skyViewEffect = gpu.effect(skyViewLutWgsl, { label: `${label}-sky-view`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler } });
   const aerialCompute = gpu.compute(aerialLutWgsl, { label: `${label}-aerial`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler, aerialLut: aerial } });
-  const sceneEffect = gpu.effect(sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler } });
+  const sceneEffect = gpu.effect(sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap } });
   const cloudsEffect = gpu.effect(cloudsWgsl, { label: `${label}-clouds`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial,
     shapeNoise, detailNoise, weatherMap, sceneHdr: scene, lutSampler: sampler, noiseSampler,
@@ -164,10 +170,12 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   gpu.compute(cloudShapeNoiseWgsl, { label: `${label}-cloud-shape-noise`, set: { shapeNoise } }).dispatch(noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP);
   gpu.compute(cloudDetailNoiseWgsl, { label: `${label}-cloud-detail-noise`, set: { detailNoise } }).dispatch(noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP);
   gpu.compute(weatherMapWgsl, { label: `${label}-weather-map`, set: { weatherMap } }).dispatch(noise.weather / WEATHER_WORKGROUP, noise.weather / WEATHER_WORKGROUP, 1);
+  // The heightfield is baked once too: the terrain march then costs one texture tap per step instead of a 6-octave fbm.
+  gpu.compute(terrainHeightmapWgsl, { label: `${label}-terrain-heightmap`, set: { terrainMap } }).dispatch(TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, 1);
   const lutPreview = gpu.effect(lutPreviewWgsl, { label: `${label}-lut-preview` });
 
   const graph: AtmosphereGraph = {
-    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, cloudsTarget, transmittance, multiScatter, skyView, aerial, scene,
+    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, terrainMap, cloudsTarget, transmittance, multiScatter, skyView, aerial, scene,
     transmittanceEffect, multiScatterCompute, skyViewEffect, aerialCompute, sceneEffect, cloudsEffect, presentEffect, lutPreview, sampler,
     lutPhase: 'stale', bakedHaze: 1,
   };
@@ -255,5 +263,5 @@ function scale(v: Vec3, factor: number): Vec3 { return [v[0] * factor, v[1] * fa
 
 function destroyGraph(graph: AtmosphereGraph): void {
   for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.cloudsTarget]) target.color.destroy();
-  for (const texture of [graph.multiScatter, graph.aerial, graph.shapeNoise, graph.detailNoise, graph.weatherMap]) texture.destroy();
+  for (const texture of [graph.multiScatter, graph.aerial, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.terrainMap]) texture.destroy();
 }

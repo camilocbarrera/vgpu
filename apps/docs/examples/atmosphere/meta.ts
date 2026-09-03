@@ -8,7 +8,7 @@ export const meta = {
   files: [
     'example.ts', 'tuning.ts', 'camera.ts', 'controls.ts',
     'atmosphere-common.wgsl', 'transmittance-lut.wgsl', 'multiscatter-lut.wgsl', 'sky-view-lut.wgsl', 'aerial-lut.wgsl',
-    'terrain.wgsl', 'scene.wgsl', 'noise-common.wgsl', 'cloud-shape-noise.wgsl', 'cloud-detail-noise.wgsl', 'weather-map.wgsl',
+    'terrain.wgsl', 'terrain-heightmap.wgsl', 'scene.wgsl', 'noise-common.wgsl', 'cloud-shape-noise.wgsl', 'cloud-detail-noise.wgsl', 'weather-map.wgsl',
     'clouds-common.wgsl', 'clouds.wgsl', 'present.wgsl', 'lut-preview.wgsl',
   ],
 } as const;

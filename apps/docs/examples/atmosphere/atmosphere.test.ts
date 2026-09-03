@@ -44,6 +44,8 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.shapeNoise.dimension).toBe('3d');
       expect(graph.shapeNoise.format).toBe('rgba8unorm');
       expect(graph.cloudsTarget.size).toEqual([48, 27]);
+      expect(graph.terrainMap.size).toEqual([2048, 2048]);
+      expect([...graph.terrainMap.usage]).toContain('storage_binding');
       applyState(graph, PRESETS['golden-hour'], target.size);
       expect(graph.lutPhase).toBe('stale');
       bakeLuts(gpu, graph);

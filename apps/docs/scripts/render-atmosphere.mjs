@@ -1,5 +1,5 @@
 // Headless renders of the atmosphere example for visual verification.
-//   node scripts/render-atmosphere.mjs [--out dir] [--preset name|all] [--size WxH] [--debug transmittance|multiscatter|sky-view]
+//   node scripts/render-atmosphere.mjs [--out dir] [--preset name|all] [--size WxH] [--debug transmittance|multiscatter|sky-view|weather] [--bench N]
 //   overrides: --sun <deg> --azimuth <deg> --altitude <km> --yaw <deg> --pitch <deg> --ev <stops> --haze <x> --coverage <0..1> --time <s> --tonemap agx|aces|neutral|none
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -17,9 +17,9 @@ const entry = path.join(cacheDir, 'entry.ts');
 const bundle = path.join(cacheDir, 'atmosphere.mjs');
 
 await mkdir(cacheDir, { recursive: true });
-await writeFile(entry, "export { renderStill } from '../examples/atmosphere/example.ts';\nexport { PRESETS } from '../examples/atmosphere/tuning.ts';\n");
+await writeFile(entry, "export { renderStill, createGraph, applyState, bakeLuts, renderGraph } from '../examples/atmosphere/example.ts';\nexport { PRESETS } from '../examples/atmosphere/tuning.ts';\n");
 await build({ entryPoints: [entry], outfile: bundle, bundle: true, platform: 'node', format: 'esm', sourcemap: false, external: ['vgpu', 'vgpu/node'], plugins: [wgslPlugin()], logLevel: 'silent' });
-const { renderStill, PRESETS } = await import(pathToFileURL(bundle).href);
+const { renderStill, createGraph, applyState, bakeLuts, renderGraph, PRESETS } = await import(pathToFileURL(bundle).href);
 await rm(cacheDir, { recursive: true, force: true });
 
 const size = args.size ?? [960, 540];
@@ -32,6 +32,10 @@ for (const name of presetNames) {
   const gpu = await init();
   try {
     const target = gpu.target({ size, format: 'rgba8unorm', label: `atmosphere-${name}` });
+    if (args.bench) {
+      console.log(`- ${name}: ${await bench(gpu, target, state, args.bench)}`);
+      continue;
+    }
     const started = performance.now();
     await renderStill(gpu, target, state, args.debug);
     const pixels = await target.read();
@@ -42,6 +46,31 @@ for (const name of presetNames) {
   } finally {
     gpu.dispose();
   }
+}
+
+/** Wall-clock ms per frame over `frames` steady-state frames on one graph (first frame bakes and warms up). */
+async function bench(gpu, target, state, frames) {
+  const graph = await createGraph(gpu, target, 'atmosphere-bench');
+  applyState(graph, state, target.size);
+  bakeLuts(gpu, graph);
+  gpu.frame((frame) => renderGraph(frame, graph, target));
+  await gpu.gpu.queue.onSubmittedWorkDone();
+  const started = performance.now();
+  for (let i = 0; i < frames; i++) {
+    applyState(graph, { ...state, time: state.time + i / 60 }, target.size);
+    gpu.frame((frame) => renderGraph(frame, graph, target));
+  }
+  await gpu.gpu.queue.onSubmittedWorkDone();
+  const perFrame = (performance.now() - started) / frames;
+  const cloudless = { ...state, cloudCoverage: 0 };
+  const startedCloudless = performance.now();
+  for (let i = 0; i < frames; i++) {
+    applyState(graph, { ...cloudless, time: state.time + i / 60 }, target.size);
+    gpu.frame((frame) => renderGraph(frame, graph, target));
+  }
+  await gpu.gpu.queue.onSubmittedWorkDone();
+  const perFrameCloudless = (performance.now() - startedCloudless) / frames;
+  return `${perFrame.toFixed(0)} ms/frame (${perFrameCloudless.toFixed(0)} ms without clouds, ${(perFrame - perFrameCloudless).toFixed(0)} ms clouds) at ${target.size.join('x')} over ${frames} frames`;
 }
 
 /** Mean sRGB of the top band (zenith-ish), middle band (horizon) and bottom band (ground) as a quick sanity readout. */
@@ -63,7 +92,7 @@ function describe(pixels, [width, height]) {
 }
 
 function parseArgs(argv) {
-  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, overrides: {} };
+  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, bench: 0, overrides: {} };
   const numeric = { sun: 'sunElevation', azimuth: 'sunAzimuth', altitude: 'altitudeKm', yaw: 'yaw', pitch: 'pitch', ev: 'exposureEv', haze: 'haze', coverage: 'cloudCoverage', time: 'time' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -71,6 +100,7 @@ function parseArgs(argv) {
     else if (arg === '--preset') parsed.preset = argv[++i];
     else if (arg === '--size') parsed.size = argv[++i].split('x').map(Number);
     else if (arg === '--debug') parsed.debug = argv[++i];
+    else if (arg === '--bench') parsed.bench = Number(argv[++i]);
     else if (arg === '--tonemap') parsed.overrides.tonemap = argv[++i];
     else if (arg.startsWith('--') && numeric[arg.slice(2)]) parsed.overrides[numeric[arg.slice(2)]] = Number(argv[++i]);
     else throw new Error(`Unknown argument '${arg}'.`);

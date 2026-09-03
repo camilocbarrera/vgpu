@@ -1,5 +1,5 @@
 import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PI, cameraRay, raySphere, sampleTransmittance, skyViewUv } from "./atmosphere-common.wgsl";
-import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, terrainAlbedo, terrainHeight, terrainNormal } from "./terrain.wgsl";
+import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
 import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
@@ -11,9 +11,12 @@ import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(6) var<uniform> clouds: Clouds;
 @group(0) @binding(7) var weatherMap: texture_2d<f32>;
 @group(0) @binding(8) var noiseSampler: sampler;
+@group(0) @binding(9) var terrainMap: texture_2d<f32>;
 
-const TERRAIN_STEPS: i32 = 256;
-const SHADOW_STEPS: i32 = 20;
+fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
+
+const TERRAIN_STEPS: i32 = 200;
+const SHADOW_STEPS: i32 = 12;
 
 struct TerrainHit { distance: f32, position: vec3f, height: f32 };
 
@@ -81,24 +84,25 @@ fn marchTerrain(p: Atmosphere, origin: vec3f, dir: vec3f) -> TerrainHit {
     if (t > TERRAIN_MAX_DISTANCE) { break; }
     let position = origin + dir * t;
     let altitude = altitudeOf(p, position);
-    let height = terrainHeight(position.xz);
-    let delta = altitude - height;
+    // Rising rays that cleared the highest possible peak can never come back down to the terrain.
+    if (altitude > TERRAIN_MAX_HEIGHT && dir.y >= 0.0) { break; }
+    let delta = altitude - height(position.xz);
     if (delta < 0.0) {
       var lo = previousT;
       var hi = t;
       for (var k = 0; k < 8; k += 1) {
         let mid = 0.5 * (lo + hi);
         let midPosition = origin + dir * mid;
-        if (altitudeOf(p, midPosition) - terrainHeight(midPosition.xz) < 0.0) { hi = mid; } else { lo = mid; }
+        if (altitudeOf(p, midPosition) - height(midPosition.xz) < 0.0) { hi = mid; } else { lo = mid; }
       }
       let finalPosition = origin + dir * hi;
-      return TerrainHit(hi, finalPosition, terrainHeight(finalPosition.xz));
+      return TerrainHit(hi, finalPosition, height(finalPosition.xz));
     }
     previousT = t;
     // Distance-proportional steps reach TERRAIN_MAX_DISTANCE within the budget even for grazing rays;
     // the clearance term slows down near the surface and the bisection above recovers precision.
-    let distanceStep = 0.01 + t * 0.025;
-    t += max(0.5 * distanceStep, min(delta * 0.6, distanceStep));
+    let distanceStep = 0.012 + t * 0.035;
+    t += max(0.5 * distanceStep, min(delta * 0.7, distanceStep));
   }
   return hit;
 }
@@ -112,10 +116,10 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let sample = position + sunDir * t;
     let altitude = altitudeOf(p, sample);
     if (altitude > TERRAIN_MAX_HEIGHT) { break; }
-    let delta = altitude - terrainHeight(sample.xz);
+    let delta = altitude - height(sample.xz);
     shadow = min(shadow, saturate(8.0 * delta / t));
     if (shadow <= 0.0) { break; }
-    t += 0.03 + t * 0.35;
+    t += 0.04 + t * 0.6;
   }
   return shadow;
 }
@@ -136,7 +140,7 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
 
   if (terrain.distance >= 0.0) {
     hitDistance = terrain.distance;
-    let normal = terrainNormal(terrain.position.xz, max(0.004, terrain.distance * 0.0015));
+    let normal = sampleTerrainNormal(terrainMap, lutSampler, terrain.position.xz);
     let sunZenithCos = dot(normal, p.sunDirection);
     let surfaceAltitude = p.groundRadius + terrain.height;
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, surfaceAltitude, p.sunDirection.y);
