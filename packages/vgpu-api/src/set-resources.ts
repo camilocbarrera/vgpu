@@ -70,17 +70,20 @@ function normalizeBufferResource(binding: BindingInfo, value: unknown, context: 
 }
 
 function normalizeTextureResource(binding: BindingInfo, value: unknown, context: ResourceNormalizationContext): NormalizedBindingResource {
+  const depthBinding = binding.bindingLayout?.kind === "texture" && binding.bindingLayout.texture.sampleType === "depth";
   const target = asTarget(value);
   if (target) {
-    const color = target.color;
-    validateTextureFilterability(binding, color, context);
+    // A depth binding takes the target's depth attachment; everything else takes its first color.
+    if (depthBinding && !target.depth) throw incompatibleResourceError(binding, "a target with a depth attachment", `Create it with target(gpu, { size, depth: true }) or bind a Texture: set({ ${binding.name}: scene.depth }).`);
+    const texture = depthBinding ? target.depth! : target.color;
+    validateTextureFilterability(binding, texture, context);
     const onTexturesRecreated = target.onTexturesRecreated?.bind(target);
-    return { resource: color.createView(), identity: color.resourceIdentity, unsubscribe: (cb) => target.onDestroy(cb), onRecreate: onTexturesRecreated ? (cb) => onTexturesRecreated(cb) : undefined };
+    return { resource: texture.createView(textureViewDescriptor(texture)), identity: texture.resourceIdentity, unsubscribe: (cb) => target.onDestroy(cb), onRecreate: onTexturesRecreated ? (cb) => onTexturesRecreated(cb) : undefined };
   }
   if (value instanceof Texture) {
     validateTextureUsage(binding, value.usage);
     validateTextureFilterability(binding, value, context);
-    return { resource: value.createView(), identity: value.resourceIdentity, unsubscribe: (cb) => value.onDestroy(cb) };
+    return { resource: value.createView(textureViewDescriptor(value)), identity: value.resourceIdentity, unsubscribe: (cb) => value.onDestroy(cb) };
   }
   if (isTextureLike(value)) return { resource: value.createView(), identity: value.resourceIdentity ?? syntheticIdentity(value) };
   if (typeof value === "object" && value !== null) return { resource: value as GPUTextureView, identity: syntheticIdentity(value) };
@@ -155,6 +158,11 @@ function validateTextureFilterability(binding: BindingInfo, texture: Texture, co
   if (texture.format === "r32float" || texture.format === "rg32float" || texture.format === "rgba32float") {
     throw textureFilterabilityError(context.sourceHint, binding, texture.format, texture.label ?? "texture", context.pairedSampler);
   }
+}
+
+/** Depth-stencil formats need a depth-only view to satisfy a texture_depth_* binding. */
+function textureViewDescriptor(texture: Texture): GPUTextureViewDescriptor | undefined {
+  return texture.format.includes("stencil") ? { aspect: "depth-only" } : undefined;
 }
 
 type RecreatingTarget = Target & { readonly onTexturesRecreated?: (cb: () => void) => () => void };
