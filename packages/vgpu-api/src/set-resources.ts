@@ -45,7 +45,7 @@ export function normalizeResource(binding: BindingInfo, value: unknown, context:
     case "buffer": return normalizeBufferResource(binding, value, context);
     case "texture": return normalizeTextureResource(binding, value, context);
     case "sampler": return normalizeSamplerResource(binding, value);
-    case "storageTexture": throw incompatibleResourceError(binding, "storage texture", "Pass a storage-compatible texture.");
+    case "storageTexture": return normalizeStorageTextureResource(binding, value);
     case "externalTexture": throw incompatibleResourceError(binding, "external texture", "Pass a compatible GPUExternalTexture.");
     default: throw incompatibleResourceError(binding, "reflected resource", "Fix shader reflection bindingLayout.");
   }
@@ -85,6 +85,46 @@ function normalizeTextureResource(binding: BindingInfo, value: unknown, context:
   if (isTextureLike(value)) return { resource: value.createView(), identity: value.resourceIdentity ?? syntheticIdentity(value) };
   if (typeof value === "object" && value !== null) return { resource: value as GPUTextureView, identity: syntheticIdentity(value) };
   throw incompatibleResourceError(binding, "texture/target", `Pass a Texture or Target: ${binding.name}.set({ ${binding.name}: scene.color }) or set({ ${binding.name}: scene }).`);
+}
+
+function normalizeStorageTextureResource(binding: BindingInfo, value: unknown): NormalizedBindingResource {
+  const layout = binding.bindingLayout?.kind === "storageTexture" ? binding.bindingLayout.storageTexture : undefined;
+  const expected: ExpectedStorageTexture = { format: layout?.format as GPUTextureFormat | undefined, viewDimension: (layout?.viewDimension ?? "2d") as GPUTextureViewDimension };
+  const create = `texture(gpu, { size, format: "${expected.format ?? "rgba8unorm"}"${expected.viewDimension === "3d" ? ', dimension: "3d"' : ""} })`;
+  if (asTarget(value)) throw incompatibleResourceError(binding, "a storage texture, not a Target", `Render targets are not storage textures. Create one with ${create} and set({ ${binding.name}: texture }).`);
+  if (value instanceof Texture) {
+    validateStorageTexture(binding, value, expected, create);
+    return { resource: value.createView(storageViewDescriptor(expected.viewDimension)), identity: value.resourceIdentity, unsubscribe: (cb) => value.onDestroy(cb) };
+  }
+  if (isTextureLike(value)) return { resource: value.createView(storageViewDescriptor(expected.viewDimension)), identity: value.resourceIdentity ?? syntheticIdentity(value) };
+  if (typeof value === "object" && value !== null) return { resource: value as GPUTextureView, identity: syntheticIdentity(value) };
+  throw incompatibleResourceError(binding, "a storage texture", `Pass a Texture from ${create}: set({ ${binding.name}: texture }).`);
+}
+
+interface ExpectedStorageTexture { readonly format?: GPUTextureFormat; readonly viewDimension: GPUTextureViewDimension }
+
+function validateStorageTexture(binding: BindingInfo, texture: Texture, expected: ExpectedStorageTexture, create: string): void {
+  const name = texture.label ?? "texture";
+  if (!texture.usage.includes("storage_binding")) throw incompatibleResourceError(binding, "a texture with storage_binding usage", `Create it with ${create} (usage defaults include storage_binding).`);
+  if (expected.format && texture.format !== expected.format) {
+    throw incompatibleResourceError(binding, `format ${expected.format}`, `Texture '${name}' is ${texture.format}. Create it with ${create} or declare texture_storage_${expected.viewDimension.replace("-", "_")}<${texture.format}, ...> in WGSL.`);
+  }
+  const dimension = textureDimensionFor(expected.viewDimension);
+  if (dimension && texture.dimension !== dimension) throw incompatibleResourceError(binding, `dimension "${dimension}"`, `Texture '${name}' is "${texture.dimension}". Create it with texture(gpu, { ..., dimension: "${dimension}" }).`);
+}
+
+/** Storage bindings address exactly one mip level; WebGPU rejects views spanning several. */
+function storageViewDescriptor(dimension: GPUTextureViewDimension): GPUTextureViewDescriptor {
+  return { dimension, baseMipLevel: 0, mipLevelCount: 1 };
+}
+
+function textureDimensionFor(viewDimension: GPUTextureViewDimension): GPUTextureDimension | undefined {
+  switch (viewDimension) {
+    case "1d": return "1d";
+    case "2d": case "2d-array": return "2d";
+    case "3d": return "3d";
+    default: return undefined;
+  }
 }
 
 function normalizeSamplerResource(binding: BindingInfo, value: unknown): NormalizedBindingResource {
