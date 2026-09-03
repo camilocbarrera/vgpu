@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { init } from 'vgpu/mock';
 import { cameraUniforms, sunDirection } from './camera';
-import { applyState, bakeLuts, createGraph, renderGraph } from './example';
+import { CLOUD_CONVERGENCE_FRAMES, applyState, bakeLuts, createGraph, renderGraph } from './example';
 import { LUT_SIZES, PRESETS } from './tuning';
 
 const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
@@ -43,7 +43,7 @@ describe('atmosphere graph on the mock adapter', () => {
       expect([...graph.multiScatter.usage]).toContain('storage_binding');
       expect(graph.shapeNoise.dimension).toBe('3d');
       expect(graph.shapeNoise.format).toBe('rgba8unorm');
-      expect(graph.cloudsTarget.size).toEqual([48, 27]);
+      expect(graph.cloudsTargets.write.size).toEqual([48, 27]);
       expect(graph.terrainMap.size).toEqual([2048, 2048]);
       expect([...graph.terrainMap.usage]).toContain('storage_binding');
       applyState(graph, PRESETS['golden-hour'], target.size);
@@ -58,6 +58,12 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.lutPhase).toBe('transmittance');
       gpu.frame((frame) => renderGraph(frame, graph, target));
       expect(graph.lutPhase).toBe('ready');
+      // The temporal cloud update alternates the ping-pong buffers and counts frames.
+      const before = graph.cloudsTargets.write;
+      gpu.frame((frame) => renderGraph(frame, graph, target));
+      expect(graph.cloudsTargets.read).toBe(before);
+      expect(graph.frame).toBe(4);
+      expect(CLOUD_CONVERGENCE_FRAMES).toBe(16);
       await gpu.settled();
     } finally {
       gpu.dispose();

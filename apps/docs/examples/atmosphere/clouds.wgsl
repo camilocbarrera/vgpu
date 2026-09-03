@@ -13,8 +13,19 @@ import { Clouds, cloudDensity, heightFraction } from "./clouds-common.wgsl";
 @group(0) @binding(9) var sceneHdr: texture_2d<f32>;
 @group(0) @binding(10) var lutSampler: sampler;
 @group(0) @binding(11) var noiseSampler: sampler;
+@group(0) @binding(12) var history: texture_2d<f32>;
+@group(0) @binding(13) var<uniform> reprojection: Reprojection;
+
+/** Previous frame's camera basis: one texel in sixteen is re-marched per frame, the rest reproject from `history`. */
+struct Reprojection {
+  forward: vec3f, frame: f32,
+  right: vec3f, tanHalfFov: f32,
+  up: vec3f, aspect: f32,
+  valid: f32, pad0: f32, pad1: f32, pad2: f32,
+};
 
 const MARCH_STEPS: i32 = 128;
+const MIN_MARCH_STEPS: f32 = 64.0;
 const LIGHT_STEPS: i32 = 6;
 const MAX_MARCH_DISTANCE: f32 = 70.0;
 /** Extinction per unit density, 1/km (cumulus, ~0.03/m). */
@@ -121,9 +132,33 @@ fn cloudRange(origin: vec3f, dir: vec3f, viewHeight: f32) -> MarchRange {
   return MarchRange(0.0, exit, true);
 }
 
+/**
+ * Which texel of each 4x4 block is re-marched this frame (Bayer order so the refresh is spread out).
+ * 4x4 rather than 2x2: GPUs shade 2x2 quads together, so one live pixel per quad would save nothing.
+ */
+fn updatesThisFrame(texel: vec2i, frame: i32) -> bool {
+  let phase = (texel.x & 3) | ((texel.y & 3) << 2);
+  var order = array<i32, 16>(0, 10, 2, 8, 5, 15, 7, 13, 1, 11, 3, 9, 4, 14, 6, 12);
+  return order[frame % 16] == phase;
+}
+
+/** Rotation-only reprojection: clouds are far enough that the camera's translation between frames is negligible. */
+fn reprojectedUv(dir: vec3f) -> vec2f {
+  let z = dot(dir, reprojection.forward);
+  if (z <= 1e-3) { return vec2f(-1.0); }
+  let ndc = vec2f(dot(dir, reprojection.right) / (z * reprojection.tanHalfFov * reprojection.aspect), dot(dir, reprojection.up) / (z * reprojection.tanHalfFov));
+  return vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
 @fragment fn fs_main(@builtin(position) fragCoord: vec4f, @location(0) uv: vec2f) -> @location(0) vec4f {
   let p = atmosphere;
   let dir = cameraRay(camera, vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0));
+  if (reprojection.valid > 0.5 && !updatesThisFrame(vec2i(fragCoord.xy), i32(reprojection.frame))) {
+    let previousUv = reprojectedUv(dir);
+    if (all(previousUv >= vec2f(0.0)) && all(previousUv <= vec2f(1.0))) {
+      return textureSampleLevel(history, lutSampler, previousUv, 0.0);
+    }
+  }
   let origin = camera.position;
   let viewHeight = length(origin);
   var range = cloudRange(origin, dir, viewHeight);
@@ -137,7 +172,9 @@ fn cloudRange(origin: vec3f, dir: vec3f, viewHeight: f32) -> MarchRange {
   let groundSunCos = max(p.sunDirection.y, 0.0);
   let groundBounce = 0.15 * p.sunIlluminance * sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius, p.sunDirection.y) * groundSunCos / PI;
 
-  let fineStep = max(0.02, (range.end - range.start) / f32(MARCH_STEPS));
+  // Rays near the horizon cross far more cloud than rays near the zenith, so the step budget follows the elevation.
+  let stepBudget = mix(f32(MARCH_STEPS), MIN_MARCH_STEPS, abs(dir.y));
+  let fineStep = max(0.02, (range.end - range.start) / stepBudget);
   let coarseStep = fineStep * 2.0;
   var t = range.start + fineStep * pixelJitter(fragCoord.xy);
   var transmittance = 1.0;
@@ -146,7 +183,7 @@ fn cloudRange(origin: vec3f, dir: vec3f, viewHeight: f32) -> MarchRange {
   var emptySamples = 0;
   var coarse = false;
   for (var i = 0; i < MARCH_STEPS; i += 1) {
-    if (t >= range.end || transmittance < 0.01) { break; }
+    if (t >= range.end || transmittance < 0.01 || f32(i) >= stepBudget) { break; }
     let position = origin + dir * t;
     let sampleDensity = density(position, false);
     if (sampleDensity <= 0.0) {

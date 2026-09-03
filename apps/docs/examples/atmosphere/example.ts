@@ -1,4 +1,4 @@
-import type { Compute, Effect, Frame, Gpu, SharedUniforms, Surface, Target, Texture } from 'vgpu';
+import type { Compute, Effect, Frame, Gpu, PingPongTargets, SharedUniforms, Surface, Target, Texture } from 'vgpu';
 import { cameraUniforms, sunDirection, type CameraUniformValues } from './camera';
 import { ATMOSPHERE_PHYSICS, CLOUD_TUNING, DEFAULT_PRESET, LUT_SIZES, PRESETS, TONEMAPS, type AtmosphereState } from './tuning';
 import transmittanceLutWgsl from './transmittance-lut.wgsl';
@@ -28,6 +28,13 @@ type AtmosphereUniformValues = {
   sunDirection: Vec3; atmosphereRadius: number;
 }
 
+type ReprojectionUniformValues = {
+  forward: Vec3; frame: number;
+  right: Vec3; tanHalfFov: number;
+  up: Vec3; aspect: number;
+  valid: number; pad0: number; pad1: number; pad2: number;
+};
+
 type CloudUniformValues = {
   bottom: number; top: number; coverage: number; density: number;
   shapeScale: number; detailScale: number; weatherScale: number; wind: number;
@@ -42,7 +49,9 @@ export interface AtmosphereGraph {
   readonly detailNoise: Texture;
   readonly weatherMap: Texture;
   readonly terrainMap: Texture;
-  readonly cloudsTarget: Target;
+  /** Ping-pong cloud buffers: `write` receives this frame, `read` is last frame's history for reprojection. */
+  readonly cloudsTargets: PingPongTargets;
+  readonly reprojection: SharedUniforms<ReprojectionUniformValues>;
   readonly transmittance: Target;
   readonly multiScatter: Texture;
   readonly skyView: Target;
@@ -60,7 +69,13 @@ export interface AtmosphereGraph {
   /** stale: medium changed; transmittance: transmittance pass encoded, multi-scatter dispatch pending; ready: both tables valid. */
   lutPhase: 'stale' | 'transmittance' | 'ready';
   bakedHaze: number;
+  frame: number;
+  currentCamera?: CameraUniformValues;
+  previousCamera?: CameraUniformValues;
 }
+
+/** Frames needed for every cloud texel to be re-marched at least once. */
+export const CLOUD_CONVERGENCE_FRAMES = 16;
 
 interface ThumbOptions {
   time?: number;
@@ -149,7 +164,9 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const skyView = gpu.target({ size: LUT_SIZES.skyView, format: HDR_FORMAT, label: `${label}-sky-view` });
   const aerial = gpu.texture({ size: [LUT_SIZES.aerial, LUT_SIZES.aerial, LUT_SIZES.aerial], format: HDR_FORMAT, dimension: '3d', label: `${label}-aerial` });
   const scene = gpu.target({ size: output.size, format: HDR_FORMAT, label: `${label}-scene` });
-  const cloudsTarget = gpu.target({ size: cloudSizeFor(output.size), format: HDR_FORMAT, label: `${label}-clouds` });
+  const cloudSize = cloudSizeFor(output.size);
+  const cloudsTargets = gpu.pingPong(cloudSize[0], cloudSize[1], { format: HDR_FORMAT, label: `${label}-clouds` });
+  const reprojection = gpu.uniforms<ReprojectionUniformValues>(reprojectionUniforms(undefined, 0));
   const noise = CLOUD_TUNING.noise;
   const shapeNoise = gpu.texture({ size: [noise.shape, noise.shape, noise.shape], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-shape` });
   const detailNoise = gpu.texture({ size: [noise.detail, noise.detail, noise.detail], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-detail` });
@@ -163,9 +180,9 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const sceneEffect = gpu.effect(sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap } });
   const cloudsEffect = gpu.effect(cloudsWgsl, { label: `${label}-clouds`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial,
-    shapeNoise, detailNoise, weatherMap, sceneHdr: scene, lutSampler: sampler, noiseSampler,
+    shapeNoise, detailNoise, weatherMap, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, reprojection,
   } });
-  const presentEffect = gpu.effect(presentWgsl, { label: `${label}-present`, set: { present: { exposure: 1, tonemap: 0, dither: 1, pad: 0 }, sceneHdr: scene, cloudsHdr: cloudsTarget, linearSampler: sampler } });
+  const presentEffect = gpu.effect(presentWgsl, { label: `${label}-present`, set: { present: { exposure: 1, tonemap: 0, dither: 1, pad: 0 }, sceneHdr: scene, cloudsHdr: cloudsTargets.write, linearSampler: sampler } });
   // Cloud noise and weather are static: generate them once with compute into storage textures.
   gpu.compute(cloudShapeNoiseWgsl, { label: `${label}-cloud-shape-noise`, set: { shapeNoise } }).dispatch(noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP);
   gpu.compute(cloudDetailNoiseWgsl, { label: `${label}-cloud-detail-noise`, set: { detailNoise } }).dispatch(noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP);
@@ -175,15 +192,15 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const lutPreview = gpu.effect(lutPreviewWgsl, { label: `${label}-lut-preview` });
 
   const graph: AtmosphereGraph = {
-    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, terrainMap, cloudsTarget, transmittance, multiScatter, skyView, aerial, scene,
+    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, terrainMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, scene,
     transmittanceEffect, multiScatterCompute, skyViewEffect, aerialCompute, sceneEffect, cloudsEffect, presentEffect, lutPreview, sampler,
-    lutPhase: 'stale', bakedHaze: 1,
+    lutPhase: 'stale', bakedHaze: 1, frame: 0,
   };
   await Promise.all([
     transmittanceEffect.compile(transmittance),
     skyViewEffect.compile(skyView),
     sceneEffect.compile(scene),
-    cloudsEffect.compile(cloudsTarget),
+    cloudsEffect.compile(cloudsTargets.write),
     presentEffect.compile({ colors: [output.format] }),
   ]);
   return graph;
@@ -215,6 +232,7 @@ export function applyState(graph: AtmosphereGraph, state: AtmosphereState, size:
   });
   graph.camera.set(cameraUniforms(state, size));
   graph.clouds.set(cloudUniforms(state));
+  graph.currentCamera = cameraUniforms(state, size);
   graph.presentEffect.set({ present: { exposure: 2 ** state.exposureEv, tonemap: TONEMAPS.indexOf(state.tonemap), dither: 1, pad: 0 } });
   // The medium changed, so the baked transmittance and multi-scattering tables are stale.
   if (graph.bakedHaze !== haze) graph.lutPhase = 'stale';
@@ -232,19 +250,40 @@ export function renderGraph(frame: Frame, graph: AtmosphereGraph, output: Output
   if (graph.lutPhase === 'stale') encodeTransmittance(frame, graph);
   frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect));
   frame.pass({ target: graph.scene, clear: CLEAR }, (pass) => pass.draw(graph.sceneEffect));
-  frame.pass({ target: graph.cloudsTarget, clear: [0, 0, 0, 1] }, (pass) => pass.draw(graph.cloudsEffect));
+  // Sixteenth-rate cloud update: this frame's texels are marched, the rest are reprojected from last frame's buffer.
+  graph.reprojection.set(reprojectionUniforms(graph.previousCamera, graph.frame));
+  graph.cloudsEffect.set({ history: graph.cloudsTargets.read });
+  graph.presentEffect.set({ cloudsHdr: graph.cloudsTargets.write });
+  frame.pass({ target: graph.cloudsTargets.write, clear: [0, 0, 0, 1] }, (pass) => pass.draw(graph.cloudsEffect));
   frame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(graph.presentEffect));
+  graph.cloudsTargets.swap();
+  graph.previousCamera = graph.currentCamera;
+  graph.frame += 1;
 }
 
+/** Stills render enough frames for the temporal cloud update to touch every texel. */
 function renderState(gpu: Gpu, graph: AtmosphereGraph, output: Target, state: AtmosphereState): void {
   applyState(graph, state, output.size);
   if (graph.lutPhase !== 'ready') bakeLuts(gpu, graph);
-  gpu.frame((frame) => renderGraph(frame, graph, output));
+  for (let i = 0; i < CLOUD_CONVERGENCE_FRAMES; i++) gpu.frame((frame) => renderGraph(frame, graph, output));
+}
+
+function reprojectionUniforms(previous: CameraUniformValues | undefined, frame: number): ReprojectionUniformValues {
+  return {
+    forward: previous?.forward ?? [0, 0, 1], frame,
+    right: previous?.right ?? [1, 0, 0], tanHalfFov: previous?.tanHalfFov ?? 1,
+    up: previous?.up ?? [0, 1, 0], aspect: previous?.aspect ?? 1,
+    valid: previous ? 1 : 0, pad0: 0, pad1: 0, pad2: 0,
+  };
 }
 
 function resizeGraph(graph: AtmosphereGraph, size: readonly [number, number]): void {
   graph.scene.resize(size);
-  graph.cloudsTarget.resize(cloudSizeFor(size));
+  const cloudSize = cloudSizeFor(size);
+  graph.cloudsTargets.read.resize(cloudSize);
+  graph.cloudsTargets.write.resize(cloudSize);
+  // The history no longer matches the new size; re-march every texel on the next frame.
+  graph.previousCamera = undefined;
 }
 
 function cloudSizeFor(size: readonly [number, number]): readonly [number, number] {
@@ -262,6 +301,6 @@ function cloudUniforms(state: AtmosphereState): CloudUniformValues {
 function scale(v: Vec3, factor: number): Vec3 { return [v[0] * factor, v[1] * factor, v[2] * factor]; }
 
 function destroyGraph(graph: AtmosphereGraph): void {
-  for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.cloudsTarget]) target.color.destroy();
+  for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.cloudsTargets.read, graph.cloudsTargets.write]) target.color.destroy();
   for (const texture of [graph.multiScatter, graph.aerial, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.terrainMap]) texture.destroy();
 }
