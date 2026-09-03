@@ -19,6 +19,12 @@ export interface AtmosphereState {
   haze: number;
   /** Global cloud coverage in [0, 1]; 0 disables the cloud pass. */
   cloudCoverage: number;
+  /** Edge detail strength: 0 is smooth billows, 1 is the default erosion and curl, 1.5 is very wispy. */
+  cloudDetail: number;
+  /** Cloud type bias: -1 pushes everything toward flat stratus, +1 toward tall cumulus. */
+  cloudType: number;
+  /** Weather seed: any value picks a different patch of the tileable weather map. */
+  cloudSeed: number;
   /** Scene time in seconds; drives the wind that advects the clouds. */
   time: number;
   tonemap: Tonemap;
@@ -54,7 +60,7 @@ export const LUT_SIZES = {
 
 export const CAMERA_TUNING = { fovDegrees: 60, maxAltitudeKm: 80 } as const;
 
-/** Cloud layer (km) and noise scales; the cloud pass renders at 1/renderScale of the output. */
+/** Cloud layer (km) and noise scales; the cloud pass renders at 1/renderScale of the output (full resolution is affordable with the temporal update). */
 export const CLOUD_TUNING = {
   bottom: 1.6,
   top: 4.2,
@@ -63,17 +69,21 @@ export const CLOUD_TUNING = {
   detailScale: 1.1,
   weatherScale: 80,
   detailStrength: 1.0,
+  /** Curl distortion of the detail lookup, km. */
+  curlStrength: 0.25,
+  /** Past this distance (km) the erosion and curl are skipped: their features are sub-pixel anyway. */
+  detailLodDistance: 16,
   windSpeed: 0.03,
-  renderScale: 2,
+  renderScale: 1,
   noise: { shape: 128, detail: 32, weather: 1024 },
 } as const;
 
 export const PRESETS = {
-  'golden-hour': { sunElevation: 4, sunAzimuth: 58, altitudeKm: 0.08, yaw: 40, pitch: 9, exposureEv: 5, haze: 2, cloudCoverage: 0.65, time: 0, tonemap: 'agx' },
-  noon: { sunElevation: 62, sunAzimuth: 40, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 3, haze: 2, cloudCoverage: 0.45, time: 0, tonemap: 'agx' },
-  twilight: { sunElevation: -4, sunAzimuth: 10, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 8, haze: 2, cloudCoverage: 0.35, time: 0, tonemap: 'agx' },
-  'high-altitude': { sunElevation: 18, sunAzimuth: 35, altitudeKm: 10, yaw: 0, pitch: -4, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, time: 0, tonemap: 'agx' },
-  stratosphere: { sunElevation: 25, sunAzimuth: 60, altitudeKm: 35, yaw: 0, pitch: -8, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, time: 0, tonemap: 'agx' },
+  'golden-hour': { sunElevation: 4, sunAzimuth: 58, altitudeKm: 0.08, yaw: 40, pitch: 9, exposureEv: 5, haze: 2, cloudCoverage: 0.65, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
+  noon: { sunElevation: 62, sunAzimuth: 40, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 3, haze: 2, cloudCoverage: 0.45, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
+  twilight: { sunElevation: -4, sunAzimuth: 10, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 8, haze: 2, cloudCoverage: 0.35, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
+  'high-altitude': { sunElevation: 18, sunAzimuth: 35, altitudeKm: 10, yaw: 0, pitch: -4, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
+  stratosphere: { sunElevation: 25, sunAzimuth: 60, altitudeKm: 35, yaw: 0, pitch: -8, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
 } as const satisfies Record<string, AtmosphereState>;
 
 export type PresetName = keyof typeof PRESETS;

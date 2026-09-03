@@ -13,6 +13,7 @@ import cloudDetailNoiseWgsl from './cloud-detail-noise.wgsl';
 import weatherMapWgsl from './weather-map.wgsl';
 import cloudsWgsl from './clouds.wgsl';
 import terrainHeightmapWgsl from './terrain-heightmap.wgsl';
+import curlNoiseWgsl from './curl-noise.wgsl';
 
 type Output = Surface | Target;
 type Vec3 = readonly [number, number, number];
@@ -32,13 +33,14 @@ type ReprojectionUniformValues = {
   forward: Vec3; frame: number;
   right: Vec3; tanHalfFov: number;
   up: Vec3; aspect: number;
-  valid: number; pad0: number; pad1: number; pad2: number;
+  valid: number; blend: number; jitter: readonly [number, number];
 };
 
 type CloudUniformValues = {
   bottom: number; top: number; coverage: number; density: number;
   shapeScale: number; detailScale: number; weatherScale: number; wind: number;
-  detailStrength: number; groundRadius: number; pad0: number; pad1: number;
+  detailStrength: number; groundRadius: number; curlStrength: number; detailLodDistance: number;
+  typeBias: number; seed: number; pad0: number; pad1: number;
 };
 
 export interface AtmosphereGraph {
@@ -48,6 +50,7 @@ export interface AtmosphereGraph {
   readonly shapeNoise: Texture;
   readonly detailNoise: Texture;
   readonly weatherMap: Texture;
+  readonly curlNoise: Texture;
   readonly terrainMap: Texture;
   /** Ping-pong cloud buffers: `write` receives this frame, `read` is last frame's history for reprojection. */
   readonly cloudsTargets: PingPongTargets;
@@ -70,6 +73,8 @@ export interface AtmosphereGraph {
   lutPhase: 'stale' | 'transmittance' | 'ready';
   bakedHaze: number;
   frame: number;
+  /** Live rendering blends re-marched cloud texels into their jittered history; stills keep it off to stay deterministic. */
+  accumulate: boolean;
   currentCamera?: CameraUniformValues;
   previousCamera?: CameraUniformValues;
 }
@@ -89,6 +94,8 @@ const NOISE_WORKGROUP = 4;
 const WEATHER_WORKGROUP = 8;
 /** Keep in sync with TERRAIN_MAP_SIZE in terrain.wgsl. */
 const TERRAIN_MAP_SIZE = 2048;
+/** Keep in sync with SIZE in curl-noise.wgsl. */
+const CURL_SIZE = 128;
 
 export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   const { init } = await import('vgpu');
@@ -96,6 +103,7 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   const gpu = await init();
   const surface = gpu.surface(canvas, { dpr: [1, 1.5] });
   const graph = await createGraph(gpu, surface, 'atmosphere-live');
+  graph.accumulate = true;
   const controls = installControls(canvas, { ...PRESETS[DEFAULT_PRESET] });
   let disposed = false;
   let sawInitialResize = false;
@@ -166,12 +174,13 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const scene = gpu.target({ size: output.size, format: HDR_FORMAT, label: `${label}-scene` });
   const cloudSize = cloudSizeFor(output.size);
   const cloudsTargets = gpu.pingPong(cloudSize[0], cloudSize[1], { format: HDR_FORMAT, label: `${label}-clouds` });
-  const reprojection = gpu.uniforms<ReprojectionUniformValues>(reprojectionUniforms(undefined, 0));
+  const reprojection = gpu.uniforms<ReprojectionUniformValues>(reprojectionUniforms(undefined, 0, false));
   const noise = CLOUD_TUNING.noise;
   const shapeNoise = gpu.texture({ size: [noise.shape, noise.shape, noise.shape], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-shape` });
   const detailNoise = gpu.texture({ size: [noise.detail, noise.detail, noise.detail], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-detail` });
   const weatherMap = gpu.texture({ size: [noise.weather, noise.weather], format: 'rgba8unorm', label: `${label}-weather` });
   const terrainMap = gpu.texture({ size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: HDR_FORMAT, label: `${label}-terrain` });
+  const curlNoise = gpu.texture({ size: [CURL_SIZE, CURL_SIZE], format: 'rgba8unorm', label: `${label}-curl` });
 
   const transmittanceEffect = gpu.effect(transmittanceLutWgsl, { label: `${label}-transmittance`, set: { atmosphere } });
   const multiScatterCompute = gpu.compute(multiScatterLutWgsl, { label: `${label}-multiscatter`, set: { atmosphere, transmittanceLut: transmittance, lutSampler: sampler, multiScatterLut: multiScatter } });
@@ -180,21 +189,22 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const sceneEffect = gpu.effect(sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap } });
   const cloudsEffect = gpu.effect(cloudsWgsl, { label: `${label}-clouds`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial,
-    shapeNoise, detailNoise, weatherMap, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, reprojection,
+    shapeNoise, detailNoise, weatherMap, curlNoise, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, reprojection,
   } });
   const presentEffect = gpu.effect(presentWgsl, { label: `${label}-present`, set: { present: { exposure: 1, tonemap: 0, dither: 1, pad: 0 }, sceneHdr: scene, cloudsHdr: cloudsTargets.write, linearSampler: sampler } });
   // Cloud noise and weather are static: generate them once with compute into storage textures.
   gpu.compute(cloudShapeNoiseWgsl, { label: `${label}-cloud-shape-noise`, set: { shapeNoise } }).dispatch(noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP);
   gpu.compute(cloudDetailNoiseWgsl, { label: `${label}-cloud-detail-noise`, set: { detailNoise } }).dispatch(noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP);
   gpu.compute(weatherMapWgsl, { label: `${label}-weather-map`, set: { weatherMap } }).dispatch(noise.weather / WEATHER_WORKGROUP, noise.weather / WEATHER_WORKGROUP, 1);
+  gpu.compute(curlNoiseWgsl, { label: `${label}-curl-noise`, set: { curlNoise } }).dispatch(CURL_SIZE / WEATHER_WORKGROUP, CURL_SIZE / WEATHER_WORKGROUP, 1);
   // The heightfield is baked once too: the terrain march then costs one texture tap per step instead of a 6-octave fbm.
   gpu.compute(terrainHeightmapWgsl, { label: `${label}-terrain-heightmap`, set: { terrainMap } }).dispatch(TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, 1);
   const lutPreview = gpu.effect(lutPreviewWgsl, { label: `${label}-lut-preview` });
 
   const graph: AtmosphereGraph = {
-    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, terrainMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, scene,
+    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, curlNoise, terrainMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, scene,
     transmittanceEffect, multiScatterCompute, skyViewEffect, aerialCompute, sceneEffect, cloudsEffect, presentEffect, lutPreview, sampler,
-    lutPhase: 'stale', bakedHaze: 1, frame: 0,
+    lutPhase: 'stale', bakedHaze: 1, frame: 0, accumulate: false,
   };
   await Promise.all([
     transmittanceEffect.compile(transmittance),
@@ -251,7 +261,7 @@ export function renderGraph(frame: Frame, graph: AtmosphereGraph, output: Output
   frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect));
   frame.pass({ target: graph.scene, clear: CLEAR }, (pass) => pass.draw(graph.sceneEffect));
   // Sixteenth-rate cloud update: this frame's texels are marched, the rest are reprojected from last frame's buffer.
-  graph.reprojection.set(reprojectionUniforms(graph.previousCamera, graph.frame));
+  graph.reprojection.set(reprojectionUniforms(graph.previousCamera, graph.frame, graph.accumulate));
   graph.cloudsEffect.set({ history: graph.cloudsTargets.read });
   graph.presentEffect.set({ cloudsHdr: graph.cloudsTargets.write });
   frame.pass({ target: graph.cloudsTargets.write, clear: [0, 0, 0, 1] }, (pass) => pass.draw(graph.cloudsEffect));
@@ -268,12 +278,16 @@ function renderState(gpu: Gpu, graph: AtmosphereGraph, output: Target, state: At
   for (let i = 0; i < CLOUD_CONVERGENCE_FRAMES; i++) gpu.frame((frame) => renderGraph(frame, graph, output));
 }
 
-function reprojectionUniforms(previous: CameraUniformValues | undefined, frame: number): ReprojectionUniformValues {
+/** 4x4 Bayer sequence, centred: the sub-texel offsets a texel cycles through while accumulating. */
+const JITTER_SEQUENCE: readonly (readonly [number, number])[] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
+  .map((index) => [((index % 4) + 0.5) / 4 - 0.5, (Math.floor(index / 4) + 0.5) / 4 - 0.5] as const);
+
+function reprojectionUniforms(previous: CameraUniformValues | undefined, frame: number, accumulate: boolean): ReprojectionUniformValues {
   return {
     forward: previous?.forward ?? [0, 0, 1], frame,
     right: previous?.right ?? [1, 0, 0], tanHalfFov: previous?.tanHalfFov ?? 1,
     up: previous?.up ?? [0, 1, 0], aspect: previous?.aspect ?? 1,
-    valid: previous ? 1 : 0, pad0: 0, pad1: 0, pad2: 0,
+    valid: previous ? 1 : 0, blend: accumulate ? 0.5 : 1, jitter: accumulate ? JITTER_SEQUENCE[Math.floor(frame / 16) % 16]! : [0, 0],
   };
 }
 
@@ -294,7 +308,9 @@ function cloudUniforms(state: AtmosphereState): CloudUniformValues {
   return {
     bottom: CLOUD_TUNING.bottom, top: CLOUD_TUNING.top, coverage: Math.min(1, Math.max(0, state.cloudCoverage)), density: CLOUD_TUNING.density,
     shapeScale: CLOUD_TUNING.shapeScale, detailScale: CLOUD_TUNING.detailScale, weatherScale: CLOUD_TUNING.weatherScale, wind: state.time * CLOUD_TUNING.windSpeed,
-    detailStrength: CLOUD_TUNING.detailStrength, groundRadius: ATMOSPHERE_PHYSICS.groundRadius, pad0: 0, pad1: 0,
+    detailStrength: CLOUD_TUNING.detailStrength * Math.max(0, state.cloudDetail), groundRadius: ATMOSPHERE_PHYSICS.groundRadius,
+    curlStrength: CLOUD_TUNING.curlStrength * Math.max(0, state.cloudDetail), detailLodDistance: CLOUD_TUNING.detailLodDistance,
+    typeBias: state.cloudType * 0.5, seed: state.cloudSeed, pad0: 0, pad1: 0,
   };
 }
 
@@ -302,5 +318,5 @@ function scale(v: Vec3, factor: number): Vec3 { return [v[0] * factor, v[1] * fa
 
 function destroyGraph(graph: AtmosphereGraph): void {
   for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.cloudsTargets.read, graph.cloudsTargets.write]) target.color.destroy();
-  for (const texture of [graph.multiScatter, graph.aerial, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.terrainMap]) texture.destroy();
+  for (const texture of [graph.multiScatter, graph.aerial, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.curlNoise, graph.terrainMap]) texture.destroy();
 }

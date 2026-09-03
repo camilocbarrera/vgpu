@@ -15,17 +15,24 @@ import { Clouds, cloudDensity, heightFraction } from "./clouds-common.wgsl";
 @group(0) @binding(11) var noiseSampler: sampler;
 @group(0) @binding(12) var history: texture_2d<f32>;
 @group(0) @binding(13) var<uniform> reprojection: Reprojection;
+@group(0) @binding(14) var curlNoise: texture_2d<f32>;
 
-/** Previous frame's camera basis: one texel in sixteen is re-marched per frame, the rest reproject from `history`. */
+/**
+ * Previous frame's camera basis: one texel in sixteen is re-marched per frame, the rest reproject from `history`.
+ * `blend` < 1 accumulates each re-marched texel into its reprojected history with a sub-texel `jitter`,
+ * which supersamples the edges over time; stills use blend 1 and no jitter so they stay deterministic.
+ */
 struct Reprojection {
   forward: vec3f, frame: f32,
   right: vec3f, tanHalfFov: f32,
   up: vec3f, aspect: f32,
-  valid: f32, pad0: f32, pad1: f32, pad2: f32,
+  valid: f32, blend: f32, jitter: vec2f,
 };
 
-const MARCH_STEPS: i32 = 128;
-const MIN_MARCH_STEPS: f32 = 64.0;
+const MARCH_STEPS: i32 = 160;
+const MIN_MARCH_STEPS: f32 = 80.0;
+/** Densities below this are treated as the cloud surface and marched with half steps. */
+const EDGE_DENSITY: f32 = 0.12;
 const LIGHT_STEPS: i32 = 6;
 const MAX_MARCH_DISTANCE: f32 = 70.0;
 /** Extinction per unit density, 1/km (cumulus, ~0.03/m). */
@@ -67,9 +74,9 @@ fn pixelJitter(p: vec2f) -> f32 {
   return f32((v.x >> 8u) & 0xffffffu) / 16777215.0;
 }
 
-fn density(position: vec3f, cheap: bool) -> f32 {
+fn density(position: vec3f, viewDistance: f32, cheap: bool) -> f32 {
   let altitude = length(position) - atmosphere.groundRadius;
-  return cloudDensity(clouds, shapeNoise, detailNoise, weatherMap, noiseSampler, position, altitude, cheap);
+  return cloudDensity(clouds, shapeNoise, detailNoise, weatherMap, curlNoise, noiseSampler, position, altitude, viewDistance, cheap);
 }
 
 /** Optical depth toward the sun with doubling steps (20 m to 640 m); cheap samples skip erosion, so they are scaled down. */
@@ -79,7 +86,7 @@ fn lightOpticalDepth(position: vec3f, sunDir: vec3f) -> f32 {
   var step = 0.02;
   for (var i = 0; i < LIGHT_STEPS; i += 1) {
     t += step * 0.5;
-    depth += density(position + sunDir * t, true) * step;
+    depth += density(position + sunDir * t, 0.0, true) * step;
     t += step * 0.5;
     step *= 2.0;
   }
@@ -152,13 +159,23 @@ fn reprojectedUv(dir: vec3f) -> vec2f {
 
 @fragment fn fs_main(@builtin(position) fragCoord: vec4f, @location(0) uv: vec2f) -> @location(0) vec4f {
   let p = atmosphere;
-  let dir = cameraRay(camera, vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0));
-  if (reprojection.valid > 0.5 && !updatesThisFrame(vec2i(fragCoord.xy), i32(reprojection.frame))) {
-    let previousUv = reprojectedUv(dir);
-    if (all(previousUv >= vec2f(0.0)) && all(previousUv <= vec2f(1.0))) {
-      return textureSampleLevel(history, lutSampler, previousUv, 0.0);
-    }
+  let unjitteredDir = cameraRay(camera, vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0));
+  let previousUv = reprojectedUv(unjitteredDir);
+  let historyValid = reprojection.valid > 0.5 && all(previousUv >= vec2f(0.0)) && all(previousUv <= vec2f(1.0));
+  if (historyValid && !updatesThisFrame(vec2i(fragCoord.xy), i32(reprojection.frame))) {
+    return textureSampleLevel(history, lutSampler, previousUv, 0.0);
   }
+  // Sub-texel jitter only matters when the result is blended into the history.
+  let jitteredUv = uv + reprojection.jitter / vec2f(textureDimensions(history));
+  let dir = cameraRay(camera, vec2f(jitteredUv.x * 2.0 - 1.0, 1.0 - jitteredUv.y * 2.0));
+  let fresh = marchClouds(p, dir, fragCoord.xy, uv);
+  if (historyValid && reprojection.blend < 1.0) {
+    return mix(textureSampleLevel(history, lutSampler, previousUv, 0.0), fresh, reprojection.blend);
+  }
+  return fresh;
+}
+
+fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f {
   let origin = camera.position;
   let viewHeight = length(origin);
   var range = cloudRange(origin, dir, viewHeight);
@@ -176,7 +193,7 @@ fn reprojectedUv(dir: vec3f) -> vec2f {
   let stepBudget = mix(f32(MARCH_STEPS), MIN_MARCH_STEPS, abs(dir.y));
   let fineStep = max(0.02, (range.end - range.start) / stepBudget);
   let coarseStep = fineStep * 2.0;
-  var t = range.start + fineStep * pixelJitter(fragCoord.xy);
+  var t = range.start + fineStep * pixelJitter(fragCoord);
   var transmittance = 1.0;
   var luminance = vec3f(0.0);
   var depthSum = 0.0;
@@ -185,7 +202,7 @@ fn reprojectedUv(dir: vec3f) -> vec2f {
   for (var i = 0; i < MARCH_STEPS; i += 1) {
     if (t >= range.end || transmittance < 0.01 || f32(i) >= stepBudget) { break; }
     let position = origin + dir * t;
-    let sampleDensity = density(position, false);
+    let sampleDensity = density(position, t, false);
     if (sampleDensity <= 0.0) {
       emptySamples += 1;
       // After a few empty fine samples switch to coarse stepping; the pull-back below restores precision.
@@ -201,6 +218,8 @@ fn reprojectedUv(dir: vec3f) -> vec2f {
       continue;
     }
     emptySamples = 0;
+    // Thin samples are the cloud's visible surface: halve the step there so the eroded detail resolves.
+    let step = select(fineStep, fineStep * 0.5, sampleDensity < EDGE_DENSITY);
     let altitude = length(position) - p.groundRadius;
     let hf = heightFraction(clouds, altitude);
     let up = position / length(position);
@@ -213,12 +232,12 @@ fn reprojectedUv(dir: vec3f) -> vec2f {
     let ambient = skyAmbient * mix(0.18, 0.75, hf) + groundBounce * (1.0 - hf) * 0.5;
     let extinction = EXTINCTION * sampleDensity;
     let scattered = ALBEDO * extinction * (p.sunIlluminance * sunTransmittance * sunScatter + ambient);
-    let stepTransmittance = exp(-extinction * fineStep);
+    let stepTransmittance = exp(-extinction * step);
     let integrated = (scattered - scattered * stepTransmittance) / extinction;
     luminance += transmittance * integrated;
     depthSum += t * transmittance * (1.0 - stepTransmittance);
     transmittance *= stepTransmittance;
-    t += fineStep;
+    t += step;
   }
 
   let opacity = 1.0 - transmittance;

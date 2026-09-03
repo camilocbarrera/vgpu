@@ -1,6 +1,6 @@
 // Headless renders of the atmosphere example for visual verification.
-//   node scripts/render-atmosphere.mjs [--out dir] [--preset name|all] [--size WxH] [--debug transmittance|multiscatter|sky-view|weather] [--bench N]
-//   overrides: --sun <deg> --azimuth <deg> --altitude <km> --yaw <deg> --pitch <deg> --ev <stops> --haze <x> --coverage <0..1> --time <s> --tonemap agx|aces|neutral|none
+//   node scripts/render-atmosphere.mjs [--out dir] [--preset name|all] [--size WxH] [--debug transmittance|multiscatter|sky-view|weather|terrain] [--bench N] [--accumulate N]
+//   overrides: --sun <deg> --azimuth <deg> --altitude <km> --yaw <deg> --pitch <deg> --ev <stops> --haze <x> --coverage <0..1> --detail <x> --type <-1..1> --seed <n> --time <s> --tonemap agx|aces|neutral|none
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -37,7 +37,8 @@ for (const name of presetNames) {
       continue;
     }
     const started = performance.now();
-    await renderStill(gpu, target, state, args.debug);
+    if (args.accumulate) await renderAccumulated(gpu, target, state, args.accumulate);
+    else await renderStill(gpu, target, state, args.debug);
     const pixels = await target.read();
     const suffix = args.debug ? `.${args.debug}` : '';
     const file = path.join(outDir, `${name}${suffix}.png`);
@@ -46,6 +47,16 @@ for (const name of presetNames) {
   } finally {
     gpu.dispose();
   }
+}
+
+/** Live-loop path: history accumulation with jitter over `frames` frames, as the browser example renders it. */
+async function renderAccumulated(gpu, target, state, frames) {
+  const graph = await createGraph(gpu, target, 'atmosphere-accumulate');
+  graph.accumulate = true;
+  applyState(graph, state, target.size);
+  bakeLuts(gpu, graph);
+  for (let i = 0; i < frames; i++) gpu.frame((frame) => renderGraph(frame, graph, target));
+  await gpu.gpu.queue.onSubmittedWorkDone();
 }
 
 /** Wall-clock ms per frame over `frames` steady-state frames on one graph (first frame bakes and warms up). */
@@ -92,8 +103,8 @@ function describe(pixels, [width, height]) {
 }
 
 function parseArgs(argv) {
-  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, bench: 0, overrides: {} };
-  const numeric = { sun: 'sunElevation', azimuth: 'sunAzimuth', altitude: 'altitudeKm', yaw: 'yaw', pitch: 'pitch', ev: 'exposureEv', haze: 'haze', coverage: 'cloudCoverage', time: 'time' };
+  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, bench: 0, accumulate: 0, overrides: {} };
+  const numeric = { sun: 'sunElevation', azimuth: 'sunAzimuth', altitude: 'altitudeKm', yaw: 'yaw', pitch: 'pitch', ev: 'exposureEv', haze: 'haze', coverage: 'cloudCoverage', detail: 'cloudDetail', type: 'cloudType', seed: 'cloudSeed', time: 'time' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--out') parsed.out = argv[++i];
@@ -101,6 +112,7 @@ function parseArgs(argv) {
     else if (arg === '--size') parsed.size = argv[++i].split('x').map(Number);
     else if (arg === '--debug') parsed.debug = argv[++i];
     else if (arg === '--bench') parsed.bench = Number(argv[++i]);
+    else if (arg === '--accumulate') parsed.accumulate = Number(argv[++i]);
     else if (arg === '--tonemap') parsed.overrides.tonemap = argv[++i];
     else if (arg.startsWith('--') && numeric[arg.slice(2)]) parsed.overrides[numeric[arg.slice(2)]] = Number(argv[++i]);
     else throw new Error(`Unknown argument '${arg}'.`);

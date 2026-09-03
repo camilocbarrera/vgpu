@@ -6,7 +6,7 @@ export interface AtmosphereControls {
   dispose(): void;
 }
 
-interface SliderDef { key: 'sunElevation' | 'sunAzimuth' | 'altitudeKm' | 'exposureEv' | 'haze' | 'cloudCoverage'; label: string; min: number; max: number; step: number; format: (value: number) => string; log?: boolean }
+interface SliderDef { key: 'sunElevation' | 'sunAzimuth' | 'altitudeKm' | 'exposureEv' | 'haze' | 'cloudCoverage' | 'cloudDetail' | 'cloudType' | 'cloudSeed'; label: string; min: number; max: number; step: number; format: (value: number) => string; log?: boolean }
 
 const SLIDERS: readonly SliderDef[] = [
   { key: 'sunElevation', label: 'Sun elevation', min: -12, max: 90, step: 0.1, format: (v) => `${v.toFixed(1)}°` },
@@ -15,6 +15,9 @@ const SLIDERS: readonly SliderDef[] = [
   { key: 'exposureEv', label: 'Exposure', min: -2, max: 12, step: 0.1, format: (v) => `${v.toFixed(1)} EV` },
   { key: 'haze', label: 'Haze', min: 0.25, max: 8, step: 0.01, log: true, format: (v) => `${v.toFixed(2)}×` },
   { key: 'cloudCoverage', label: 'Cloud coverage', min: 0, max: 1, step: 0.01, format: (v) => `${(v * 100).toFixed(0)}%` },
+  { key: 'cloudDetail', label: 'Cloud detail', min: 0, max: 1.5, step: 0.01, format: (v) => `${v.toFixed(2)}×` },
+  { key: 'cloudType', label: 'Cloud type', min: -1, max: 1, step: 0.01, format: (v) => (v < -0.33 ? 'stratus' : v > 0.33 ? 'cumulus' : 'mixed') },
+  { key: 'cloudSeed', label: 'Weather seed', min: 0, max: 20, step: 1, format: (v) => `#${v.toFixed(0)}` },
 ];
 
 /** Slider panel plus drag-to-look on the canvas. */

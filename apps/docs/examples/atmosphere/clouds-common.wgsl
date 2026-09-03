@@ -4,7 +4,8 @@ import { remap } from "./noise-common.wgsl";
 export struct Clouds {
   bottom: f32, top: f32, coverage: f32, density: f32,
   shapeScale: f32, detailScale: f32, weatherScale: f32, wind: f32,
-  detailStrength: f32, groundRadius: f32, pad0: f32, pad1: f32,
+  detailStrength: f32, groundRadius: f32, curlStrength: f32, detailLodDistance: f32,
+  typeBias: f32, seed: f32, pad0: f32, pad1: f32,
 };
 
 export fn heightFraction(c: Clouds, altitude: f32) -> f32 {
@@ -12,7 +13,9 @@ export fn heightFraction(c: Clouds, altitude: f32) -> f32 {
 }
 
 export fn sampleWeather(weather: texture_2d<f32>, weatherSampler: sampler, c: Clouds, xz: vec2f) -> vec4f {
-  return textureSampleLevel(weather, weatherSampler, xz / c.weatherScale + vec2f(0.31 + c.wind * 0.004, 0.62 + c.wind * 0.001), 0.0);
+  // The seed walks the tileable weather map so each variation shows a different patch of sky.
+  let seedOffset = vec2f(0.31 + fract(c.seed * 0.173), 0.62 + fract(c.seed * 0.377));
+  return textureSampleLevel(weather, weatherSampler, xz / c.weatherScale + seedOffset + vec2f(c.wind * 0.004, c.wind * 0.001), 0.0);
 }
 
 /** Cumulus grows tall, stratus stays flat; both vanish at the layer bounds. */
@@ -24,11 +27,12 @@ fn heightGradient(hf: f32, cloudType: f32) -> f32 {
 
 /**
  * Cloud density in [0, density]. `position` is planet-centric; xz doubles as the tangent-plane coordinate.
- * `cheap` skips the erosion detail (used by light marches).
+ * `cheap` skips the erosion detail (used by light marches). `viewDistance` from the camera drives the detail
+ * LOD: erosion, the second detail scale and the curl distortion fade out past `detailLodDistance`.
  */
 export fn cloudDensity(
-  c: Clouds, shape: texture_3d<f32>, detail: texture_3d<f32>, weather: texture_2d<f32>, noiseSampler: sampler,
-  position: vec3f, altitude: f32, cheap: bool,
+  c: Clouds, shape: texture_3d<f32>, detail: texture_3d<f32>, weather: texture_2d<f32>, curl: texture_2d<f32>, noiseSampler: sampler,
+  position: vec3f, altitude: f32, viewDistance: f32, cheap: bool,
 ) -> f32 {
   let rawHf = heightFraction(c, altitude);
   if (rawHf <= 0.0 || rawHf >= 1.0) { return 0.0; }
@@ -39,7 +43,7 @@ export fn cloudDensity(
   // amplifies any interpolation creases of the weather texture into vertical streaks.
   let hf = rawHf / mix(0.7, 1.0, w.b);
   if (hf >= 1.0) { return 0.0; }
-  let gradient = heightGradient(hf, w.g);
+  let gradient = heightGradient(hf, saturate(w.g + c.typeBias));
   if (gradient <= 0.0) { return 0.0; }
   // The constant offset just picks a pleasant patch of the tiled noise around the origin.
   let unwarped = vec3f(position.x, altitude, position.z) + vec3f(53.0 + c.wind * 0.02, 0.0, 29.0);
@@ -54,9 +58,18 @@ export fn cloudDensity(
   // A small floor keeps the air between clouds clear instead of a faint fog.
   base = saturate((base - 0.06) / 0.94);
   if (base <= 0.0 || cheap) { return base * c.density; }
-  let d = textureSampleLevel(detail, noiseSampler, p / c.detailScale, 0.0).rgb;
-  let detailFbm = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
-  let modifier = mix(detailFbm, 1.0 - detailFbm, saturate(hf * 8.0)) * 0.35 * c.detailStrength;
+  // Erosion only matters near the surface of the cloud and only while its features are larger than a pixel.
+  let edge = 1.0 - smoothstep(0.3, 0.5, base);
+  let lod = 1.0 - smoothstep(c.detailLodDistance * 0.6, c.detailLodDistance, viewDistance);
+  let detailWeight = edge * lod * c.detailStrength;
+  if (detailWeight <= 0.0) { return base * c.density; }
+  // Curl distortion of the lookup makes the edges wispy; it grows toward the cloud top.
+  let flow = textureSampleLevel(curl, noiseSampler, p.xz / (c.detailScale * 5.0), 0.0).rg * 2.0 - 1.0;
+  let distorted = p + vec3f(flow.x, 0.0, flow.y) * c.curlStrength * (0.3 + 0.7 * hf);
+  let coarse = textureSampleLevel(detail, noiseSampler, distorted / c.detailScale, 0.0).rgb;
+  let fine = textureSampleLevel(detail, noiseSampler, distorted / (c.detailScale * 0.27) + vec3f(0.5), 0.0).rgb;
+  let detailFbm = (coarse.r * 0.625 + coarse.g * 0.25 + coarse.b * 0.125) * 0.7 + (fine.r * 0.625 + fine.g * 0.25 + fine.b * 0.125) * 0.3;
+  let modifier = mix(detailFbm, 1.0 - detailFbm, saturate(hf * 8.0)) * 0.35 * detailWeight;
   return saturate(remap(base, modifier, 1.0, 0.0, 1.0)) * c.density;
 }
 
