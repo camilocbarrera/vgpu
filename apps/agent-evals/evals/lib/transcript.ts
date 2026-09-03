@@ -132,8 +132,20 @@ export function seedDiff(seedDir: string, shippedDir: string, limit = 24_000): s
   // package.json / package-lock.json are excluded because bootstrap's tarball
   // install rewrites them on every run (it saves the vgpu closure as file:
   // dependencies), which would put the same agent-unrelated hunk in front of
-  // every judge. PR.md is graded on its own, not as a diff hunk.
-  const excludes = [...DEFAULT_SKIP_DIRS, "package.json", "package-lock.json", "PR.md", "*.pid", "*.log"].flatMap((pattern) => [
+  // every judge. PR.md is graded on its own, not as a diff hunk. next-env.d.ts
+  // and *.tsbuildinfo are rewritten by Next's own typegen whenever the agent
+  // builds or type-checks; on the first live n3 run that one generated hunk
+  // was the only thing standing between "scope discipline" and a yes.
+  const excludes = [
+    ...DEFAULT_SKIP_DIRS,
+    "package.json",
+    "package-lock.json",
+    "PR.md",
+    "next-env.d.ts",
+    "*.tsbuildinfo",
+    "*.pid",
+    "*.log",
+  ].flatMap((pattern) => [
     "--exclude",
     pattern,
   ]);
