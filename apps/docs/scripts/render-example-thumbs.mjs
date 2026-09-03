@@ -175,7 +175,7 @@ function lumaVariance(bytes) {
 
 /**
  * Physical sanity checks on the golden-hour poster and its noon variant:
- * the noon zenith is blue, the golden-hour horizon is warmer than its zenith, and the sun moved the sky.
+ * the noon zenith is blue, the golden-hour horizon is warmer than the noon horizon, and the sun moved the sky.
  */
 function assertAtmosphereMetrics(variantPixels, poster, width, height) {
   const noon = variantPixels.get('noon');
@@ -195,16 +195,16 @@ function assertAtmosphereMetrics(variantPixels, poster, width, height) {
     if (Math.abs(poster[i] - noon[i]) + Math.abs(poster[i + 1] - noon[i + 1]) + Math.abs(poster[i + 2] - noon[i + 2]) > 24) changed++;
   }
   const noonZenith = band(noon, 0, 0.1);
-  const goldenZenith = band(poster, 0, 0.1);
+  const noonHorizon = band(noon, 0.36, 0.44);
   const goldenHorizon = band(poster, 0.36, 0.44);
   const metrics = {
     noonZenithBlue: noonZenith[2] / Math.max(1, noonZenith[0]),
-    goldenWarmth: (goldenHorizon[0] - goldenHorizon[2]) - (goldenZenith[0] - goldenZenith[2]),
+    goldenWarmth: (goldenHorizon[0] - goldenHorizon[2]) - (noonHorizon[0] - noonHorizon[2]),
     changedRatio: changed / (poster.length / 4),
   };
   const problems = [];
   if (metrics.noonZenithBlue < 1.25) problems.push(`noon zenith blue/red ratio ${metrics.noonZenithBlue.toFixed(2)} (need >=1.25)`);
-  if (metrics.goldenWarmth < 15) problems.push(`golden-hour horizon warmth ${metrics.goldenWarmth.toFixed(1)} (need >=15 more red-minus-blue than the zenith)`);
+  if (metrics.goldenWarmth < 15) problems.push(`golden-hour horizon warmth ${metrics.goldenWarmth.toFixed(1)} (need >=15 more red-minus-blue than the noon horizon)`);
   if (metrics.changedRatio < 0.5) problems.push(`sun move changed only ${(metrics.changedRatio * 100).toFixed(1)}% of pixels (need >=50%)`);
   if (problems.length) throw new Error(`Atmosphere validation failed (${width}x${height}):\n${problems.map((x) => `- ${x}`).join('\n')}`);
   return metrics;

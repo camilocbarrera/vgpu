@@ -1,5 +1,6 @@
 import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PI, cameraRay, raySphere, sampleTransmittance, skyViewUv } from "./atmosphere-common.wgsl";
 import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, terrainAlbedo, terrainHeight, terrainNormal } from "./terrain.wgsl";
+import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
 @group(0) @binding(1) var<uniform> camera: Camera;
@@ -7,6 +8,9 @@ import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, terrainAlbedo, terrainHeight,
 @group(0) @binding(3) var skyViewLut: texture_2d<f32>;
 @group(0) @binding(4) var aerialLut: texture_3d<f32>;
 @group(0) @binding(5) var lutSampler: sampler;
+@group(0) @binding(6) var<uniform> clouds: Clouds;
+@group(0) @binding(7) var weatherMap: texture_2d<f32>;
+@group(0) @binding(8) var noiseSampler: sampler;
 
 const TERRAIN_STEPS: i32 = 256;
 const SHADOW_STEPS: i32 = 20;
@@ -127,25 +131,30 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
   let sky = sampleSkyView(p, dir, viewHeight, hitsGround);
   let skyAmbient = textureSampleLevel(skyViewLut, lutSampler, skyViewUv(p, viewHeight, 0.5, 0.0, false), 0.0).rgb;
   var color = sky.rgb;
+  // Alpha carries the geometry distance (km) so the cloud pass can stop at terrain; -1 means sky.
+  var hitDistance = -1.0;
 
   if (terrain.distance >= 0.0) {
+    hitDistance = terrain.distance;
     let normal = terrainNormal(terrain.position.xz, max(0.004, terrain.distance * 0.0015));
     let sunZenithCos = dot(normal, p.sunDirection);
     let surfaceAltitude = p.groundRadius + terrain.height;
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, surfaceAltitude, p.sunDirection.y);
-    let shadow = terrainShadow(p, terrain.position, p.sunDirection);
+    let shadow = terrainShadow(p, terrain.position, p.sunDirection) * cloudShadow(weatherMap, noiseSampler, clouds, terrain.position, terrain.height, p.sunDirection);
     let albedo = terrainAlbedo(terrain.height, normal, terrain.position.xz);
     let ambientOcclusion = 0.6 + 0.4 * normal.y;
     let lit = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient * ambientOcclusion);
     let aerial = sampleAerial(uv, terrain.distance);
     color = lit * (1.0 - aerial.a) + aerial.rgb;
   } else if (tSphere >= 0.0) {
+    hitDistance = tSphere;
     let position = origin + tSphere * dir;
     let normal = normalize(position);
     let sunZenithCos = dot(normal, p.sunDirection);
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius, sunZenithCos);
     let albedo = terrainAlbedo(0.0, vec3f(0.0, 1.0, 0.0), position.xz);
-    let ground = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) / PI + skyAmbient);
+    let shadow = cloudShadow(weatherMap, noiseSampler, clouds, position, 0.0, p.sunDirection);
+    let ground = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient);
     if (tSphere < AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE) {
       let aerial = sampleAerial(uv, tSphere);
       color = ground * (1.0 - aerial.a) + aerial.rgb;
@@ -156,5 +165,5 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let viewTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, viewHeight, dot(dir, origin / viewHeight));
     color += (sunDisc(p, dir) + sunGlare(p, dir)) * viewTransmittance;
   }
-  return vec4f(color, 1.0);
+  return vec4f(color, hitDistance);
 }

@@ -1,6 +1,6 @@
 // Headless renders of the atmosphere example for visual verification.
 //   node scripts/render-atmosphere.mjs [--out dir] [--preset name|all] [--size WxH] [--debug transmittance|multiscatter|sky-view]
-//   overrides: --sun <deg> --azimuth <deg> --altitude <km> --yaw <deg> --pitch <deg> --ev <stops> --tonemap agx|aces|neutral|none
+//   overrides: --sun <deg> --azimuth <deg> --altitude <km> --yaw <deg> --pitch <deg> --ev <stops> --haze <x> --coverage <0..1> --time <s> --tonemap agx|aces|neutral|none
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -64,7 +64,7 @@ function describe(pixels, [width, height]) {
 
 function parseArgs(argv) {
   const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, overrides: {} };
-  const numeric = { sun: 'sunElevation', azimuth: 'sunAzimuth', altitude: 'altitudeKm', yaw: 'yaw', pitch: 'pitch', ev: 'exposureEv' };
+  const numeric = { sun: 'sunElevation', azimuth: 'sunAzimuth', altitude: 'altitudeKm', yaw: 'yaw', pitch: 'pitch', ev: 'exposureEv', haze: 'haze', coverage: 'cloudCoverage', time: 'time' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--out') parsed.out = argv[++i];

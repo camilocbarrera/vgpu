@@ -17,6 +17,10 @@ export interface AtmosphereState {
   exposureEv: number;
   /** Aerosol density multiplier: 1 is the pristine Bruneton atmosphere, 3-6 is a hazy summer day. */
   haze: number;
+  /** Global cloud coverage in [0, 1]; 0 disables the cloud pass. */
+  cloudCoverage: number;
+  /** Scene time in seconds; drives the wind that advects the clouds. */
+  time: number;
   tonemap: Tonemap;
 }
 
@@ -50,12 +54,26 @@ export const LUT_SIZES = {
 
 export const CAMERA_TUNING = { fovDegrees: 60, maxAltitudeKm: 80 } as const;
 
+/** Cloud layer (km) and noise scales; the cloud pass renders at 1/renderScale of the output. */
+export const CLOUD_TUNING = {
+  bottom: 1.6,
+  top: 4.2,
+  density: 1.0,
+  shapeScale: 12.0,
+  detailScale: 1.1,
+  weatherScale: 80,
+  detailStrength: 1.0,
+  windSpeed: 0.03,
+  renderScale: 2,
+  noise: { shape: 128, detail: 32, weather: 1024 },
+} as const;
+
 export const PRESETS = {
-  'golden-hour': { sunElevation: 4, sunAzimuth: 18, altitudeKm: 0.08, yaw: 0, pitch: 4, exposureEv: 5, haze: 2, tonemap: 'agx' },
-  noon: { sunElevation: 62, sunAzimuth: 40, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 3, haze: 2, tonemap: 'agx' },
-  twilight: { sunElevation: -4, sunAzimuth: 10, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 8, haze: 2, tonemap: 'agx' },
-  'high-altitude': { sunElevation: 18, sunAzimuth: 35, altitudeKm: 10, yaw: 0, pitch: -4, exposureEv: 3.5, haze: 2, tonemap: 'agx' },
-  stratosphere: { sunElevation: 25, sunAzimuth: 60, altitudeKm: 35, yaw: 0, pitch: -8, exposureEv: 3.5, haze: 2, tonemap: 'agx' },
+  'golden-hour': { sunElevation: 4, sunAzimuth: 58, altitudeKm: 0.08, yaw: 40, pitch: 9, exposureEv: 5, haze: 2, cloudCoverage: 0.65, time: 0, tonemap: 'agx' },
+  noon: { sunElevation: 62, sunAzimuth: 40, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 3, haze: 2, cloudCoverage: 0.45, time: 0, tonemap: 'agx' },
+  twilight: { sunElevation: -4, sunAzimuth: 10, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 8, haze: 2, cloudCoverage: 0.35, time: 0, tonemap: 'agx' },
+  'high-altitude': { sunElevation: 18, sunAzimuth: 35, altitudeKm: 10, yaw: 0, pitch: -4, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, time: 0, tonemap: 'agx' },
+  stratosphere: { sunElevation: 25, sunAzimuth: 60, altitudeKm: 35, yaw: 0, pitch: -8, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, time: 0, tonemap: 'agx' },
 } as const satisfies Record<string, AtmosphereState>;
 
 export type PresetName = keyof typeof PRESETS;

@@ -6,7 +6,7 @@ export interface AtmosphereControls {
   dispose(): void;
 }
 
-interface SliderDef { key: 'sunElevation' | 'sunAzimuth' | 'altitudeKm' | 'exposureEv' | 'haze'; label: string; min: number; max: number; step: number; format: (value: number) => string; log?: boolean }
+interface SliderDef { key: 'sunElevation' | 'sunAzimuth' | 'altitudeKm' | 'exposureEv' | 'haze' | 'cloudCoverage'; label: string; min: number; max: number; step: number; format: (value: number) => string; log?: boolean }
 
 const SLIDERS: readonly SliderDef[] = [
   { key: 'sunElevation', label: 'Sun elevation', min: -12, max: 90, step: 0.1, format: (v) => `${v.toFixed(1)}°` },
@@ -14,6 +14,7 @@ const SLIDERS: readonly SliderDef[] = [
   { key: 'altitudeKm', label: 'Altitude', min: 0.002, max: CAMERA_TUNING.maxAltitudeKm, step: 0.001, log: true, format: (v) => (v < 1 ? `${(v * 1000).toFixed(0)} m` : `${v.toFixed(1)} km`) },
   { key: 'exposureEv', label: 'Exposure', min: -2, max: 12, step: 0.1, format: (v) => `${v.toFixed(1)} EV` },
   { key: 'haze', label: 'Haze', min: 0.25, max: 8, step: 0.01, log: true, format: (v) => `${v.toFixed(2)}×` },
+  { key: 'cloudCoverage', label: 'Cloud coverage', min: 0, max: 1, step: 0.01, format: (v) => `${(v * 100).toFixed(0)}%` },
 ];
 
 /** Slider panel plus drag-to-look on the canvas. */
