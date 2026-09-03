@@ -42,7 +42,7 @@ const FORWARD_G: f32 = 0.75;
 const BACK_G: f32 = -0.3;
 /** Multiple-scattering octaves (Wrenninge): per-octave scattering, extinction and phase-eccentricity multipliers. */
 const MS_OCTAVES: i32 = 6;
-const MS_SCATTER: f32 = 0.8;
+const MS_SCATTER: f32 = 0.7;
 const MS_EXTINCTION: f32 = 0.5;
 const MS_PHASE: f32 = 0.5;
 
@@ -79,18 +79,22 @@ fn density(position: vec3f, viewDistance: f32, cheap: bool) -> f32 {
   return cloudDensity(clouds, shapeNoise, detailNoise, weatherMap, curlNoise, noiseSampler, position, altitude, viewDistance, cheap);
 }
 
-/** Optical depth toward the sun with doubling steps (20 m to 640 m); cheap samples skip erosion, so they are scaled down. */
-fn lightOpticalDepth(position: vec3f, sunDir: vec3f) -> f32 {
+/**
+ * Optical depth toward the sun with doubling steps (20 m to 640 m). The three nearest samples use the full,
+ * eroded density so the surface bumps shadow their own crevices; the far ones skip erosion and are scaled down.
+ */
+fn lightOpticalDepth(position: vec3f, sunDir: vec3f, viewDistance: f32) -> f32 {
   var depth = 0.0;
   var t = 0.0;
   var step = 0.02;
   for (var i = 0; i < LIGHT_STEPS; i += 1) {
     t += step * 0.5;
-    depth += density(position + sunDir * t, 0.0, true) * step;
+    let near = i < 3;
+    depth += density(position + sunDir * t, viewDistance, !near) * step * select(0.75, 1.0, near);
     t += step * 0.5;
     step *= 2.0;
   }
-  return depth * EXTINCTION * 0.75;
+  return depth * EXTINCTION;
 }
 
 /** Sum of attenuated scattering octaves; higher octaves see less extinction and a flatter phase. */
@@ -227,7 +231,7 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
     // Planet shadow: after sunset only clouds whose own horizon still shows the sun stay lit.
     let earthShadow = select(1.0, 0.0, raySphere(position + up * PLANET_RADIUS_OFFSET, p.sunDirection, p.groundRadius) >= 0.0);
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius + altitude, sunZenithCos) * earthShadow;
-    let opticalDepth = lightOpticalDepth(position, p.sunDirection);
+    let opticalDepth = lightOpticalDepth(position, p.sunDirection, t);
     let sunScatter = multiScatter(opticalDepth, cosTheta);
     let ambient = skyAmbient * mix(0.18, 0.75, hf) + groundBounce * (1.0 - hf) * 0.5;
     let extinction = EXTINCTION * sampleDensity;

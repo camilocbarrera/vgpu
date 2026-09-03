@@ -65,7 +65,7 @@ export const CLOUD_TUNING = {
   bottom: 1.6,
   top: 4.2,
   density: 1.0,
-  shapeScale: 12.0,
+  shapeScale: 7.0,
   detailScale: 1.1,
   weatherScale: 80,
   detailStrength: 1.0,

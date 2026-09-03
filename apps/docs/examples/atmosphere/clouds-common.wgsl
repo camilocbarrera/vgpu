@@ -20,8 +20,10 @@ export fn sampleWeather(weather: texture_2d<f32>, weatherSampler: sampler, c: Cl
 
 /** Cumulus grows tall, stratus stays flat; both vanish at the layer bounds. */
 fn heightGradient(hf: f32, cloudType: f32) -> f32 {
-  let stratus = smoothstep(0.0, 0.08, hf) * (1.0 - smoothstep(0.2, 0.4, hf));
-  let cumulus = smoothstep(0.0, 0.1, hf) * (1.0 - smoothstep(0.6, 1.0, hf));
+  // A long taper raises the iso-surface threshold with height, so the 3D noise decides where each column's
+  // top sits (cauliflower); the density sharpening after thresholding keeps that surface opaque.
+  let stratus = smoothstep(0.0, 0.08, hf) * (1.0 - smoothstep(0.2, 0.42, hf));
+  let cumulus = smoothstep(0.0, 0.1, hf) * (1.0 - smoothstep(0.45, 1.0, hf));
   return mix(stratus, cumulus, cloudType);
 }
 
@@ -39,12 +41,6 @@ export fn cloudDensity(
   let w = sampleWeather(weather, noiseSampler, c, position.xz);
   let coverage = saturate(remap(w.r, 0.3, 0.75, 0.0, 1.0) * c.coverage * 1.2);
   if (coverage <= 0.0) { return 0.0; }
-  // Tops vary with the weather so the deck is not one flat slab; keep this gentle, the top gradient
-  // amplifies any interpolation creases of the weather texture into vertical streaks.
-  let hf = rawHf / mix(0.7, 1.0, w.b);
-  if (hf >= 1.0) { return 0.0; }
-  let gradient = heightGradient(hf, saturate(w.g + c.typeBias));
-  if (gradient <= 0.0) { return 0.0; }
   // The constant offset just picks a pleasant patch of the tiled noise around the origin.
   let unwarped = vec3f(position.x, altitude, position.z) + vec3f(53.0 + c.wind * 0.02, 0.0, 29.0);
   // Gentle low-frequency domain warp hides the lattice of the tiled noise; keep the amplitude well
@@ -52,25 +48,46 @@ export fn cloudDensity(
   let warp = textureSampleLevel(shape, noiseSampler, unwarped / (c.shapeScale * 2.7) + vec3f(0.5, 0.2, 0.8), 0.0).gba - 0.5;
   let p = unwarped + warp * c.shapeScale * 0.22;
   let s = textureSampleLevel(shape, noiseSampler, p / c.shapeScale, 0.0);
+  // Top relief: the low-frequency Worley cells (2.4 km and 1.2 km) decide how high each column reaches, so
+  // the deck breaks into towers and valleys that shadow each other instead of one smooth dome.
+  let relief = mix(0.7, 1.1, s.r * 0.5 + s.g * 0.3 + s.b * 0.2);
+  let hf = rawHf / (mix(0.7, 1.0, w.b) * relief);
+  if (hf >= 1.0) { return 0.0; }
+  let gradient = heightGradient(hf, saturate(w.g + c.typeBias));
+  if (gradient <= 0.0) { return 0.0; }
   let lowFbm = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
   var base = saturate(remap(s.r, lowFbm - 1.0, 1.0, 0.0, 1.0)) * gradient;
   base = saturate(remap(base, 1.0 - coverage, 1.0, 0.0, 1.0));
   // A small floor keeps the air between clouds clear instead of a faint fog.
   base = saturate((base - 0.06) / 0.94);
-  if (base <= 0.0 || cheap) { return base * c.density; }
-  // Erosion only matters near the surface of the cloud and only while its features are larger than a pixel.
-  let edge = 1.0 - smoothstep(0.3, 0.5, base);
-  let lod = 1.0 - smoothstep(c.detailLodDistance * 0.6, c.detailLodDistance, viewDistance);
-  let detailWeight = edge * lod * c.detailStrength;
-  if (detailWeight <= 0.0) { return base * c.density; }
-  // Curl distortion of the lookup makes the edges wispy; it grows toward the cloud top.
-  let flow = textureSampleLevel(curl, noiseSampler, p.xz / (c.detailScale * 5.0), 0.0).rg * 2.0 - 1.0;
-  let distorted = p + vec3f(flow.x, 0.0, flow.y) * c.curlStrength * (0.3 + 0.7 * hf);
+  if (base <= 0.0) { return 0.0; }
+  // Interior Worley structure so the optical depth varies, and a sharpening that makes the surface opaque within
+  // metres like a real water cloud. The erosion below runs on the soft base first: it needs the wide edge band.
+  let interior = mix(0.6, 1.0, lowFbm) * c.density;
+  if (cheap) { return saturate(base * 2.2) * interior; }
+  // Erosion only matters near the surface of the cloud. Three LOD rings by feature size: the coarse detail
+  // (hundreds of metres) survives to 4x detailLodDistance, the curl to 2x, the fine scale (tens of metres) to 1x.
+  let edge = 1.0 - smoothstep(0.3, 0.6, base);
+  let coarseLod = 1.0 - smoothstep(c.detailLodDistance * 3.0, c.detailLodDistance * 4.0, viewDistance);
+  let detailWeight = edge * coarseLod * c.detailStrength;
+  if (detailWeight <= 0.0) { return saturate(base * 2.2) * interior; }
+  let curlLod = 1.0 - smoothstep(c.detailLodDistance * 1.5, c.detailLodDistance * 2.0, viewDistance);
+  let fineLod = 1.0 - smoothstep(c.detailLodDistance * 0.6, c.detailLodDistance, viewDistance);
+  var distorted = p;
+  if (curlLod > 0.0) {
+    // Curl distortion of the lookup makes the edges wispy; it grows toward the cloud top.
+    let flow = textureSampleLevel(curl, noiseSampler, p.xz / (c.detailScale * 5.0), 0.0).rg * 2.0 - 1.0;
+    distorted = p + vec3f(flow.x, 0.0, flow.y) * c.curlStrength * curlLod * (0.3 + 0.7 * hf);
+  }
   let coarse = textureSampleLevel(detail, noiseSampler, distorted / c.detailScale, 0.0).rgb;
-  let fine = textureSampleLevel(detail, noiseSampler, distorted / (c.detailScale * 0.27) + vec3f(0.5), 0.0).rgb;
-  let detailFbm = (coarse.r * 0.625 + coarse.g * 0.25 + coarse.b * 0.125) * 0.7 + (fine.r * 0.625 + fine.g * 0.25 + fine.b * 0.125) * 0.3;
-  let modifier = mix(detailFbm, 1.0 - detailFbm, saturate(hf * 8.0)) * 0.35 * detailWeight;
-  return saturate(remap(base, modifier, 1.0, 0.0, 1.0)) * c.density;
+  var detailFbm = coarse.r * 0.625 + coarse.g * 0.25 + coarse.b * 0.125;
+  if (fineLod > 0.0) {
+    let fine = textureSampleLevel(detail, noiseSampler, distorted / (c.detailScale * 0.27) + vec3f(0.5), 0.0).rgb;
+    detailFbm = mix(detailFbm, fine.r * 0.625 + fine.g * 0.25 + fine.b * 0.125, 0.3 * fineLod);
+  }
+  let modifier = mix(detailFbm, 1.0 - detailFbm, saturate(hf * 8.0)) * 0.45 * detailWeight;
+  let eroded = saturate(remap(base, modifier, 1.0, 0.0, 1.0));
+  return saturate(eroded * 2.2) * interior;
 }
 
 /** 2D approximation of the cloud shadow on the ground: coverage where the sun ray crosses mid-layer. */
