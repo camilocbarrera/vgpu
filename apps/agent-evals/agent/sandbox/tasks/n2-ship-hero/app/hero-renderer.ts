@@ -15,7 +15,9 @@ export interface HeroRenderer {
  * that adds the glow back on top with tone mapping.
  */
 export async function createHeroRenderer(canvas: HTMLCanvasElement): Promise<HeroRenderer> {
-  const gpu = await init();
+  // The blur and composite passes sample the 32-bit float intermediates with a
+  // linear sampler, which WebGPU only allows with this optional feature.
+  const gpu = await init({ requiredFeatures: ["float32-filterable"] });
   try {
     const output = surface(gpu, canvas, { dpr: [1, 2] });
     const [width, height] = output.size;

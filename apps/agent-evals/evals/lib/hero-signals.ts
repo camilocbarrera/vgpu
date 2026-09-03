@@ -19,8 +19,23 @@ export const SHIPPING_GUIDE_SLUG = "shipping-to-production";
 
 const APP_EXTENSIONS = new Set([".ts", ".tsx", ".mjs", ".js", ".wgsl"]);
 
-/** The seed's HDR format, counted rather than searched so a partial downgrade still registers. */
+/**
+ * The seed's HDR format, counted as a QUOTED string literal so a partial
+ * downgrade still registers and a comment explaining the change does not hide
+ * it. Measured on the first live n2 run: the agent switched every target to
+ * rgba16float and left `// ... rgba32float is not filterable ...` above the
+ * constant, which kept a bare-word count equal and read as "no change".
+ */
 const SEED_FORMAT = "rgba32float";
+const CHEAPER_FORMATS = ["rgba16float", "rg11b10ufloat", "rgb10a2unorm", "rgba8unorm", "bgra8unorm"];
+const quotedLiteral = (name: string) => new RegExp(`["'\`]${name}["'\`]`, "g");
+const countQuoted = (haystack: string, name: string) => (haystack.match(quotedLiteral(name)) ?? []).length;
+
+/**
+ * The seed's `build` script is `next build`, and agents reach it through the
+ * package manager as often as directly (`npm run build` on the first live run).
+ */
+const RAN_BUILD = /\bnext\s+build\b|\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?build\b/;
 
 export interface HeroSignals {
   /** `.compile(` / `.compileSync(` appeared in shipped app code (pipeline pre-warm). */
@@ -68,7 +83,6 @@ export function heroSignals(input: {
   const changed = (predicate: (path: string) => boolean) =>
     seed.filter((file) => predicate(file.path)).some((file) => shippedByPath.get(file.path) !== file.content);
 
-  const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
   const commands = input.calls.map((call) => call.command).join("\n");
   const prPath = join(input.shippedDir, "PR.md");
   const prMd = existsSync(prPath) ? readFileSync(prPath, "utf8") : "";
@@ -76,7 +90,9 @@ export function heroSignals(input: {
 
   const prewarmAdded = /\.compile(?:Sync)?\(/.test(shippedCode) && !/\.compile(?:Sync)?\(/.test(seedCode);
   const bundlesAdded = /\bbundle\(/.test(shippedCode) && !/\bbundle\(/.test(seedCode);
-  const formatChanged = count(shippedCode, SEED_FORMAT) < count(seedCode, SEED_FORMAT);
+  const formatChanged =
+    countQuoted(shippedCode, SEED_FORMAT) < countQuoted(seedCode, SEED_FORMAT) ||
+    CHEAPER_FORMATS.some((name) => countQuoted(shippedCode, name) > countQuoted(seedCode, name));
   const prMdWritten = prMd.trim().length > 0;
 
   return {
@@ -90,7 +106,7 @@ export function heroSignals(input: {
     prHasMeasurement: /\b\d+(?:\.\d+)?\s*(?:ms|fps|kib|kb|mb|bytes|%)\b/i.test(prMd),
     prMentionsVisualKnobs: /rgba16float|rgba32float|format|resolution|half[- ]res|dpr|low tier|low-tier|quality tier/i.test(prMd),
     ranVgpuCheck: /vgpu\s+check\b/.test(commands),
-    ranNextBuild: /\bnext\s+build\b/.test(commands),
+    ranNextBuild: RAN_BUILD.test(commands),
     wroteMeasurement: /performance\.now\(|\btimer\(|timestamp-query/.test(input.written),
     docs: {
       calls: docs.docsCalls.length,
