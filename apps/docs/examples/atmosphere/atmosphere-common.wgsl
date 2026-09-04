@@ -45,6 +45,35 @@ export struct FrameConstants {
   terrainSunTransmittance: array<vec4f, 64>,
 };
 
+/**
+ * The sun's orthographic shadow map (terrain-sun-depth.wgsl). `toShadow` maps a position relative to the ground point
+ * under the camera axis to clip space: xy in [-1, 1] across the map, z in [0, 1] along the light, nearest first.
+ * `bias` is in that depth unit, about two texels of slope.
+ */
+export struct SunShadow { toShadow: mat4x4f, bias: f32, pad: vec3f };
+
+/** 1 where the point sees the sun, 0 where the shadow map's terrain is in the way, filtered by the comparison sampler. */
+export fn sunShadowSample(shadow: SunShadow, map: texture_depth_2d, comparison: sampler_comparison, fromGround: vec3f, bias: f32) -> f32 {
+  let s = shadow.toShadow * vec4f(fromGround, 1.0);
+  if (any(abs(s.xy) > vec2f(1.0)) || s.z > 1.0) { return 1.0; }
+  return textureSampleCompareLevel(map, comparison, vec2f(s.x * 0.5 + 0.5, 0.5 - s.y * 0.5), s.z - bias);
+}
+
+/** Five comparisons a texel apart for a soft penumbra on surfaces; the air uses the single sample. */
+export fn sunShadowSoft(shadow: SunShadow, map: texture_depth_2d, comparison: sampler_comparison, fromGround: vec3f, bias: f32) -> f32 {
+  let s = shadow.toShadow * vec4f(fromGround, 1.0);
+  if (any(abs(s.xy) > vec2f(1.0)) || s.z > 1.0) { return 1.0; }
+  let uv = vec2f(s.x * 0.5 + 0.5, 0.5 - s.y * 0.5);
+  let texel = 1.0 / vec2f(textureDimensions(map));
+  let reference = s.z - bias;
+  var lit = textureSampleCompareLevel(map, comparison, uv, reference);
+  lit += textureSampleCompareLevel(map, comparison, uv + vec2f(texel.x, 0.0), reference);
+  lit += textureSampleCompareLevel(map, comparison, uv - vec2f(texel.x, 0.0), reference);
+  lit += textureSampleCompareLevel(map, comparison, uv + vec2f(0.0, texel.y), reference);
+  lit += textureSampleCompareLevel(map, comparison, uv - vec2f(0.0, texel.y), reference);
+  return lit * 0.2;
+}
+
 export struct Medium { scattering: vec3f, extinction: vec3f, mie: vec3f, rayleigh: vec3f };
 export struct ScatteringResult { luminance: vec3f, transmittance: vec3f, multiScatAs1: vec3f };
 export struct SkyViewParams { viewZenithCos: f32, lightViewCos: f32 };

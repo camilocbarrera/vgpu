@@ -1,4 +1,4 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, AERIAL_MAX_DISTANCE, Atmosphere, Camera, FrameConstants, PI, TERRAIN_TRANSMITTANCE_ENTRIES, cameraRay, raySphere, sampleTransmittance, skyViewUvFast } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, AERIAL_MAX_DISTANCE, Atmosphere, Camera, FrameConstants, PI, SunShadow, TERRAIN_TRANSMITTANCE_ENTRIES, cameraRay, raySphere, sampleTransmittance, skyViewUvFast, sunShadowSoft } from "./atmosphere-common.wgsl";
 import { TERRAIN_MAP_EXTENT, TERRAIN_MAX_HEIGHT, TERRAIN_NEAR, sampleTerrainAlbedoNoise, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
 import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 
@@ -15,6 +15,9 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(12) var aerialLossLut: texture_3d<f32>;
 @group(0) @binding(13) var terrainDepth: texture_depth_2d;
 @group(0) @binding(14) var cloudShadowMap: texture_2d<f32>;
+@group(0) @binding(15) var sunShadowMap: texture_depth_2d;
+@group(0) @binding(16) var shadowSampler: sampler_comparison;
+@group(0) @binding(17) var<uniform> sunShadow: SunShadow;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
 
@@ -25,8 +28,6 @@ fn terrainSunTransmittance(surfaceHeight: f32) -> vec3f {
   let next = min(index + 1u, TERRAIN_TRANSMITTANCE_ENTRIES - 1u);
   return mix(frame.terrainSunTransmittance[index].rgb, frame.terrainSunTransmittance[next].rgb, fract(x));
 }
-
-const SHADOW_STEPS: i32 = 12;
 
 struct TerrainHit { distance: f32, position: vec3f, height: f32 };
 
@@ -107,25 +108,12 @@ fn terrainHit(p: Atmosphere, origin: vec3f, dir: vec3f, pixel: vec2i) -> Terrain
   return TerrainHit(distance, position, surfaceHeight);
 }
 
-/**
- * Soft shadow of the heightfield toward the sun; step size grows with distance. The march starts one heightmap
- * texel out: closer than that the bilinear surface shadows itself along every slope, which the Lambert term
- * already accounts for, and the penumbra is a cone of about 1:3 so shadow edges do not trace the texel grid.
- */
-fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
+/** Terrain shadow on a surface point, from the sun's shadow map; slopes facing away from the sun get a larger bias. */
+fn terrainShadow(p: Atmosphere, position: vec3f, normal: vec3f, sunDir: vec3f) -> f32 {
   if (sunDir.y <= 0.0) { return 0.0; }
-  var t = 0.1;
-  var shadow = 1.0;
-  for (var i = 0; i < SHADOW_STEPS; i += 1) {
-    let sample = position + sunDir * t;
-    let altitude = altitudeOf(p, sample);
-    if (altitude > TERRAIN_MAX_HEIGHT) { break; }
-    let delta = altitude - height(sample.xz);
-    shadow = min(shadow, saturate(3.0 * delta / t));
-    if (shadow <= 0.0) { break; }
-    t += 0.06 + t * 0.5;
-  }
-  return shadow;
+  let fromGround = position - vec3f(0.0, p.groundRadius, 0.0);
+  let bias = sunShadow.bias * (1.0 + 2.0 * (1.0 - saturate(dot(normal, sunDir))));
+  return sunShadowSoft(sunShadow, sunShadowMap, shadowSampler, fromGround, bias);
 }
 
 @fragment fn fs_main(@builtin(position) fragCoord: vec4f, @location(0) uv: vec2f) -> @location(0) vec4f {
@@ -150,7 +138,7 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let normal = sampleTerrainNormal(terrainMap, lutSampler, terrain.position.xz);
     let sunZenithCos = dot(normal, p.sunDirection);
     let sunTransmittance = terrainSunTransmittance(terrain.height);
-    let shadow = terrainShadow(p, terrain.position, p.sunDirection) * sampleCloudShadow(clouds, cloudShadowMap, lutSampler, terrain.position.xz, TERRAIN_MAP_EXTENT);
+    let shadow = terrainShadow(p, terrain.position, normal, p.sunDirection) * sampleCloudShadow(clouds, cloudShadowMap, lutSampler, terrain.position.xz, TERRAIN_MAP_EXTENT);
     let albedo = terrainAlbedo(terrain.height, normal, sampleTerrainAlbedoNoise(terrainAlbedoMap, lutSampler, terrain.position.xz));
     let ambientOcclusion = 0.6 + 0.4 * normal.y;
     let lit = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient * ambientOcclusion);

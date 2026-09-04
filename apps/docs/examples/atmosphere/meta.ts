@@ -8,7 +8,7 @@ export const meta = {
   files: [
     'index.tsx', 'renderer.ts', 'tuning.ts', 'camera.ts', 'controls.ts',
     'atmosphere-common.wgsl', 'frame-constants.wgsl', 'transmittance-lut.wgsl', 'multiscatter-lut.wgsl', 'sky-view-lut.wgsl', 'aerial-lut.wgsl',
-    'terrain.wgsl', 'terrain-heightmap.wgsl', 'terrain-shadow.wgsl', 'terrain-depth.wgsl', 'scene.wgsl', 'noise-common.wgsl', 'cloud-shape-noise.wgsl', 'cloud-detail-noise.wgsl', 'weather-map.wgsl',
+    'terrain.wgsl', 'terrain-heightmap.wgsl', 'terrain-depth.wgsl', 'terrain-sun-depth.wgsl', 'scene.wgsl', 'noise-common.wgsl', 'cloud-shape-noise.wgsl', 'cloud-detail-noise.wgsl', 'weather-map.wgsl',
     'curl-noise.wgsl', 'clouds-common.wgsl', 'clouds-temporal.wgsl', 'clouds-march.wgsl', 'clouds-resolve.wgsl', 'cloud-shadow.wgsl', 'present.wgsl', 'lut-preview.wgsl',
   ],
 } as const;

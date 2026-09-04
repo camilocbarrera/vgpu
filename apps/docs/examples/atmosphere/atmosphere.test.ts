@@ -56,9 +56,9 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.curlNoise.format).toBe('rgba8unorm');
       expect(graph.terrainMap.size).toEqual([2048, 2048]);
       expect([...graph.terrainMap.usage]).toContain('storage_binding');
-      expect(graph.terrainShadowMap.size).toEqual([512, 512]);
+      expect(graph.sunShadow.size).toEqual([2048, 2048]);
       expect(graph.cloudShadowMap.size).toEqual([512, 512]);
-      expect([...graph.terrainShadowMap.usage]).toContain('storage_binding');
+      expect(graph.sunShadow.depth?.format).toBe('depth32float');
       expect(graph.aerialLoss.dimension).toBe('3d');
       expect(graph.terrainDepth.depth?.format).toBe('depth32float');
       expect(graph.bakedSunDirection).toBeUndefined();
@@ -70,7 +70,7 @@ describe('atmosphere graph on the mock adapter', () => {
       bakeLuts(gpu, graph);
       expect(graph.lutPhase).toBe('ready');
       expect(() => frame(gpu, (current) => renderGraph(current, graph, output))).not.toThrow();
-      // The terrain shadow map is built on the first frame for the current sun.
+      // The sun's shadow map is rendered on the first frame for the current sun.
       expect(graph.bakedSunDirection).toEqual(sunDirection(PRESETS['golden-hour']));
       // Changing the haze invalidates the medium-dependent tables; the next frame re-encodes them.
       applyState(graph, { ...PRESETS['golden-hour'], haze: 4 }, output.size);
@@ -87,7 +87,7 @@ describe('atmosphere graph on the mock adapter', () => {
       frame(gpu, (current) => renderGraph(current, graph, output));
       expect(graph.cloudsTargets.read).toBe(before);
       expect(graph.frame).toBe(4);
-      // Moving the sun rebuilds the terrain shadow map on the next frame.
+      // Moving the sun re-renders the shadow map on the next frame.
       applyState(graph, { ...PRESETS['golden-hour'], haze: 4, sunElevation: 12 }, output.size);
       expect(graph.bakedSunDirection).toEqual(sunDirection(PRESETS['golden-hour']));
       frame(gpu, (current) => renderGraph(current, graph, output));

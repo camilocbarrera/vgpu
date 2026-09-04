@@ -5,13 +5,48 @@ export const TERRAIN_MAX_HEIGHT: f32 = 3.2;
 /** The baked heightmap covers a square of this many km centred on the camera origin. */
 export const TERRAIN_MAP_EXTENT: f32 = 200.0;
 export const TERRAIN_MAP_SIZE: f32 = 2048.0;
-/** The sun-shadow height map (terrain-shadow.wgsl) covers the same square at this resolution. */
-export const TERRAIN_SHADOW_MAP_SIZE: f32 = 512.0;
 /** Ring grid of the terrain mesh (terrain-mesh.wgsl): azimuth columns around the camera axis and rings per column. */
 export const TERRAIN_MESH_COLUMNS: u32 = 4096u;
 export const TERRAIN_MESH_RINGS: u32 = 512u;
 /** Near plane (km) of the terrain depth prepass: reversed-Z, depth = TERRAIN_NEAR / view depth. */
 export const TERRAIN_NEAR: f32 = 0.001;
+
+const TAU: f32 = 6.28318530717959;
+/** Ring layout: fine geometric steps over the flat valley, 265 m steps across the mountains (heightmap texels are 98 m), coarse steps over the bare sphere. */
+const NEAR_RINGS: u32 = 128u;
+const MID_RINGS: u32 = 320u;
+const NEAR_RADIUS: f32 = 0.005;
+const MID_RADIUS: f32 = 5.0;
+const FAR_RADIUS: f32 = 90.0;
+const LAST_RADIUS: f32 = 400.0;
+
+fn ringRadius(ring: u32) -> f32 {
+  if (ring == 0u) { return 0.0; }
+  if (ring <= NEAR_RINGS) { return NEAR_RADIUS * pow(MID_RADIUS / NEAR_RADIUS, f32(ring - 1u) / f32(NEAR_RINGS - 1u)); }
+  if (ring <= NEAR_RINGS + MID_RINGS) { return MID_RADIUS + (FAR_RADIUS - MID_RADIUS) * f32(ring - NEAR_RINGS) / f32(MID_RINGS); }
+  return FAR_RADIUS * pow(LAST_RADIUS / FAR_RADIUS, f32(ring - NEAR_RINGS - MID_RINGS) / f32(TERRAIN_MESH_RINGS - NEAR_RINGS - MID_RINGS));
+}
+
+/**
+ * A vertex of the terrain ring grid, relative to the ground point under the camera axis (0, groundRadius, 0).
+ * The grid is a static set of rings around that axis: one triangle strip per azimuth column (`instanceIndex` plus
+ * `columnOffset`), `TERRAIN_MESH_RINGS + 1` ring vertices on each side, no vertex buffers. Heights come from the
+ * baked heightmap, and the surface sits at altitude h over the sphere: y = sqrt((R + h)^2 - r^2), formed here
+ * without subtracting two 6360 km numbers, which f32 could not afford. Azimuth 0 is +Z, like the camera yaw.
+ */
+export fn terrainMeshVertex(vertexIndex: u32, instanceIndex: u32, columnOffset: u32, groundRadius: f32, map: texture_2d<f32>, mapSampler: sampler) -> vec3f {
+  let ring = vertexIndex / 2u;
+  let column = (columnOffset + instanceIndex + (vertexIndex & 1u)) % TERRAIN_MESH_COLUMNS;
+  let theta = f32(column) * (TAU / f32(TERRAIN_MESH_COLUMNS));
+  let radius = ringRadius(ring);
+  let xz = vec2f(sin(theta), cos(theta)) * radius;
+  let height = sampleTerrainHeight(map, mapSampler, xz);
+  let surfaceRadius = groundRadius + height;
+  let rr = dot(xz, xz);
+  let y = sqrt(max(surfaceRadius * surfaceRadius - rr, 0.0));
+  let relativeY = (height * (2.0 * groundRadius + height) - rr) / (y + groundRadius);
+  return vec3f(xz.x, relativeY, xz.y);
+}
 const TERRAIN_SCALE: f32 = 1.0 / 16.0;
 const OCTAVES: i32 = 6;
 const ROTATE = mat2x2f(vec2f(0.8, 0.6), vec2f(-0.6, 0.8));
@@ -58,11 +93,6 @@ fn terrainMapUv(xz: vec2f) -> vec2f { return xz / TERRAIN_MAP_EXTENT + 0.5; }
 
 /** Height (km) from the baked map; bilinear, clamped to the map edge where the terrain has already faded out. */
 export fn sampleTerrainHeight(map: texture_2d<f32>, mapSampler: sampler, xz: vec2f) -> f32 {
-  return textureSampleLevel(map, mapSampler, terrainMapUv(xz), 0.0).r;
-}
-
-/** Altitude (km) below which the air above xz is in terrain shadow, from the map baked by terrain-shadow.wgsl. */
-export fn sampleTerrainShadowHeight(map: texture_2d<f32>, mapSampler: sampler, xz: vec2f) -> f32 {
   return textureSampleLevel(map, mapSampler, terrainMapUv(xz), 0.0).r;
 }
 

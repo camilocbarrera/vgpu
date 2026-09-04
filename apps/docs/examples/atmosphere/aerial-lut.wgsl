@@ -1,5 +1,5 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PLANET_RADIUS_OFFSET, cameraRay, meanTransmittance, miePhase, rayleighPhase, raySphere, sampleMedium, sampleMultiScatter, sampleTransmittance } from "./atmosphere-common.wgsl";
-import { TERRAIN_MAP_EXTENT, sampleTerrainShadowHeight } from "./terrain.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PLANET_RADIUS_OFFSET, SunShadow, cameraRay, meanTransmittance, miePhase, rayleighPhase, raySphere, sampleMedium, sampleMultiScatter, sampleTransmittance, sunShadowSample } from "./atmosphere-common.wgsl";
+import { TERRAIN_MAP_EXTENT } from "./terrain.wgsl";
 import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
@@ -8,22 +8,20 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(3) var multiScatterLut: texture_2d<f32>;
 @group(0) @binding(4) var lutSampler: sampler;
 @group(0) @binding(5) var aerialLut: texture_storage_3d<rgba16float, write>;
-@group(0) @binding(6) var terrainShadowMap: texture_2d<f32>;
+@group(0) @binding(6) var sunShadowMap: texture_depth_2d;
 @group(0) @binding(7) var aerialLossLut: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(8) var<uniform> clouds: Clouds;
 @group(0) @binding(9) var cloudShadowMap: texture_2d<f32>;
+@group(0) @binding(10) var shadowSampler: sampler_comparison;
+@group(0) @binding(11) var<uniform> sunShadow: SunShadow;
 
 struct AerialResult { luminance: vec3f, loss: vec3f, transmittance: vec3f };
 
-/** Height of the sample above the terrain shadow boundary: positive sees the sun, negative is in shadow. */
-fn shadowClearance(p: Atmosphere, position: vec3f, viewHeight: f32) -> f32 {
-  return viewHeight - p.groundRadius - sampleTerrainShadowHeight(terrainShadowMap, lutSampler, position.xz);
-}
-
 /**
  * The integrateScattering loop of atmosphere-common.wgsl (Mie/Rayleigh phase, multiple scattering, no ground) with
- * one addition: every sample also asks the terrain shadow map whether it sees the sun, and the air under the cloud
- * layer asks the cloud shadow map how much of it, so only lit samples add single scattering. The single scattering
+ * one addition: every sample also asks the sun's shadow map whether it sees the sun (one depth comparison; the map
+ * is last frame's, a frame late when the sun moves), and the air under the cloud layer asks the cloud shadow map how
+ * much of it, so only lit samples add single scattering. The single scattering
  * removed this way is accumulated separately, so sky pixels, which read the terrain-agnostic sky-view LUT, can take
  * it out too. The multiple-scattering ambient stays unshadowed.
  */
@@ -46,7 +44,6 @@ fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampl
   let phaseRayleigh = rayleighPhase(cosTheta);
   let dt = tMax / sampleCount;
   var throughput = vec3f(1.0);
-  var previousClearance = shadowClearance(p, origin, length(origin));
   for (var i = 0.0; i < sampleCount; i += 1.0) {
     let t = (i + 0.3) * dt;
     let position = origin + t * dir;
@@ -56,12 +53,7 @@ fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampl
     let sunZenithCos = dot(p.sunDirection, up);
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, viewHeight, sunZenithCos);
     let earthShadow = select(1.0, 0.0, raySphere(position + up * PLANET_RADIUS_OFFSET, p.sunDirection, p.groundRadius) >= 0.0);
-    // The shadow edge is softened over the clearance change between neighbouring samples: the integral then varies
-    // continuously while the camera turns and the samples slide across the boundary, instead of flipping per sample.
-    let clearance = shadowClearance(p, position, viewHeight);
-    let softness = 0.5 * abs(clearance - previousClearance) + 1e-3;
-    var lit = smoothstep(-softness, softness, clearance);
-    previousClearance = clearance;
+    var lit = sunShadowSample(sunShadow, sunShadowMap, shadowSampler, position - vec3f(0.0, p.groundRadius, 0.0), sunShadow.bias);
     // The cloud shadow map is taken from the terrain surface; the air below the layer sees nearly the same column.
     if (viewHeight - p.groundRadius < clouds.bottom) { lit *= sampleCloudShadow(clouds, cloudShadowMap, lutSampler, position.xz, TERRAIN_MAP_EXTENT); }
     let multiScatter = sampleMultiScatter(p, multiScatterLut, lutSampler, viewHeight, sunZenithCos);

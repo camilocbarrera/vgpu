@@ -54,6 +54,8 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
 9. Same erosion LOD in both modes, so moving never changes cloud shape or density. Done.
 10. Erosion at its mean beyond the LOD, so distance never changes cloud density either. Done; separate commit so it can be reverted on taste.
 11. Cloud shadows on the terrain and the haze from a per-frame transmittance map. Done.
+12. One shadow map from the sun for terrain and air, in place of the heightmap marches. Done; cascades next for
+    resolution near the camera (130 m texels today), then the cloud map into sun space.
 
 ## Results
 
@@ -82,6 +84,8 @@ Same machine and method as the baseline. ms per frame.
 | 10 erosion continues at its mean beyond the detail LOD | 2.2 | 1.44 | 0.39 | 1.81 | 1.33 | 0.23 | on battery. Past the coarse LOD ring the erosion used to be dropped, so a cloud gained density with distance and the detail slider thinned near clouds only. It now applies the mean erosion (the detail fbm averages 0.494 over its volume) where the pattern has faded, so the amount of matter no longer depends on distance and a cloud crossing a LOD ring keeps its density. No texture reads added; ghost during the yaw sweep unchanged at 0.06 |
 
 | 11 cloud shadow map | 2.6 | 1.44 | 0.39 | 2.16 | 1.33 | 0.24 | on battery. Feature, not a saving: a 512x512 map of the cloud layer's sun transmittance over the terrain, rebuilt every frame (0.59 ms) because the wind moves the clouds, read by the terrain shading and by the aerial perspective for the air under the layer, so the haze carries the clouds' shadows too. Switchable from the panel; off, the pass is skipped |
+
+| 12 sun shadow map replaces two heightmap marches | 2.5 | 1.44 | 0.30 | 2.18 | 1.33 | 0.20 | on battery. The terrain ring grid is rasterized from the sun (orthographic, depth only, 2048², a 130 km disc up to 6 km) when the sun moves: 0.73 ms against the 2.5 ms of the shadow-height compute it replaces. Terrain pixels read it with five comparisons through a linear comparison sampler (scene pass 0.24 → 0.20 ms without the 12-step march); air samples in the aerial LUT read it once each. The same mesh now casts and receives, so the heightmap-versus-mesh mismatch is gone for good. The aerial LUT, a compute pass, reads last frame's map: a frame late while the sun drags, and stills pre-render it |
 
 Measuring temporal behaviour: `node scripts/render-atmosphere.mjs --preset golden-hour --sun 1.5 --ev 6.5 --temporal 56
 --jump 36:altitude=0.4 --region 480,240,480,70` renders live-loop frames headless and prints, per frame, the mean
