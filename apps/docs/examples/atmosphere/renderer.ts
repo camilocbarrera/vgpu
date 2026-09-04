@@ -404,7 +404,7 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
     writeMask: [],
     set: { atmosphere, camera, mesh: terrainMesh, terrainMap, lutSampler: sampler },
   });
-  const sceneEffect = createEffect(gpu, sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, terrainMap, terrainAlbedoMap, frame: frameConstants, aerialUnshadowedLut: aerialUnshadowed, aerialDirectLut: aerialDirect, terrainDepth, cloudShadowMap, sunShadowMap0: sunShadows[0]!, sunShadowMap1: sunShadows[1]!, sunShadowMap2: sunShadows[2]!, shadowSampler, sunShadow: sunShadowUniforms } });
+  const sceneEffect = createEffect(gpu, sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, terrainMap, terrainAlbedoMap, frame: frameConstants, aerialUnshadowedLut: aerialUnshadowed, aerialDirectLut: aerialDirect, terrainDepth: terrainDepth.depth!, cloudShadowMap, sunShadowMap0: sunShadows[0]!, sunShadowMap1: sunShadows[1]!, sunShadowMap2: sunShadows[2]!, shadowSampler, sunShadow: sunShadowUniforms } });
   const cloudMarchEffect = createEffect(gpu, cloudsMarchWgsl, { label: `${label}-cloud-march`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, aerialLut: aerial, shapeNoise, detailNoise, weatherMap, curlNoise, sceneHdr: scene,
     lutSampler: sampler, noiseSampler, update: cloudUpdate, frame: frameConstants,
@@ -685,6 +685,8 @@ function cloudUpdateUniforms({ valid, frame, accumulate, fast, restFrames, size 
 function resizeGraph(graph: AtmosphereGraph, size: readonly [number, number]): void {
   graph.scene.resize(size);
   graph.terrainDepth.resize(size);
+  // The scene reads the depth attachment itself (a texture_2d<f32> binding, see scene.wgsl); the resize replaced it.
+  graph.sceneEffect.set({ terrainDepth: graph.terrainDepth.depth! });
   const cloudSize = cloudSizeFor(size);
   graph.cloudsTargets.read.resize(cloudSize);
   graph.cloudsTargets.write.resize(cloudSize);

@@ -14,7 +14,9 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(11) var terrainAlbedoMap: texture_2d<f32>;
 @group(0) @binding(12) var aerialUnshadowedLut: texture_3d<f32>;
 @group(0) @binding(20) var aerialDirectLut: texture_3d<f32>;
-@group(0) @binding(13) var terrainDepth: texture_depth_2d;
+// The prepass depth, bound as an unfilterable float texture rather than texture_depth_2d: WebGPU's compatibility
+// mode (the OpenGL ES path the docs' headless renders run on) forbids textureLoad on depth textures.
+@group(0) @binding(13) var terrainDepth: texture_2d<f32>;
 @group(0) @binding(14) var cloudShadowMap: texture_2d<f32>;
 @group(0) @binding(15) var sunShadowMap0: texture_depth_2d;
 @group(0) @binding(16) var shadowSampler: sampler_comparison;
@@ -142,7 +144,7 @@ fn altitudeOf(p: Atmosphere, position: vec3f) -> f32 { return length(position) -
  * reversed-Z with depth = TERRAIN_NEAR / view depth, so the point lies on the pixel's ray at that view depth.
  */
 fn terrainHit(p: Atmosphere, origin: vec3f, dir: vec3f, pixel: vec2i) -> TerrainHit {
-  let depth = textureLoad(terrainDepth, pixel, 0);
+  let depth = textureLoad(terrainDepth, pixel, 0).r;
   if (depth <= 0.0) { return TerrainHit(-1.0, vec3f(0.0), 0.0); }
   let distance = TERRAIN_NEAR / (depth * dot(dir, camera.forward));
   let onMesh = origin + dir * distance;
