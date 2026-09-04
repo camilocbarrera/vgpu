@@ -20,8 +20,10 @@ import { CloudOutput, Reprojection, compactToTexel } from "./clouds-temporal.wgs
 // Marches this frame's live cloud texels, packed into the compact target (clouds-temporal.wgsl); the pass is drawn
 // with a viewport of the compact size and clouds-resolve.wgsl scatters the results into the history.
 
-const MARCH_STEPS: i32 = 160;
+/** Step budget from horizon to zenith rays in the fast mode; at rest (`detail` = 1) it doubles. */
+const MARCH_STEPS: f32 = 160.0;
 const MIN_MARCH_STEPS: f32 = 80.0;
+const MAX_MARCH_STEPS: i32 = 320;
 /** Densities below this are treated as the cloud surface and marched with half steps. */
 const EDGE_DENSITY: f32 = 0.12;
 const LIGHT_STEPS: i32 = 6;
@@ -48,14 +50,27 @@ fn dualLobePhase(cosTheta: f32, octave: f32) -> f32 {
   return mix(henyeyGreenstein(cosTheta, FORWARD_G * octave), henyeyGreenstein(cosTheta, BACK_G * octave), 0.3);
 }
 
+/** pcg2d (Jarzynski & Olano 2020): a real integer hash, unlike the row-wise ramp it replaces. */
+fn pcg2d(v: vec2u) -> vec2u {
+  var p = v * 1664525u + 1013904223u;
+  p.x += p.y * 1664525u;
+  p.y += p.x * 1664525u;
+  p ^= p >> vec2u(16u);
+  p.x += p.y * 1664525u;
+  p.y += p.x * 1664525u;
+  p ^= p >> vec2u(16u);
+  return p;
+}
+
 /**
- * Interleaved gradient noise (Jimenez 2014) per history texel and frame: neighbouring texels get unrelated march
- * offsets, so the step quantisation of the march becomes fine grain instead of bands, and the accumulation averages
- * it out over frames. (The previous integer hash was a linear ramp along rows, which drew the steps as stripes.)
+ * March offset per history texel and frame: white noise across texels, so the step quantisation of the march becomes
+ * grain instead of bands, stepped by the golden ratio over frames, so each texel's successive refreshes sample the
+ * step evenly and the accumulation converges in a few refreshes. (Interleaved gradient noise was tried first: its
+ * diagonal structure stayed visible as a drifting weave.)
  */
-fn interleavedGradientNoise(texel: vec2f, frameIndex: i32) -> f32 {
-  let p = texel + 5.588238 * f32(frameIndex % 64);
-  return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y));
+fn marchNoise(texel: vec2i, frameIndex: i32) -> f32 {
+  let spatial = f32(pcg2d(vec2u(texel)).x) / 4294967295.0;
+  return fract(spatial + 0.6180339887 * f32(frameIndex % 64));
 }
 
 fn density(position: vec3f, viewDistance: f32, cheap: bool) -> f32 {
@@ -66,7 +81,8 @@ fn density(position: vec3f, viewDistance: f32, cheap: bool) -> f32 {
 /**
  * Optical depth toward the sun with doubling steps (20 m to 640 m). The three nearest samples use the full,
  * eroded density so the surface bumps shadow their own crevices; the far ones skip erosion and are scaled down.
- * Each sample sits at a jittered fraction of its step, so the lit faces do not terrace along the sun direction.
+ * Only the near samples are jittered within their step: they are what terraces the lit faces, and jittering the
+ * far ones (160 to 640 m) moved them through whole clouds and turned the lighting into speckle.
  */
 fn lightOpticalDepth(position: vec3f, sunDir: vec3f, viewDistance: f32, noise: f32) -> f32 {
   var depth = 0.0;
@@ -74,7 +90,7 @@ fn lightOpticalDepth(position: vec3f, sunDir: vec3f, viewDistance: f32, noise: f
   var step = 0.02;
   for (var i = 0; i < LIGHT_STEPS; i += 1) {
     let near = i < 3;
-    let sample = t + step * mix(0.25, 0.75, noise);
+    let sample = t + step * select(0.5, mix(0.25, 0.75, noise), near);
     depth += density(position + sunDir * sample, viewDistance, !near) * step * select(0.75, 1.0, near);
     t += step;
     step *= 2.0;
@@ -129,7 +145,7 @@ fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
   // The noise only animates while the accumulation can average it; with full blend (a still, or the frames right
   // after a change) a static pattern keeps the fresh texels consistent with their neighbours instead of shimmering.
   let noiseFrame = select(0, frameIndex, reprojection.blend < 1.0);
-  let sample = marchClouds(p, dir, interleavedGradientNoise(vec2f(texel), noiseFrame), uv);
+  let sample = marchClouds(p, dir, marchNoise(texel, noiseFrame), uv);
   return CloudOutput(sample.color, vec4f(sample.depth, 0.0, 0.0, 0.0));
 }
 
@@ -151,8 +167,9 @@ fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> CloudSample 
   let skyAmbient = frame.skyAmbient;
   let groundBounce = frame.groundBounce;
 
-  // Rays near the horizon cross far more cloud than rays near the zenith, so the step budget follows the elevation.
-  let stepBudget = mix(f32(MARCH_STEPS), MIN_MARCH_STEPS, abs(dir.y));
+  // Rays near the horizon cross far more cloud than rays near the zenith, so the step budget follows the elevation;
+  // at rest it doubles, which halves the step and with it the grain the accumulation has to average.
+  let stepBudget = mix(MARCH_STEPS, MIN_MARCH_STEPS, abs(dir.y)) * mix(1.0, 2.0, reprojection.detail);
   let fineStep = max(0.02, (range.end - range.start) / stepBudget);
   let coarseStep = fineStep * 2.0;
   var t = range.start + fineStep * noise;
@@ -161,7 +178,7 @@ fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> CloudSample 
   var depthSum = 0.0;
   var emptySamples = 0;
   var coarse = false;
-  for (var i = 0; i < MARCH_STEPS; i += 1) {
+  for (var i = 0; i < MAX_MARCH_STEPS; i += 1) {
     if (t >= range.end || transmittance < 0.01 || f32(i) >= stepBudget) { break; }
     let position = origin + dir * t;
     let sampleDensity = density(position, t, false);

@@ -1,5 +1,6 @@
 // Headless renders of the atmosphere example for visual verification.
 //   node scripts/render-atmosphere.mjs [--out dir] [--preset name|all] [--size WxH] [--debug transmittance|multiscatter|sky-view|weather|terrain] [--bench N] [--accumulate N]
+//   temporal stability: --temporal N [--region x,y,w,h] [--jump frame:override=value]  (e.g. --jump 40:altitude=0.4)
 //   overrides: --sun <deg> --azimuth <deg> --altitude <km> --yaw <deg> --pitch <deg> --ev <stops> --haze <x> --coverage <0..1> --detail <x> --type <-1..1> --seed <n> --time <s> --tonemap agx|aces|neutral|none
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -36,6 +37,10 @@ for (const name of presetNames) {
       console.log(`- ${name}: ${await bench(gpu, target, state, args.bench)}`);
       continue;
     }
+    if (args.temporal) {
+      await temporal(gpu, target, state, name, args);
+      continue;
+    }
     const started = performance.now();
     if (args.accumulate) await renderAccumulated(gpu, target, state, args.accumulate);
     else await renderStill(gpu, target, state, args.debug);
@@ -57,6 +62,69 @@ async function renderAccumulated(gpu, target, state, frames) {
   bakeLuts(gpu, graph);
   for (let i = 0; i < frames; i++) frame(gpu, (current) => renderGraph(current, graph, target));
   await gpu.gpu.queue.onSubmittedWorkDone();
+}
+
+/**
+ * Live-loop frames at a fixed state (wind frozen), measuring how much the image changes from one frame to the next:
+ * mean absolute sRGB difference (0..255) over the whole frame and over `--region x,y,w,h`, plus the temporal noise
+ * of the region over the last 8 frames (mean per-pixel standard deviation). A converged temporal scheme tends to
+ * zero; `--jump frame:override=value` changes the state at that frame to measure the transient and its recovery.
+ */
+async function temporal(gpu, target, state, name, args) {
+  const graph = await createGraph(gpu, target, 'atmosphere-temporal');
+  graph.accumulate = true;
+  applyState(graph, state, target.size);
+  bakeLuts(gpu, graph);
+  const [width, height] = target.size;
+  const region = args.region ?? [0, 0, width, height];
+  const whole = [0, 0, width, height];
+  const jump = args.jump;
+  const keep = [0, jump ? jump.frame - 1 : -1, jump ? jump.frame : -1, jump ? jump.frame + 1 : -1, args.temporal - 1];
+  const recent = [];
+  let previous;
+  console.log(`- ${name}: temporal stability over ${args.temporal} frames at ${width}x${height}, region ${region.join(',')}${jump ? `, jump at frame ${jump.frame}: ${JSON.stringify(jump.overrides)}` : ''}`);
+  console.log('  frame  mad(all)  mad(region)  noise(region)');
+  for (let i = 0; i < args.temporal; i++) {
+    const current = jump && i >= jump.frame ? { ...state, ...jump.overrides } : state;
+    applyState(graph, current, target.size);
+    frame(gpu, (f) => renderGraph(f, graph, target));
+    await gpu.gpu.queue.onSubmittedWorkDone();
+    const pixels = await target.read();
+    recent.push(pixels);
+    if (recent.length > 8) recent.shift();
+    if (previous) {
+      const noise = recent.length === 8 ? temporalNoise(recent, width, region).toFixed(2) : '   -';
+      console.log(`  ${String(i).padStart(5)}  ${meanAbsDiff(previous, pixels, width, whole).toFixed(2).padStart(8)}  ${meanAbsDiff(previous, pixels, width, region).toFixed(2).padStart(11)}  ${String(noise).padStart(13)}`);
+    }
+    previous = pixels;
+    if (keep.includes(i)) await writePng(path.join(outDir, `${name}.temporal.${String(i).padStart(3, '0')}.png`), pixels, width, height);
+  }
+}
+
+function meanAbsDiff(a, b, width, [x0, y0, w, h]) {
+  let sum = 0;
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+    const i = (y * width + x) * 4;
+    sum += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+  }
+  return sum / (w * h * 3);
+}
+
+/** Mean over the region of the per-pixel standard deviation across `frames` (rgb pooled). */
+function temporalNoise(frames, width, [x0, y0, w, h]) {
+  let sum = 0;
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+    for (let c = 0; c < 3; c++) {
+      const i = (y * width + x) * 4 + c;
+      let mean = 0;
+      for (const f of frames) mean += f[i];
+      mean /= frames.length;
+      let variance = 0;
+      for (const f of frames) variance += (f[i] - mean) ** 2;
+      sum += Math.sqrt(variance / frames.length);
+    }
+  }
+  return sum / (w * h * 3);
 }
 
 /** Wall-clock ms per frame over `frames` steady-state frames on one graph (first frame bakes and warms up). */
@@ -103,7 +171,7 @@ function describe(pixels, [width, height]) {
 }
 
 function parseArgs(argv) {
-  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, bench: 0, accumulate: 0, overrides: {} };
+  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, bench: 0, accumulate: 0, temporal: 0, region: undefined, jump: undefined, overrides: {} };
   const numeric = { sun: 'sunElevation', azimuth: 'sunAzimuth', altitude: 'altitudeKm', yaw: 'yaw', pitch: 'pitch', ev: 'exposureEv', haze: 'haze', coverage: 'cloudCoverage', detail: 'cloudDetail', type: 'cloudType', seed: 'cloudSeed', time: 'time' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -113,6 +181,14 @@ function parseArgs(argv) {
     else if (arg === '--debug') parsed.debug = argv[++i];
     else if (arg === '--bench') parsed.bench = Number(argv[++i]);
     else if (arg === '--accumulate') parsed.accumulate = Number(argv[++i]);
+    else if (arg === '--temporal') parsed.temporal = Number(argv[++i]);
+    else if (arg === '--region') parsed.region = argv[++i].split(',').map(Number);
+    else if (arg === '--jump') {
+      const [frameText, assignment] = argv[++i].split(':');
+      const [key, value] = assignment.split('=');
+      if (!numeric[key]) throw new Error(`Unknown override '${key}' in --jump.`);
+      parsed.jump = { frame: Number(frameText), overrides: { [numeric[key]]: Number(value) } };
+    }
     else if (arg === '--tonemap') parsed.overrides.tonemap = argv[++i];
     else if (arg.startsWith('--') && numeric[arg.slice(2)]) parsed.overrides[numeric[arg.slice(2)]] = Number(argv[++i]);
     else throw new Error(`Unknown argument '${arg}'.`);

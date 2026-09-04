@@ -6,8 +6,10 @@
 /**
  * Previous frame's camera and this frame's update: one texel in `refreshPeriod` (16 at rest, 2 right after a change
  * of camera altitude or lighting) is re-marched, the rest reproject from the history through the world point at the
- * depth the history stored. `blend` < 1 accumulates each re-marched texel into its reprojected history with a
- * sub-texel `jitter`, which supersamples the edges over time; stills and frames right after a change use blend 1.
+ * depth the history stored. `blend` is the weight of a re-marched texel against its reprojected history: 1 right
+ * after a change (and in stills), then 1/n for the n-th refresh since, down to a floor, so the march noise and the
+ * sub-texel `jitter` average into a stable, supersampled image while the camera rests. `detail` is 1 at rest and 0
+ * in the fast mode: the march spends twice the steps and keeps its erosion detail twice as far when it can afford to.
  */
 export struct Reprojection {
   forward: vec3f, frame: f32,
@@ -16,7 +18,7 @@ export struct Reprojection {
   position: vec3f, valid: f32,
   blend: f32, refreshPeriod: f32, jitter: vec2f,
   /** Cloud history size in texels. */
-  size: vec2f,
+  size: vec2f, detail: f32, pad: f32,
 };
 
 /** Color: premultiplied luminance with transmittance in alpha. Depth: transmittance-weighted mean distance (km), 0 without cloud. */
