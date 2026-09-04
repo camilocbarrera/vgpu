@@ -53,6 +53,7 @@ export interface AtmosphereGraph {
   readonly weatherMap: Texture;
   readonly curlNoise: Texture;
   readonly terrainMap: Texture;
+  readonly terrainAlbedoMap: Texture;
   /** Ping-pong cloud buffers: `write` receives this frame, `read` is last frame's history for reprojection. */
   readonly cloudsTargets: PingPongTargets;
   readonly reprojection: SharedUniforms<ReprojectionUniformValues>;
@@ -186,6 +187,7 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const detailNoise = gpu.texture({ size: [noise.detail, noise.detail, noise.detail], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-detail` });
   const weatherMap = gpu.texture({ size: [noise.weather, noise.weather], format: 'rgba8unorm', label: `${label}-weather` });
   const terrainMap = gpu.texture({ size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: HDR_FORMAT, label: `${label}-terrain` });
+  const terrainAlbedoMap = gpu.texture({ size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: 'rgba8unorm', label: `${label}-terrain-albedo` });
   const curlNoise = gpu.texture({ size: [CURL_SIZE, CURL_SIZE], format: 'rgba8unorm', label: `${label}-curl` });
 
   const transmittanceEffect = gpu.effect(transmittanceLutWgsl, { label: `${label}-transmittance`, set: { atmosphere } });
@@ -194,7 +196,7 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const aerialCompute = gpu.compute(aerialLutWgsl, { label: `${label}-aerial`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler, aerialLut: aerial } });
   const frameConstants = gpu.storage(FRAME_CONSTANTS_BYTES, 'read-write');
   const frameConstantsCompute = gpu.compute(frameConstantsWgsl, { label: `${label}-frame-constants`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, lutSampler: sampler, frameConstants } });
-  const sceneEffect = gpu.effect(sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap, frame: frameConstants } });
+  const sceneEffect = gpu.effect(sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap, terrainAlbedoMap, frame: frameConstants } });
   const cloudsEffect = gpu.effect(cloudsWgsl, { label: `${label}-clouds`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial,
     shapeNoise, detailNoise, weatherMap, curlNoise, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, reprojection, frame: frameConstants,
@@ -206,11 +208,11 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   gpu.compute(weatherMapWgsl, { label: `${label}-weather-map`, set: { weatherMap } }).dispatch(noise.weather / WEATHER_WORKGROUP, noise.weather / WEATHER_WORKGROUP, 1);
   gpu.compute(curlNoiseWgsl, { label: `${label}-curl-noise`, set: { curlNoise } }).dispatch(CURL_SIZE / WEATHER_WORKGROUP, CURL_SIZE / WEATHER_WORKGROUP, 1);
   // The heightfield is baked once too: the terrain march then costs one texture tap per step instead of a 6-octave fbm.
-  gpu.compute(terrainHeightmapWgsl, { label: `${label}-terrain-heightmap`, set: { terrainMap } }).dispatch(TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, 1);
+  gpu.compute(terrainHeightmapWgsl, { label: `${label}-terrain-heightmap`, set: { terrainMap, albedoMap: terrainAlbedoMap } }).dispatch(TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, 1);
   const lutPreview = gpu.effect(lutPreviewWgsl, { label: `${label}-lut-preview` });
 
   const graph: AtmosphereGraph = {
-    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, curlNoise, terrainMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, scene,
+    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, curlNoise, terrainMap, terrainAlbedoMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, scene,
     transmittanceEffect, multiScatterCompute, skyViewEffect, aerialCompute, frameConstants, frameConstantsCompute, sceneEffect, cloudsEffect, presentEffect, lutPreview, sampler,
     lutPhase: 'stale', bakedHaze: 1, frame: 0, accumulate: false,
   };
@@ -330,5 +332,5 @@ function scale(v: Vec3, factor: number): Vec3 { return [v[0] * factor, v[1] * fa
 
 function destroyGraph(graph: AtmosphereGraph): void {
   for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.cloudsTargets.read, graph.cloudsTargets.write]) target.color.destroy();
-  for (const texture of [graph.multiScatter, graph.aerial, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.curlNoise, graph.terrainMap]) texture.destroy();
+  for (const texture of [graph.multiScatter, graph.aerial, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.curlNoise, graph.terrainMap, graph.terrainAlbedoMap]) texture.destroy();
 }

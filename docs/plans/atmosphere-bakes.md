@@ -41,3 +41,12 @@ Filled in as each step lands. Baseline first.
 | 4 exp by squaring | 253 (87) | 145 (89) | 0.000 | 1 | 0 % | rounding only; no measurable change |
 | 5 light volume (reverted) | 243 (83) | 139 (85) | 0.557 | 67 | 6.7 % | tried as a 256x256x12 volume of the far half of the light march (cheap-density samples beyond 140 m), rebaked every 8 frames: full stills 3 % faster on golden-hour, none on high-altitude, and golden-hour mean error 1.7 with 16 % of pixels changed. Reverted: the far samples are the cheap third of the march, and the temporal update already marches only 1/16 of the pixels per frame, so the bake costs about what it saves |
 | 6 terrain sun-transmittance table | 249 (90) | 130 (80) | 0.000 | 1 | 0 % | rounding only; no measurable change |
+| 7 terrain albedo noise baked | 248 (90) | 137 (82) | 0.027 | 14 | 0.65 % | bilinear at 98 m vs analytic noise; largest on the stratosphere view (mean 0.12); no measurable change |
+
+## Conclusion
+
+Every exact bake landed with zero or rounding-level pixel difference, but none moved the CPU (lavapipe) bench
+outside its +-5 % noise: the cost of this example is the terrain march and the cloud light march, and the
+baked expressions were already a small fraction of a pixel. The light volume (step 5) was the only candidate with
+real leverage and it did not pay for itself once the temporal cloud update was in place, so it was reverted.
+Steps 1-4, 6 and 7 stay because they make the per-frame invariants explicit at no cost.

@@ -1,5 +1,5 @@
 import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, FrameConstants, PI, TERRAIN_TRANSMITTANCE_ENTRIES, cameraRay, raySphere, sampleTransmittance, skyViewUvFast } from "./atmosphere-common.wgsl";
-import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
+import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, sampleTerrainAlbedoNoise, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
 import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
@@ -13,6 +13,7 @@ import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(8) var noiseSampler: sampler;
 @group(0) @binding(9) var terrainMap: texture_2d<f32>;
 @group(0) @binding(10) var<storage, read> frame: FrameConstants;
+@group(0) @binding(11) var terrainAlbedoMap: texture_2d<f32>;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
 
@@ -149,7 +150,7 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let sunZenithCos = dot(normal, p.sunDirection);
     let sunTransmittance = terrainSunTransmittance(terrain.height);
     let shadow = terrainShadow(p, terrain.position, p.sunDirection) * cloudShadow(weatherMap, noiseSampler, clouds, terrain.position, terrain.height, p.sunDirection);
-    let albedo = terrainAlbedo(terrain.height, normal, terrain.position.xz);
+    let albedo = terrainAlbedo(terrain.height, normal, sampleTerrainAlbedoNoise(terrainAlbedoMap, lutSampler, terrain.position.xz));
     let ambientOcclusion = 0.6 + 0.4 * normal.y;
     let lit = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient * ambientOcclusion);
     let aerial = sampleAerial(uv, terrain.distance);
@@ -160,7 +161,7 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let normal = normalize(position);
     let sunZenithCos = dot(normal, p.sunDirection);
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius, sunZenithCos);
-    let albedo = terrainAlbedo(0.0, vec3f(0.0, 1.0, 0.0), position.xz);
+    let albedo = terrainAlbedo(0.0, vec3f(0.0, 1.0, 0.0), sampleTerrainAlbedoNoise(terrainAlbedoMap, lutSampler, position.xz));
     let shadow = cloudShadow(weatherMap, noiseSampler, clouds, position, 0.0, p.sunDirection);
     let ground = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient);
     if (tSphere < AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE) {

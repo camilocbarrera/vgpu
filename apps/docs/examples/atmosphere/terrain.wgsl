@@ -64,17 +64,25 @@ export fn terrainNormal(xz: vec2f, epsilon: f32) -> vec3f {
   return normalize(vec3f(-dx, 2.0 * epsilon, -dz));
 }
 
-/** Albedo by altitude and slope: grass in the plains, rock on steep faces, snow near the peaks. */
-export fn terrainAlbedo(height: f32, normal: vec3f, xz: vec2f) -> vec3f {
+/** The two low-frequency noises the albedo uses, in [0, 1]; baked into the albedo map by terrain-heightmap.wgsl. */
+export fn terrainAlbedoNoise(xz: vec2f) -> vec2f {
+  return vec2f(0.5 + 0.5 * valueNoise(xz * 0.35), 0.5 + 0.5 * valueNoise(xz * 0.2));
+}
+
+export fn sampleTerrainAlbedoNoise(map: texture_2d<f32>, mapSampler: sampler, xz: vec2f) -> vec2f {
+  return textureSampleLevel(map, mapSampler, terrainMapUv(xz), 0.0).rg;
+}
+
+/** Albedo by altitude and slope: grass in the plains, rock on steep faces, snow near the peaks. `noise` comes from terrainAlbedoNoise. */
+export fn terrainAlbedo(height: f32, normal: vec3f, noise: vec2f) -> vec3f {
   let grass = vec3f(0.11, 0.13, 0.05);
   let dry = vec3f(0.22, 0.17, 0.10);
   let rock = vec3f(0.23, 0.21, 0.19);
   let snow = vec3f(0.78, 0.80, 0.84);
-  let variation = 0.5 + 0.5 * valueNoise(xz * 0.35);
-  var albedo = mix(grass, dry, variation);
+  var albedo = mix(grass, dry, noise.x);
   let slope = 1.0 - normal.y;
   albedo = mix(albedo, rock, smoothstep(0.08, 0.35, slope));
-  let snowLine = 1.9 + 0.35 * valueNoise(xz * 0.2);
+  let snowLine = 1.9 + 0.35 * (noise.y * 2.0 - 1.0);
   let snowAmount = smoothstep(snowLine, snowLine + 0.5, height) * (1.0 - smoothstep(0.35, 0.6, slope));
   return mix(albedo, snow, snowAmount);
 }
