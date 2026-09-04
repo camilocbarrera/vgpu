@@ -99,23 +99,32 @@ fn terrainHit(p: Atmosphere, origin: vec3f, dir: vec3f, pixel: vec2i) -> Terrain
   let depth = textureLoad(terrainDepth, pixel, 0);
   if (depth <= 0.0) { return TerrainHit(-1.0, vec3f(0.0), 0.0); }
   let distance = TERRAIN_NEAR / (depth * dot(dir, camera.forward));
-  let position = origin + dir * distance;
-  return TerrainHit(distance, position, altitudeOf(p, position));
+  let onMesh = origin + dir * distance;
+  // The mesh is linear between ring vertices up to 265 m apart while the heightmap has 98 m texels, so the point
+  // can sit tens of metres off the heightmap surface. Shading (and the shadow march, which would otherwise find
+  // itself underground at its first step) uses the heightmap's own height at this horizontal position.
+  let surfaceHeight = height(onMesh.xz);
+  let position = onMesh * ((p.groundRadius + surfaceHeight) / length(onMesh));
+  return TerrainHit(distance, position, surfaceHeight);
 }
 
-/** Cheap soft shadow toward the sun; step size grows with distance. */
+/**
+ * Soft shadow of the heightfield toward the sun; step size grows with distance. The march starts one heightmap
+ * texel out: closer than that the bilinear surface shadows itself along every slope, which the Lambert term
+ * already accounts for, and the penumbra is a cone of about 1:3 so shadow edges do not trace the texel grid.
+ */
 fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
   if (sunDir.y <= 0.0) { return 0.0; }
-  var t = 0.02;
+  var t = 0.1;
   var shadow = 1.0;
   for (var i = 0; i < SHADOW_STEPS; i += 1) {
     let sample = position + sunDir * t;
     let altitude = altitudeOf(p, sample);
     if (altitude > TERRAIN_MAX_HEIGHT) { break; }
     let delta = altitude - height(sample.xz);
-    shadow = min(shadow, saturate(8.0 * delta / t));
+    shadow = min(shadow, saturate(3.0 * delta / t));
     if (shadow <= 0.0) { break; }
-    t += 0.04 + t * 0.6;
+    t += 0.06 + t * 0.5;
   }
   return shadow;
 }
