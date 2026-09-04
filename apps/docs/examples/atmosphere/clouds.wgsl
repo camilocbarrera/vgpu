@@ -111,13 +111,16 @@ fn octavePhases(cosTheta: f32) -> array<f32, MS_OCTAVES> {
   return phases;
 }
 
-/** Sum of attenuated scattering octaves; higher octaves see less extinction and a flatter phase. */
+/**
+ * Sum of attenuated scattering octaves; higher octaves see less extinction and a flatter phase.
+ * With MS_EXTINCTION = 0.5 the octave attenuations are exp(-od / 2^k): one exp for the last octave, then squaring.
+ */
 fn multiScatter(opticalDepth: f32, phases: array<f32, MS_OCTAVES>) -> f32 {
   var sum = 0.0;
-  var extinction = 1.0;
-  for (var i = 0; i < MS_OCTAVES; i += 1) {
-    sum += phases[i] * exp(-opticalDepth * extinction);
-    extinction *= MS_EXTINCTION;
+  var attenuation = exp(-opticalDepth * pow(MS_EXTINCTION, f32(MS_OCTAVES - 1)));
+  for (var i = MS_OCTAVES - 1; i >= 0; i -= 1) {
+    sum += phases[i] * attenuation;
+    attenuation *= attenuation;
   }
   return sum;
 }

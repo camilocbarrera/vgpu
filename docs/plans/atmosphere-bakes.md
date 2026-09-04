@@ -38,3 +38,4 @@ Filled in as each step lands. Baseline first.
 | 1 phases per pixel | 248 (94) | 142 (90) | 0 | 0 | 0 % | no measurable change: within bench noise, the compiler was already hoisting the loop-invariant phases |
 | 2 frame constants buffer | 255 (94) | 138 (86) | 0 | 0 | 0 % | no measurable change: the per-pixel terms are tens of ops against thousands per march |
 | 3 planet-shadow skip | 252 (90) | 140 (87) | 0 | 0 | 0 % | no measurable change; one sqrt per lit sample |
+| 4 exp by squaring | 253 (87) | 145 (89) | 0.000 | 1 | 0 % | rounding only; no measurable change |
