@@ -39,3 +39,4 @@ Filled in as each step lands. Baseline first.
 | 2 frame constants buffer | 255 (94) | 138 (86) | 0 | 0 | 0 % | no measurable change: the per-pixel terms are tens of ops against thousands per march |
 | 3 planet-shadow skip | 252 (90) | 140 (87) | 0 | 0 | 0 % | no measurable change; one sqrt per lit sample |
 | 4 exp by squaring | 253 (87) | 145 (89) | 0.000 | 1 | 0 % | rounding only; no measurable change |
+| 5 light volume (reverted) | 243 (83) | 139 (85) | 0.557 | 67 | 6.7 % | tried as a 256x256x12 volume of the far half of the light march (cheap-density samples beyond 140 m), rebaked every 8 frames: full stills 3 % faster on golden-hour, none on high-altitude, and golden-hour mean error 1.7 with 16 % of pixels changed. Reverted: the far samples are the cheap third of the march, and the temporal update already marches only 1/16 of the pixels per frame, so the bake costs about what it saves |
