@@ -167,7 +167,7 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   const surface = createSurface(gpu, canvas, { dpr: MAX_DPR });
   const graph = await createGraph(gpu, surface, 'atmosphere-live');
   graph.accumulate = true;
-  if (bench) bench.mountBenchReport(canvas, await bench.runBench(gpu, [canvas.clientWidth, canvas.clientHeight]));
+  if (bench) await bench.mountBenchReport(canvas, await bench.runBench(gpu, [canvas.clientWidth, canvas.clientHeight]));
   const controls = installControls(canvas, { ...PRESETS[DEFAULT_PRESET] });
   let disposed = false;
   let sawInitialResize = false;

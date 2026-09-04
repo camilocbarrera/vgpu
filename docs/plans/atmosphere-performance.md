@@ -13,6 +13,11 @@ frame, at the default preset (golden hour, camera at 80 m) and at two device pix
 frame within noise. GPU timestamps were tried and rejected: on Apple GPUs the passes of a frame overlap, so a pass
 timestamp pair also spans its predecessors (the trivial present pass "took" as long as the whole frame).
 
+The report is headed by the power state (Battery API): a laptop GPU may clock differently unplugged, so numbers only
+compare within one state. Steps 0 to 3 were measured plugged in; the same build re-measured on battery right after
+step 3 gave 2.54 / 1.68 ms for the full frame against 2.60 / 1.67 plugged in, so on this machine the difference is
+within noise at this load. Later rows say which state they were taken in.
+
 ## Baseline
 
 Apple GPU (Metal 3), Chromium, 1040x1160 CSS pixels, best of 3 runs of 24 frames. ms per frame.

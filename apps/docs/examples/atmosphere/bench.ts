@@ -7,6 +7,12 @@ import { DEFAULT_PRESET, PRESETS } from './tuning';
 
 export interface BenchRow { readonly pass: string; readonly size: string; readonly ms: number }
 
+/** "battery" or "charging" when the browser exposes the Battery API: laptop GPUs clock down unplugged, so numbers only compare within one power state. */
+export async function powerState(): Promise<string> {
+  const battery = await (navigator as Navigator & { getBattery?: () => Promise<{ charging: boolean }> }).getBattery?.().catch(() => undefined);
+  return battery === undefined ? 'unknown power' : battery.charging ? 'charging' : 'battery';
+}
+
 const PASS_FRAMES = 24;
 const WARMUP_FRAMES = 4;
 /** Each row is the best of this many repetitions: GPU clocks drift with load, and the minimum is the stable estimate. */
@@ -62,15 +68,17 @@ export async function runBench(gpu: Gpu, cssSize: readonly [number, number], dpr
     destroyGraph(graph);
     output.color.destroy();
   }
+  console.log(`atmosphere bench, ${await powerState()}`);
   console.table(rows);
   return rows;
 }
 
-/** Prints the rows over the canvas so the numbers are readable without devtools. */
-export function mountBenchReport(canvas: HTMLCanvasElement, rows: readonly BenchRow[]): void {
+/** Prints the rows over the canvas so the numbers are readable without devtools, headed by the power state they were taken in. */
+export async function mountBenchReport(canvas: HTMLCanvasElement, rows: readonly BenchRow[]): Promise<void> {
   const pre = document.createElement('pre');
   const width = Math.max(...rows.map((row) => row.pass.length));
-  pre.textContent = rows.map((row) => `${row.pass.padEnd(width)}  ${row.size.padEnd(20)}  ${row.ms.toFixed(2).padStart(6)} ms`).join('\n');
+  const lines = rows.map((row) => `${row.pass.padEnd(width)}  ${row.size.padEnd(20)}  ${row.ms.toFixed(2).padStart(6)} ms`);
+  pre.textContent = [`ms per frame, best of ${REPEATS} x ${PASS_FRAMES} frames, ${await powerState()}`, ...lines].join('\n');
   pre.dataset['atmosphereBench'] = JSON.stringify(rows);
   Object.assign(pre.style, {
     position: 'absolute', left: '16px', bottom: '16px', zIndex: '2', margin: '0', padding: '10px 12px', borderRadius: '10px',
