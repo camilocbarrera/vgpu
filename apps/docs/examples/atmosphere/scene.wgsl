@@ -15,9 +15,11 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(12) var aerialLossLut: texture_3d<f32>;
 @group(0) @binding(13) var terrainDepth: texture_depth_2d;
 @group(0) @binding(14) var cloudShadowMap: texture_2d<f32>;
-@group(0) @binding(15) var sunShadowMap: texture_depth_2d;
+@group(0) @binding(15) var sunShadowMap0: texture_depth_2d;
 @group(0) @binding(16) var shadowSampler: sampler_comparison;
 @group(0) @binding(17) var<uniform> sunShadow: SunShadow;
+@group(0) @binding(18) var sunShadowMap1: texture_depth_2d;
+@group(0) @binding(19) var sunShadowMap2: texture_depth_2d;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
 
@@ -108,12 +110,10 @@ fn terrainHit(p: Atmosphere, origin: vec3f, dir: vec3f, pixel: vec2i) -> Terrain
   return TerrainHit(distance, position, surfaceHeight);
 }
 
-/** Terrain shadow on a surface point, from the sun's shadow map; slopes facing away from the sun get a larger bias. */
+/** Terrain shadow on a surface point, from the sun's shadow cascades. */
 fn terrainShadow(p: Atmosphere, position: vec3f, normal: vec3f, sunDir: vec3f) -> f32 {
   if (sunDir.y <= 0.0) { return 0.0; }
-  let fromGround = position - vec3f(0.0, p.groundRadius, 0.0);
-  let bias = sunShadow.bias * (1.0 + 2.0 * (1.0 - saturate(dot(normal, sunDir))));
-  return sunShadowSoft(sunShadow, sunShadowMap, shadowSampler, fromGround, bias);
+  return sunShadowSoft(sunShadow, sunShadowMap0, sunShadowMap1, sunShadowMap2, shadowSampler, position - vec3f(0.0, p.groundRadius, 0.0), normal, sunDir);
 }
 
 @fragment fn fs_main(@builtin(position) fragCoord: vec4f, @location(0) uv: vec2f) -> @location(0) vec4f {

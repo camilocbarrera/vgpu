@@ -8,12 +8,14 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(3) var multiScatterLut: texture_2d<f32>;
 @group(0) @binding(4) var lutSampler: sampler;
 @group(0) @binding(5) var aerialLut: texture_storage_3d<rgba16float, write>;
-@group(0) @binding(6) var sunShadowMap: texture_depth_2d;
+@group(0) @binding(6) var sunShadowMap0: texture_depth_2d;
 @group(0) @binding(7) var aerialLossLut: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(8) var<uniform> clouds: Clouds;
 @group(0) @binding(9) var cloudShadowMap: texture_2d<f32>;
 @group(0) @binding(10) var shadowSampler: sampler_comparison;
 @group(0) @binding(11) var<uniform> sunShadow: SunShadow;
+@group(0) @binding(12) var sunShadowMap1: texture_depth_2d;
+@group(0) @binding(13) var sunShadowMap2: texture_depth_2d;
 
 struct AerialResult { luminance: vec3f, loss: vec3f, transmittance: vec3f };
 
@@ -53,7 +55,7 @@ fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampl
     let sunZenithCos = dot(p.sunDirection, up);
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, viewHeight, sunZenithCos);
     let earthShadow = select(1.0, 0.0, raySphere(position + up * PLANET_RADIUS_OFFSET, p.sunDirection, p.groundRadius) >= 0.0);
-    var lit = sunShadowSample(sunShadow, sunShadowMap, shadowSampler, position - vec3f(0.0, p.groundRadius, 0.0), sunShadow.bias);
+    var lit = sunShadowSample(sunShadow, sunShadowMap0, sunShadowMap1, sunShadowMap2, shadowSampler, position - vec3f(0.0, p.groundRadius, 0.0), 1.0);
     // The cloud shadow map is taken from the terrain surface; the air below the layer sees nearly the same column.
     if (viewHeight - p.groundRadius < clouds.bottom) { lit *= sampleCloudShadow(clouds, cloudShadowMap, lutSampler, position.xz, TERRAIN_MAP_EXTENT); }
     let multiScatter = sampleMultiScatter(p, multiScatterLut, lutSampler, viewHeight, sunZenithCos);

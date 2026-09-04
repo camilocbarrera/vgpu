@@ -56,9 +56,10 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.curlNoise.format).toBe('rgba8unorm');
       expect(graph.terrainMap.size).toEqual([2048, 2048]);
       expect([...graph.terrainMap.usage]).toContain('storage_binding');
-      expect(graph.sunShadow.size).toEqual([2048, 2048]);
+      expect(graph.sunShadows).toHaveLength(3);
+      expect(graph.sunShadows[0]?.size).toEqual([2048, 2048]);
       expect(graph.cloudShadowMap.size).toEqual([512, 512]);
-      expect(graph.sunShadow.depth?.format).toBe('depth32float');
+      expect(graph.sunShadows[2]?.depth?.format).toBe('depth32float');
       expect(graph.aerialLoss.dimension).toBe('3d');
       expect(graph.terrainDepth.depth?.format).toBe('depth32float');
       expect(graph.bakedSunDirection).toBeUndefined();

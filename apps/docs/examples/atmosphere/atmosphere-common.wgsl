@@ -46,32 +46,73 @@ export struct FrameConstants {
 };
 
 /**
- * The sun's orthographic shadow map (terrain-sun-depth.wgsl). `toShadow` maps a position relative to the ground point
- * under the camera axis to clip space: xy in [-1, 1] across the map, z in [0, 1] along the light, nearest first.
- * `bias` is in that depth unit, about two texels of slope.
+ * The sun's shadow maps (terrain-sun-depth.wgsl): three orthographic cascades looking along the sun, centred on the
+ * ground point under the camera axis and covering discs of `radii` km; the last one reaches the whole terrain.
+ * Each `toShadowN` maps a position relative to that ground point to the cascade's clip space: xy in [-1, 1] across
+ * the map, z in [0, 1] along the light, nearest first. `bias` per cascade is two texels of ground in depth units.
  */
-export struct SunShadow { toShadow: mat4x4f, bias: f32, pad: vec3f };
+export struct SunShadow { toShadow0: mat4x4f, toShadow1: mat4x4f, toShadow2: mat4x4f, radii: vec4f, bias: vec4f };
+export const SUN_SHADOW_CASCADES: i32 = 3;
 
-/** 1 where the point sees the sun, 0 where the shadow map's terrain is in the way, filtered by the comparison sampler. */
-export fn sunShadowSample(shadow: SunShadow, map: texture_depth_2d, comparison: sampler_comparison, fromGround: vec3f, bias: f32) -> f32 {
-  let s = shadow.toShadow * vec4f(fromGround, 1.0);
-  if (any(abs(s.xy) > vec2f(1.0)) || s.z > 1.0) { return 1.0; }
-  return textureSampleCompareLevel(map, comparison, vec2f(s.x * 0.5 + 0.5, 0.5 - s.y * 0.5), s.z - bias);
+export fn sunShadowCascade(shadow: SunShadow, fromGround: vec3f) -> i32 {
+  let distance = length(fromGround.xz);
+  return select(select(2, 1, distance < shadow.radii.y), 0, distance < shadow.radii.x);
 }
 
-/** Five comparisons a texel apart for a soft penumbra on surfaces; the air uses the single sample. */
-export fn sunShadowSoft(shadow: SunShadow, map: texture_depth_2d, comparison: sampler_comparison, fromGround: vec3f, bias: f32) -> f32 {
-  let s = shadow.toShadow * vec4f(fromGround, 1.0);
+export fn sunShadowMatrix(shadow: SunShadow, cascade: i32) -> mat4x4f {
+  if (cascade == 0) { return shadow.toShadow0; }
+  if (cascade == 1) { return shadow.toShadow1; }
+  return shadow.toShadow2;
+}
+
+fn compareCascade(cascade: i32, map0: texture_depth_2d, map1: texture_depth_2d, map2: texture_depth_2d, comparison: sampler_comparison, uv: vec2f, reference: f32) -> f32 {
+  if (cascade == 0) { return textureSampleCompareLevel(map0, comparison, uv, reference); }
+  if (cascade == 1) { return textureSampleCompareLevel(map1, comparison, uv, reference); }
+  return textureSampleCompareLevel(map2, comparison, uv, reference);
+}
+
+/** Lit fraction of a point in one cascade: one hardware-filtered comparison, or five a texel apart when `soft`. */
+fn cascadeLit(shadow: SunShadow, cascade: i32, map0: texture_depth_2d, map1: texture_depth_2d, map2: texture_depth_2d, comparison: sampler_comparison, fromGround: vec3f, biasScale: f32, soft: bool) -> f32 {
+  let s = sunShadowMatrix(shadow, cascade) * vec4f(fromGround, 1.0);
   if (any(abs(s.xy) > vec2f(1.0)) || s.z > 1.0) { return 1.0; }
   let uv = vec2f(s.x * 0.5 + 0.5, 0.5 - s.y * 0.5);
-  let texel = 1.0 / vec2f(textureDimensions(map));
-  let reference = s.z - bias;
-  var lit = textureSampleCompareLevel(map, comparison, uv, reference);
-  lit += textureSampleCompareLevel(map, comparison, uv + vec2f(texel.x, 0.0), reference);
-  lit += textureSampleCompareLevel(map, comparison, uv - vec2f(texel.x, 0.0), reference);
-  lit += textureSampleCompareLevel(map, comparison, uv + vec2f(0.0, texel.y), reference);
-  lit += textureSampleCompareLevel(map, comparison, uv - vec2f(0.0, texel.y), reference);
-  return lit * 0.2;
+  let reference = s.z - shadow.bias[cascade] * biasScale;
+  var lit = compareCascade(cascade, map0, map1, map2, comparison, uv, reference);
+  if (soft) {
+    let texel = 1.0 / vec2f(textureDimensions(map0));
+    lit += compareCascade(cascade, map0, map1, map2, comparison, uv + vec2f(texel.x, 0.0), reference);
+    lit += compareCascade(cascade, map0, map1, map2, comparison, uv - vec2f(texel.x, 0.0), reference);
+    lit += compareCascade(cascade, map0, map1, map2, comparison, uv + vec2f(0.0, texel.y), reference);
+    lit += compareCascade(cascade, map0, map1, map2, comparison, uv - vec2f(0.0, texel.y), reference);
+    lit *= 0.2;
+  }
+  return lit;
+}
+
+/** 1 where the point sees the sun, 0 where the terrain is in the way; one comparison in the cascade the point falls in. */
+export fn sunShadowSample(shadow: SunShadow, map0: texture_depth_2d, map1: texture_depth_2d, map2: texture_depth_2d, comparison: sampler_comparison, fromGround: vec3f, biasScale: f32) -> f32 {
+  return cascadeLit(shadow, sunShadowCascade(shadow, fromGround), map0, map1, map2, comparison, fromGround, biasScale, false);
+}
+
+/**
+ * Soft penumbra for a surface point, blended with the next cascade over the last tenth of the current one so the seam
+ * does not show. Surfaces at a grazing angle to the light see their depth change by many texels across one map texel,
+ * so the receiver moves out along its normal by up to 1.5 texels and the depth bias grows with the slope; a flat plain
+ * under a 12 degree sun needs about ten times the bias of a slope facing the sun.
+ */
+export fn sunShadowSoft(shadow: SunShadow, map0: texture_depth_2d, map1: texture_depth_2d, map2: texture_depth_2d, comparison: sampler_comparison, fromGround: vec3f, normal: vec3f, sunDir: vec3f) -> f32 {
+  let cascade = sunShadowCascade(shadow, fromGround);
+  let ndl = saturate(dot(normal, sunDir));
+  let texel = 2.0 * shadow.radii[cascade] / f32(textureDimensions(map0).x);
+  let receiver = fromGround + normal * (texel * 1.5 * (1.0 - ndl));
+  let biasScale = 1.0 + 2.0 * min(sqrt(1.0 - ndl * ndl) / max(ndl, 0.1), 5.0);
+  var lit = cascadeLit(shadow, cascade, map0, map1, map2, comparison, receiver, biasScale, true);
+  if (cascade < SUN_SHADOW_CASCADES - 1) {
+    let radius = shadow.radii[cascade];
+    let blend = smoothstep(0.9 * radius, radius, length(fromGround.xz));
+    if (blend > 0.0) { lit = mix(lit, cascadeLit(shadow, cascade + 1, map0, map1, map2, comparison, receiver, biasScale, true), blend); }
+  }
+  return lit;
 }
 
 export struct Medium { scattering: vec3f, extinction: vec3f, mie: vec3f, rayleigh: vec3f };
