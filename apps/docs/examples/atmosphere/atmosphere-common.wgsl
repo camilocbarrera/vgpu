@@ -28,6 +28,17 @@ export struct Camera {
   up: vec3f, pixelAngle: f32,
 };
 
+/**
+ * Values that are constant for a whole frame but were being recomputed per pixel or per sample.
+ * Written by frame-constants.wgsl (one thread) from the same expressions the passes used, so results are identical.
+ */
+export struct FrameConstants {
+  skyAmbient: vec3f, sunCosRadius: f32,
+  groundBounce: vec3f, sunSinRadius: f32,
+  sunHorizontal: vec3f, sunHorizontalLength: f32,
+  beta: f32, zenithHorizonAngle: f32, sunSolidAngle: f32, planetShadowNeeded: f32,
+};
+
 export struct Medium { scattering: vec3f, extinction: vec3f, mie: vec3f, rayleigh: vec3f };
 export struct ScatteringResult { luminance: vec3f, transmittance: vec3f, multiScatAs1: vec3f };
 export struct SkyViewParams { viewZenithCos: f32, lightViewCos: f32 };
@@ -124,6 +135,21 @@ export fn skyViewUv(p: Atmosphere, viewHeight: f32, viewZenithCos: f32, lightVie
     v = coord * 0.5;
   } else {
     let coord = sqrt(saturate((viewZenith - zenithHorizonAngle) / beta));
+    v = coord * 0.5 + 0.5;
+  }
+  let u = sqrt(saturate(-lightViewCos * 0.5 + 0.5));
+  return vec2f(fromUnitToSubUvs(u, SKY_VIEW_LUT_WIDTH), fromUnitToSubUvs(v, SKY_VIEW_LUT_HEIGHT));
+}
+
+/** Same mapping as skyViewUv with the camera-height terms taken from FrameConstants. */
+export fn skyViewUvFast(f: FrameConstants, viewZenithCos: f32, lightViewCos: f32, intersectGround: bool) -> vec2f {
+  let viewZenith = acos(clamp(viewZenithCos, -1.0, 1.0));
+  var v = 0.0;
+  if (!intersectGround) {
+    let coord = 1.0 - sqrt(saturate(1.0 - viewZenith / f.zenithHorizonAngle));
+    v = coord * 0.5;
+  } else {
+    let coord = sqrt(saturate((viewZenith - f.zenithHorizonAngle) / f.beta));
     v = coord * 0.5 + 0.5;
   }
   let u = sqrt(saturate(-lightViewCos * 0.5 + 0.5));

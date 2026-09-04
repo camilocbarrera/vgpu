@@ -1,4 +1,4 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PI, PLANET_RADIUS_OFFSET, cameraRay, raySphere, sampleTransmittance, skyViewUv } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, FrameConstants, PI, PLANET_RADIUS_OFFSET, cameraRay, raySphere, sampleTransmittance } from "./atmosphere-common.wgsl";
 import { Clouds, cloudDensity, heightFraction } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
@@ -16,6 +16,7 @@ import { Clouds, cloudDensity, heightFraction } from "./clouds-common.wgsl";
 @group(0) @binding(12) var history: texture_2d<f32>;
 @group(0) @binding(13) var<uniform> reprojection: Reprojection;
 @group(0) @binding(14) var curlNoise: texture_2d<f32>;
+@group(0) @binding(15) var<storage, read> frame: FrameConstants;
 
 /**
  * Previous frame's camera basis: one texel in sixteen is re-marched per frame, the rest reproject from `history`.
@@ -199,9 +200,8 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
 
   let cosTheta = dot(dir, p.sunDirection);
   let phases = octavePhases(cosTheta);
-  let skyAmbient = textureSampleLevel(skyViewLut, lutSampler, skyViewUv(p, viewHeight, 0.5, 0.0, false), 0.0).rgb;
-  let groundSunCos = max(p.sunDirection.y, 0.0);
-  let groundBounce = 0.15 * p.sunIlluminance * sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius, p.sunDirection.y) * groundSunCos / PI;
+  let skyAmbient = frame.skyAmbient;
+  let groundBounce = frame.groundBounce;
 
   // Rays near the horizon cross far more cloud than rays near the zenith, so the step budget follows the elevation.
   let stepBudget = mix(f32(MARCH_STEPS), MIN_MARCH_STEPS, abs(dir.y));

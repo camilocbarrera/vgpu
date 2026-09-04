@@ -1,4 +1,4 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PI, cameraRay, raySphere, sampleTransmittance, skyViewUv } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, FrameConstants, PI, cameraRay, raySphere, sampleTransmittance, skyViewUvFast } from "./atmosphere-common.wgsl";
 import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
 import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 
@@ -12,6 +12,7 @@ import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(7) var weatherMap: texture_2d<f32>;
 @group(0) @binding(8) var noiseSampler: sampler;
 @group(0) @binding(9) var terrainMap: texture_2d<f32>;
+@group(0) @binding(10) var<storage, read> frame: FrameConstants;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
 
@@ -20,16 +21,14 @@ const SHADOW_STEPS: i32 = 12;
 
 struct TerrainHit { distance: f32, position: vec3f, height: f32 };
 
-fn sampleSkyView(p: Atmosphere, dir: vec3f, viewHeight: f32, intersectGround: bool) -> vec4f {
+fn sampleSkyView(dir: vec3f, viewHeight: f32, intersectGround: bool) -> vec4f {
   let up = camera.position / viewHeight;
   let viewZenithCos = dot(dir, up);
-  let sunHorizontal = p.sunDirection - up * dot(p.sunDirection, up);
   let dirHorizontal = dir - up * viewZenithCos;
-  let sunLength = length(sunHorizontal);
   let dirLength = length(dirHorizontal);
   var lightViewCos = 1.0;
-  if (sunLength > 1e-5 && dirLength > 1e-5) { lightViewCos = dot(sunHorizontal / sunLength, dirHorizontal / dirLength); }
-  return textureSampleLevel(skyViewLut, lutSampler, skyViewUv(p, viewHeight, viewZenithCos, lightViewCos, intersectGround), 0.0);
+  if (frame.sunHorizontalLength > 1e-5 && dirLength > 1e-5) { lightViewCos = dot(frame.sunHorizontal / frame.sunHorizontalLength, dirHorizontal / dirLength); }
+  return textureSampleLevel(skyViewLut, lutSampler, skyViewUvFast(frame, viewZenithCos, lightViewCos, intersectGround), 0.0);
 }
 
 fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
@@ -44,15 +43,13 @@ fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
 fn sunDisc(p: Atmosphere, dir: vec3f) -> vec3f {
   let cosAngle = dot(dir, p.sunDirection);
   let radius = camera.sunAngularRadius;
-  let cosRadius = cos(radius);
-  let edge = sin(radius) * camera.pixelAngle;
-  let disc = smoothstep(cosRadius - edge, cosRadius + edge, cosAngle);
+  let edge = frame.sunSinRadius * camera.pixelAngle;
+  let disc = smoothstep(frame.sunCosRadius - edge, frame.sunCosRadius + edge, cosAngle);
   if (disc <= 0.0) { return vec3f(0.0); }
   let angle = acos(clamp(cosAngle, -1.0, 1.0));
   let mu = sqrt(saturate(1.0 - (angle * angle) / (radius * radius)));
   let limb = 1.0 - vec3f(0.397, 0.503, 0.652) * (1.0 - mu);
-  let solidAngle = PI * sin(radius) * sin(radius);
-  return p.sunIlluminance / solidAngle * limb * disc;
+  return p.sunIlluminance / frame.sunSolidAngle * limb * disc;
 }
 
 /**
@@ -132,8 +129,8 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
   let tSphere = raySphere(origin, dir, p.groundRadius);
   let terrain = marchTerrain(p, origin, dir);
   let hitsGround = tSphere >= 0.0 || terrain.distance >= 0.0;
-  let sky = sampleSkyView(p, dir, viewHeight, hitsGround);
-  let skyAmbient = textureSampleLevel(skyViewLut, lutSampler, skyViewUv(p, viewHeight, 0.5, 0.0, false), 0.0).rgb;
+  let sky = sampleSkyView(dir, viewHeight, hitsGround);
+  let skyAmbient = frame.skyAmbient;
   var color = sky.rgb;
   // Alpha carries the geometry distance (km) so the cloud pass can stop at terrain; -1 means sky.
   var hitDistance = -1.0;
