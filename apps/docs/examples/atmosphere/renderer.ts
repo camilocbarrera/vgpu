@@ -68,7 +68,7 @@ type CloudUpdateUniformValues = {
 type TerrainMeshUniformValues = { columnOffset: number; columns: number };
 
 /** Column-major 4x4 matrices mapping a position relative to the ground point under the camera axis to each cascade's clip space. */
-type SunShadowUniformValues = { toShadow0: readonly number[]; toShadow1: readonly number[]; toShadow2: readonly number[]; radii: readonly [number, number, number, number]; bias: readonly [number, number, number, number] };
+type SunShadowUniformValues = { toShadow0: readonly number[]; toShadow1: readonly number[]; toShadow2: readonly number[]; fromShadow2: readonly number[]; radii: readonly [number, number, number, number]; bias: readonly [number, number, number, number] };
 type CascadeUniformValues = { index: number; pad0: number; pad1: number; pad2: number };
 
 type CloudUniformValues = {
@@ -383,7 +383,7 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const multiScatterCompute = createCompute(gpu, multiScatterLutWgsl, { label: `${label}-multiscatter`, set: { atmosphere, transmittanceLut: transmittance, lutSampler: sampler, multiScatterLut: multiScatter } });
   const skyViewEffect = createEffect(gpu, skyViewLutWgsl, { label: `${label}-sky-view`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler } });
   const aerialCompute = createCompute(gpu, aerialLutWgsl, { label: `${label}-aerial`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler, aerialLut: aerial, sunShadowMap0: sunShadows[0]!, sunShadowMap1: sunShadows[1]!, sunShadowMap2: sunShadows[2]!, aerialLossLut: aerialLoss, clouds, cloudShadowMap, shadowSampler, sunShadow: sunShadowUniforms } });
-  const cloudShadowCompute = createCompute(gpu, cloudShadowWgsl, { label: `${label}-cloud-shadow`, set: { atmosphere, clouds, terrainMap, shapeNoise, detailNoise, weatherMap, curlNoise, lutSampler: sampler, noiseSampler, cloudShadowMap } });
+  const cloudShadowCompute = createCompute(gpu, cloudShadowWgsl, { label: `${label}-cloud-shadow`, set: { atmosphere, clouds, shapeNoise, detailNoise, weatherMap, curlNoise, noiseSampler, cloudShadowMap, sunShadow: sunShadowUniforms } });
   const frameConstants = createStorage(gpu, FRAME_CONSTANTS_BYTES, 'read-write');
   const frameConstantsCompute = createCompute(gpu, frameConstantsWgsl, { label: `${label}-frame-constants`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView.color, lutSampler: sampler, frameConstants, terrainMap } });
   const terrainSunDepthDraws = cascadeUniforms.map((cascade, index) => createDraw(gpu, {
@@ -488,6 +488,8 @@ export function applyState(graph: AtmosphereGraph, state: AtmosphereState, size:
  */
 export function renderGraph(frame: Frame, graph: AtmosphereGraph, output: Output): void {
   if (graph.lutPhase === 'transmittance') dispatchMultiScatter(graph);
+  // The sun frame is refreshed before the computes that lay their maps out in it; the shadow render itself comes later.
+  if (!sameDirection(graph.bakedSunDirection, graph.sunDirection)) graph.sunShadowUniforms.set(sunShadowUniformValues(graph.sunDirection));
   encodeCloudShadow(graph);
   encodeAerial(graph);
   encodeFrameConstants(graph);
@@ -547,12 +549,19 @@ function sunShadowUniformValues(sun: Vec3): SunShadowUniformValues {
     ];
     const matrix: number[] = [];
     for (let column = 0; column < 4; column++) for (let row = 0; row < 4; row++) matrix.push(rows[row]![column]!);
+    // The inverse, clip space back to a position: columns are the frame's axes scaled by the window, plus its origin.
+    const inverse = [
+      right[0] * radius, right[1] * radius, right[2] * radius, 0,
+      up[0] * yHalf, up[1] * yHalf, up[2] * yHalf, 0,
+      light[0] * zRange, light[1] * zRange, light[2] * zRange, 0,
+      up[0] * yCenter + light[0] * zNear, up[1] * yCenter + light[1] * zNear, up[2] * yCenter + light[2] * zNear, 1,
+    ];
     // Two texels of this cascade's ground footprint, in its depth units, so a slope one texel wide does not shadow itself.
     const bias = (2 * (2 * radius) / SUN_SHADOW_MAP_SIZE) / zRange;
-    return { matrix, bias };
+    return { matrix, inverse, bias };
   });
   return {
-    toShadow0: matrices[0]!.matrix, toShadow1: matrices[1]!.matrix, toShadow2: matrices[2]!.matrix,
+    toShadow0: matrices[0]!.matrix, toShadow1: matrices[1]!.matrix, toShadow2: matrices[2]!.matrix, fromShadow2: matrices[2]!.inverse,
     radii: [SUN_SHADOW_RADII[0], SUN_SHADOW_RADII[1], SUN_SHADOW_RADII[2], 0],
     bias: [matrices[0]!.bias, matrices[1]!.bias, matrices[2]!.bias, 0],
   };

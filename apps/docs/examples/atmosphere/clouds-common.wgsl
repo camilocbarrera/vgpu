@@ -1,4 +1,5 @@
 import { remap } from "./noise-common.wgsl";
+import { SunShadow } from "./atmosphere-common.wgsl";
 
 /** Cloud layer description shared by the cloud raymarch and the cloud shadow map. Distances in km. */
 export struct Clouds {
@@ -9,7 +10,7 @@ export struct Clouds {
   typeBias: f32, seed: f32, shadows: f32, pad1: f32,
 };
 
-/** The cloud shadow map (cloud-shadow.wgsl) covers the terrain map's square at this resolution. */
+/** The cloud shadow map (cloud-shadow.wgsl) covers the far shadow cascade's window at this resolution. */
 export const CLOUD_SHADOW_MAP_SIZE: f32 = 512.0;
 
 /** Mean of the detail fbm over the noise volume (measured 0.494 over the 32-cube): what the erosion applies where its pattern has faded out. */
@@ -137,8 +138,10 @@ export fn cloudRange(c: Clouds, origin: vec3f, dir: vec3f, viewHeight: f32) -> M
   return MarchRange(0.0, exit, true);
 }
 
-/** Sun transmittance of the cloud layer above a terrain position, from the map; 1 when cloud shadows are off. */
-export fn sampleCloudShadow(c: Clouds, map: texture_2d<f32>, mapSampler: sampler, xz: vec2f, terrainMapExtent: f32) -> f32 {
+/** Sun transmittance of the cloud layer along the light through a point (relative to the ground point under the camera); 1 when cloud shadows are off. */
+export fn sampleCloudShadow(c: Clouds, shadow: SunShadow, map: texture_2d<f32>, mapSampler: sampler, fromGround: vec3f) -> f32 {
   if (c.shadows < 0.5) { return 1.0; }
-  return textureSampleLevel(map, mapSampler, xz / terrainMapExtent + 0.5, 0.0).r;
+  let s = shadow.toShadow2 * vec4f(fromGround, 1.0);
+  if (any(abs(s.xy) > vec2f(1.0))) { return 1.0; }
+  return textureSampleLevel(map, mapSampler, vec2f(s.x * 0.5 + 0.5, 0.5 - s.y * 0.5), 0.0).r;
 }
