@@ -51,9 +51,21 @@ const TERRAIN_SCALE: f32 = 1.0 / 16.0;
 const OCTAVES: i32 = 6;
 const ROTATE = mat2x2f(vec2f(0.8, 0.6), vec2f(-0.6, 0.8));
 
+/**
+ * Uniform [0, 1) value per lattice cell from an integer hash (pcg2d). The usual fract(sin(h) * 43758.5)
+ * hash takes the sine of arguments in the thousands, which every GPU rounds differently, so the same
+ * terrain came out with different mountains on Metal and on Mesa; integer arithmetic is exact everywhere.
+ */
+/** Offsets the lattice hash; picks which of the equally random landscapes the camera stands in. */
+const TERRAIN_SEED: u32 = 7u;
+
 fn hash2(p: vec2f) -> f32 {
-  let h = dot(p, vec2f(127.1, 311.7));
-  return fract(sin(h) * 43758.5453123);
+  var v = (bitcast<vec2u>(vec2i(p)) + vec2u(TERRAIN_SEED, 0u)) * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+  v ^= v >> vec2u(16u);
+  v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+  v ^= v >> vec2u(16u);
+  return f32((v.x ^ v.y) >> 8u) / 16777216.0;
 }
 
 fn valueNoise(p: vec2f) -> f32 {

@@ -62,9 +62,14 @@ fn linearToSrgb(value: vec3f) -> vec3f {
   return select(hi, lo, value <= vec3f(0.0031308));
 }
 
+/** Uniform [0, 1) per pixel from an integer hash (pcg2d); a sine hash rounds differently on every GPU. */
 fn hash(position: vec2f) -> f32 {
-  let h = dot(position, vec2f(127.1, 311.7));
-  return fract(sin(h) * 43758.5453123);
+  var v = bitcast<vec2u>(vec2i(position)) * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+  v ^= v >> vec2u(16u);
+  v.x += v.y * 1664525u; v.y += v.x * 1664525u;
+  v ^= v >> vec2u(16u);
+  return f32((v.x ^ v.y) >> 8u) / 16777216.0;
 }
 
 /**
