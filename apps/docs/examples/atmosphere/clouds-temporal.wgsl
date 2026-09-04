@@ -1,28 +1,20 @@
 // Temporal update lattice of the cloud pass. Each frame only some texels of the cloud history are re-marched, and
-// those live texels are packed into a compact march target so the GPU spends its SIMD lanes on them alone
-// (a scattered 1-in-16 update ran the march at the pace of the slowest lane and saved almost nothing).
-// clouds-march.wgsl maps compact texels to history texels, clouds-resolve.wgsl maps them back.
+// those live texels are packed into a compact march target. clouds-march.wgsl maps compact texels to history
+// texels, clouds-resolve.wgsl maps them back.
 
 /**
- * Previous frame's camera and this frame's update: one texel in `refreshPeriod` (16 at rest, 1 right after a change
- * of camera altitude or lighting) is re-marched, the rest reproject from the history through the world point at the
- * depth the history stored. `blend` is the weight of a re-marched texel against its reprojected history: 1 right
- * after a change (and in stills), then 1/n for the n-th refresh since, down to a floor, so the march noise and the
- * sub-texel `jitter` average into a stable, supersampled image while the camera rests. `detail` is 1 at rest and 0
- * in the fast mode: the march spends twice the steps and keeps its erosion detail twice as far when it can afford to.
+ * This frame's cloud update. One texel in `refreshPeriod` is re-marched: 16 at rest, 1 on a frame that follows any
+ * change of camera or lighting, so the history is only ever reused while the camera stands still and no texel is
+ * ever resampled. `blend` is the weight of a re-marched texel against its history: 1 right after a change (and in
+ * stills), then 1/n for the n-th refresh since, down to a floor, so the march noise and the sub-texel `jitter`
+ * average into a stable, supersampled image while the camera rests. `detail` is 1 at rest and 0 in the fast mode:
+ * the march spends twice the steps and keeps its erosion detail twice as far when it can afford to.
  */
-export struct Reprojection {
-  forward: vec3f, frame: f32,
-  right: vec3f, tanHalfFov: f32,
-  up: vec3f, aspect: f32,
-  position: vec3f, valid: f32,
-  blend: f32, refreshPeriod: f32, jitter: vec2f,
-  /** Cloud history size in texels. */
-  size: vec2f, detail: f32, pad: f32,
+export struct CloudUpdate {
+  frame: f32, valid: f32, blend: f32, refreshPeriod: f32,
+  jitter: vec2f, size: vec2f,
+  detail: f32, pad0: f32, pad1: f32, pad2: f32,
 };
-
-/** Color: premultiplied luminance with transmittance in alpha. Depth: transmittance-weighted mean distance (km), 0 without cloud. */
-export struct CloudOutput { @location(0) color: vec4f, @location(1) depth: vec4f };
 
 /** Bayer rank of each texel of a 4x4 block; the first 16 / period ranks form a well-spread subset for every period used. */
 fn bayerRank(texel: vec2i) -> i32 {

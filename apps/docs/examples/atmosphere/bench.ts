@@ -60,7 +60,7 @@ export async function runBench(gpu: Gpu, cssSize: readonly [number, number], dpr
     await time('scene: terrain depth + shading + sky', passFrame((frame) => encodeScene(frame, graph)));
     await time('clouds: 1/16 of the texels marched', cloudsFrame);
     applyState(graph, { ...preset, cloudCoverage: 0 }, size);
-    await time('clouds: coverage 0, reprojection only', cloudsFrame);
+    await time('clouds: coverage 0, resolve only', cloudsFrame);
     applyState(graph, preset, size);
     graph.cloudChangeFrames = Number.POSITIVE_INFINITY;
     await time('clouds: every texel marched (after a change)', cloudsFrame);

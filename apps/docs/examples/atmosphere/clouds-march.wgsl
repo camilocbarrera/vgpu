@@ -1,6 +1,6 @@
 import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, FrameConstants, PI, PLANET_RADIUS_OFFSET, cameraRay, raySphere, sampleTransmittance } from "./atmosphere-common.wgsl";
 import { Clouds, cloudDensity, cloudRange, heightFraction } from "./clouds-common.wgsl";
-import { CloudOutput, Reprojection, compactToTexel } from "./clouds-temporal.wgsl";
+import { CloudUpdate, compactToTexel } from "./clouds-temporal.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
 @group(0) @binding(1) var<uniform> camera: Camera;
@@ -13,7 +13,7 @@ import { CloudOutput, Reprojection, compactToTexel } from "./clouds-temporal.wgs
 @group(0) @binding(8) var sceneHdr: texture_2d<f32>;
 @group(0) @binding(9) var lutSampler: sampler;
 @group(0) @binding(10) var noiseSampler: sampler;
-@group(0) @binding(11) var<uniform> reprojection: Reprojection;
+@group(0) @binding(11) var<uniform> update: CloudUpdate;
 @group(0) @binding(12) var curlNoise: texture_2d<f32>;
 @group(0) @binding(13) var<storage, read> frame: FrameConstants;
 
@@ -38,8 +38,6 @@ const MS_OCTAVES: i32 = 6;
 const MS_SCATTER: f32 = 0.7;
 const MS_EXTINCTION: f32 = 0.5;
 const MS_PHASE: f32 = 0.5;
-
-struct CloudSample { color: vec4f, depth: f32 };
 
 fn henyeyGreenstein(cosTheta: f32, g: f32) -> f32 {
   let g2 = g * g;
@@ -133,23 +131,23 @@ fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
   return weight * textureSampleLevel(aerialLut, lutSampler, vec3f(uv, w), 0.0);
 }
 
-@fragment fn fs_main(@builtin(position) fragCoord: vec4f) -> CloudOutput {
+/** Premultiplied luminance with transmittance in alpha, for the history texel this compact texel stands for. */
+@fragment fn fs_main(@builtin(position) fragCoord: vec4f) -> @location(0) vec4f {
   let p = atmosphere;
-  let period = i32(reprojection.refreshPeriod);
-  let frameIndex = i32(reprojection.frame);
+  let period = i32(update.refreshPeriod);
+  let frameIndex = i32(update.frame);
   let texel = compactToTexel(vec2i(fragCoord.xy), frameIndex, period);
-  let uv = (vec2f(texel) + 0.5) / reprojection.size;
+  let uv = (vec2f(texel) + 0.5) / update.size;
   // Sub-texel jitter only matters when the result is blended into the history; it is zero otherwise.
-  let jitteredUv = uv + reprojection.jitter / reprojection.size;
+  let jitteredUv = uv + update.jitter / update.size;
   let dir = cameraRay(camera, vec2f(jitteredUv.x * 2.0 - 1.0, 1.0 - jitteredUv.y * 2.0));
   // The noise only animates while the accumulation can average it; with full blend (a still, or the frames right
   // after a change) a static pattern keeps the fresh texels consistent with their neighbours instead of shimmering.
-  let noiseFrame = select(0, frameIndex, reprojection.blend < 1.0);
-  let sample = marchClouds(p, dir, marchNoise(texel, noiseFrame), uv);
-  return CloudOutput(sample.color, vec4f(sample.depth, 0.0, 0.0, 0.0));
+  let noiseFrame = select(0, frameIndex, update.blend < 1.0);
+  return marchClouds(p, dir, marchNoise(texel, noiseFrame), uv);
 }
 
-fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> CloudSample {
+fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> vec4f {
   let origin = camera.position;
   let viewHeight = length(origin);
   var range = cloudRange(clouds, origin, dir, viewHeight);
@@ -159,7 +157,7 @@ fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> CloudSample 
   let sceneDistance = textureLoad(sceneHdr, clamp(vec2i(uv * vec2f(sceneSize)), vec2i(0), sceneSize - 1), 0).a;
   if (sceneDistance > 0.0) { range.end = min(range.end, sceneDistance); }
   range.end = min(range.end, range.start + MAX_MARCH_DISTANCE);
-  let empty = CloudSample(vec4f(0.0, 0.0, 0.0, 1.0), 0.0);
+  let empty = vec4f(0.0, 0.0, 0.0, 1.0);
   if (!range.valid || range.end <= range.start || clouds.coverage <= 0.0) { return empty; }
 
   let cosTheta = dot(dir, p.sunDirection);
@@ -169,7 +167,7 @@ fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> CloudSample 
 
   // Rays near the horizon cross far more cloud than rays near the zenith, so the step budget follows the elevation;
   // at rest it doubles, which halves the step and with it the grain the accumulation has to average.
-  let stepBudget = mix(MARCH_STEPS, MIN_MARCH_STEPS, abs(dir.y)) * mix(1.0, 2.0, reprojection.detail);
+  let stepBudget = mix(MARCH_STEPS, MIN_MARCH_STEPS, abs(dir.y)) * mix(1.0, 2.0, update.detail);
   let fineStep = max(0.02, (range.end - range.start) / stepBudget);
   let coarseStep = fineStep * 2.0;
   var t = range.start + fineStep * noise;
@@ -226,5 +224,5 @@ fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> CloudSample 
   let meanDepth = depthSum / opacity;
   let aerial = sampleAerial(uv, min(meanDepth, AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE));
   let color = luminance * (1.0 - aerial.a) + aerial.rgb * opacity;
-  return CloudSample(vec4f(color, transmittance), meanDepth);
+  return vec4f(color, transmittance);
 }

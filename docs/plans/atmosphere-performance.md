@@ -50,6 +50,7 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
    Done; the pass turned out latency-bound, see the finding below the results.
 6. Let the temporal accumulation converge at rest and spend the freed budget on quality there. Done.
 7. Refresh every cloud texel on the frames that follow a change, so nothing is reprojected while parameters move. Done.
+8. Treat camera rotation as a change as well and drop the reprojection. Done.
 
 ## Results
 
@@ -71,6 +72,8 @@ Same machine and method as the baseline. ms per frame.
 
 | 7 fast mode refreshes every texel | 2.2 | 1.46 | 0.39 | 1.79 | 1.32 | 0.23 | on battery. A continuous altitude sweep still showed a dotted fringe along cloud edges: the checkerboard's reprojected half misregistered by a few pixels where the stored depth mixes sky and cloud. The march being latency-bound, marching every texel on a change costs 1.71 ms against 1.12 for half of them, and nothing reprojected cannot ghost. Ghost against a converged still during the sweep: 0.5 to 0.7 /255 before, 0.08 to 0.16 after (the remainder is the shorter march of the fast mode against the reference's long one) |
 
+| 8 rotation is a change too; reprojection removed | 2.2 | 1.43 | 0.39 | 1.80 | 1.33 | 0.23 | on battery. Rotating at 10 km blurred the clouds and left them blurred: rotation did not count as a change, so fifteen texels in sixteen were bilinearly resampled from the history every frame and the 0.1 accumulation floor let the sharp texels back in only over seconds. Yaw and pitch now stale the history like everything else, every camera change refreshes every texel, and since the history is only reused while the camera stands still the reprojection (rotation, parallax, stored depth, second attachment) is gone: the resolve reads the history at the exact texel and can never blur. Yaw sweep at 10 km: ghost against converged stills 0.37 /255 flat across the sweep; after a yaw jump the frame-to-frame difference is 0.03 within two frames |
+
 Measuring temporal behaviour: `node scripts/render-atmosphere.mjs --preset golden-hour --sun 1.5 --ev 6.5 --temporal 56
 --jump 36:altitude=0.4 --region 480,240,480,70` renders live-loop frames headless and prints, per frame, the mean
 absolute sRGB difference to the previous frame (whole frame and region) and the temporal noise of the region over the
@@ -85,7 +88,9 @@ long ray through thick cloud is a chain of ~160 steps each with several dependen
 light march, and with only 19k texels in flight the GPU cannot hide that chain. Further cloud savings have to shorten
 the per-ray chain (fewer steps, cheaper density far away, a shorter light march), not the texel count.
 
-After steps 1 to 7 the live frame is about 1.8 ms of GPU work at 60 fps against 8.7 ms at 120 fps before (0.5 ms of
-it is the quality bought back at rest), 2.2 ms while a parameter is being dragged: about a tenth of the GPU load. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
+After steps 1 to 8 the live frame is about 1.8 ms of GPU work at 60 fps against 8.7 ms at 120 fps before (0.5 ms of
+it is the quality bought back at rest), 2.2 ms while the camera or a parameter moves: about a tenth of the GPU load.
+The temporal scheme is now purely progressive refinement of a still camera: full refresh on any change, then 1/n
+accumulation with a longer march and a sub-texel jitter until it converges. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
 The depth prepass is also the entry point for rasterized models: anything that writes into it inherits the aerial
 perspective, the cloud occlusion and the sky compositing.
