@@ -8,7 +8,8 @@
  * ever resampled. `blend` is the weight of a re-marched texel against its history: 1 right after a change (and in
  * stills), then 1/n for the n-th refresh since, down to a floor, so the march noise and the sub-texel `jitter`
  * average into a stable, supersampled image while the camera rests. `detail` is 1 at rest and 0 in the fast mode:
- * the march spends twice the steps and keeps its erosion detail twice as far when it can afford to.
+ * the march spends twice the steps when it can afford to. Nothing else differs between the modes, so a change never
+ * alters the shape or density of a cloud, only the grain.
  */
 export struct CloudUpdate {
   frame: f32, valid: f32, blend: f32, refreshPeriod: f32,

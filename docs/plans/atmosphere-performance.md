@@ -51,6 +51,7 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
 6. Let the temporal accumulation converge at rest and spend the freed budget on quality there. Done.
 7. Refresh every cloud texel on the frames that follow a change, so nothing is reprojected while parameters move. Done.
 8. Treat camera rotation as a change as well and drop the reprojection. Done.
+9. Same erosion LOD in both modes, so moving never changes cloud shape or density. Done.
 
 ## Results
 
@@ -73,6 +74,8 @@ Same machine and method as the baseline. ms per frame.
 | 7 fast mode refreshes every texel | 2.2 | 1.46 | 0.39 | 1.79 | 1.32 | 0.23 | on battery. A continuous altitude sweep still showed a dotted fringe along cloud edges: the checkerboard's reprojected half misregistered by a few pixels where the stored depth mixes sky and cloud. The march being latency-bound, marching every texel on a change costs 1.71 ms against 1.12 for half of them, and nothing reprojected cannot ghost. Ghost against a converged still during the sweep: 0.5 to 0.7 /255 before, 0.08 to 0.16 after (the remainder is the shorter march of the fast mode against the reference's long one) |
 
 | 8 rotation is a change too; reprojection removed | 2.2 | 1.43 | 0.39 | 1.80 | 1.33 | 0.23 | on battery. Rotating at 10 km blurred the clouds and left them blurred: rotation did not count as a change, so fifteen texels in sixteen were bilinearly resampled from the history every frame and the 0.1 accumulation floor let the sharp texels back in only over seconds. Yaw and pitch now stale the history like everything else, every camera change refreshes every texel, and since the history is only reused while the camera stands still the reprojection (rotation, parallax, stored depth, second attachment) is gone: the resolve reads the history at the exact texel and can never blur. Yaw sweep at 10 km: ghost against converged stills 0.37 /255 flat across the sweep; after a yaw jump the frame-to-frame difference is 0.03 within two frames |
+
+| 9 one detail LOD for both modes | 2.2 | 1.44 | 0.39 | 1.81 | 1.33 | 0.23 | on battery. Step 6 had the fast mode fade erosion detail from 16 km and the rest from 32 km, so any camera or sun move made far clouds lose their erosion (and, since erosion removes density, gain density) and grow it back on convergence, worst with the detail slider at 1.5. The LOD is now 32 km in both modes; the fast mode costs 1.84 ms instead of 1.71 for it. Ghost against converged stills during a yaw sweep: 0.37 /255 before, 0.09 after at 10 km; 0.06 at golden hour with detail 1.5. What remains is the step count |
 
 Measuring temporal behaviour: `node scripts/render-atmosphere.mjs --preset golden-hour --sun 1.5 --ev 6.5 --temporal 56
 --jump 36:altitude=0.4 --region 480,240,480,70` renders live-loop frames headless and prints, per frame, the mean

@@ -505,8 +505,6 @@ export function encodeClouds(frame: Frame, graph: AtmosphereGraph): void {
   const period = fast ? CLOUD_FAST_REFRESH_PERIOD : CLOUD_CONVERGENCE_FRAMES;
   const size = graph.cloudsTargets.write.size;
   graph.cloudUpdate.set(cloudUpdateUniforms({ valid: graph.previousCamera !== undefined, frame: graph.frame, accumulate: graph.accumulate, fast, restFrames: graph.cloudRestFrames, size }));
-  // At rest the erosion detail survives twice as far; the fast mode marches every texel and keeps it short.
-  graph.clouds.set({ detailLodDistance: CLOUD_TUNING.detailLodDistance * (fast ? 1 : 2) });
   graph.cloudResolveEffect.set({ history: graph.cloudsTargets.read });
   const compact = compactCloudSize(size, period);
   frame.pass({ target: graph.cloudMarch, clear: [0, 0, 0, 1], viewport: { width: compact[0], height: compact[1] } }, (pass) => pass.draw(graph.cloudMarchEffect));
@@ -558,7 +556,7 @@ interface CloudUpdateState {
 }
 
 /**
- * Fast (right after a change): every texel, full blend, no jitter, short march. At rest: one in sixteen, each
+ * Fast (right after a change): every texel, full blend, no jitter, half the march steps. At rest: one in sixteen, each
  * re-marched texel weighted 1/(refreshes since the change + 1) down to CLOUD_BLEND_FLOOR, so the march noise and the
  * sub-texel jitter average into a supersampled image, and the long march. Stills always use full blend and no jitter.
  */

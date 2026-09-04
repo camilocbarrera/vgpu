@@ -71,8 +71,8 @@ export const CLOUD_TUNING = {
   detailStrength: 1.0,
   /** Curl distortion of the detail lookup, km. */
   curlStrength: 0.25,
-  /** Past this distance (km) the erosion and curl are skipped: their features are sub-pixel anyway. */
-  detailLodDistance: 16,
+  /** Erosion detail fades with distance in rings of this length (km): fine detail to 1x, curl to 2x, coarse to 4x. */
+  detailLodDistance: 32,
   windSpeed: 0.03,
   renderScale: 2,
   noise: { shape: 128, detail: 32, weather: 1024 },
