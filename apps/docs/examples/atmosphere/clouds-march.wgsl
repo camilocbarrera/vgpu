@@ -33,9 +33,13 @@ const EXTINCTION: f32 = 32.0;
 const ALBEDO: f32 = 0.97;
 const FORWARD_G: f32 = 0.75;
 const BACK_G: f32 = -0.3;
-/** Multiple-scattering octaves (Wrenninge): per-octave scattering, extinction and phase-eccentricity multipliers. */
+/**
+ * Multiple-scattering octaves (Wrenninge): per-octave scattering, extinction and phase-eccentricity multipliers.
+ * Scattering 0.5 rather than 0.7: at optical depth 10 the octaves passed 40 % of the light, which lit thick cloud
+ * bases as brightly as their rims; at 0.5 they pass 12 %, and the bases darken with the column above them.
+ */
 const MS_OCTAVES: i32 = 6;
-const MS_SCATTER: f32 = 0.7;
+const MS_SCATTER: f32 = 0.5;
 const MS_EXTINCTION: f32 = 0.5;
 const MS_PHASE: f32 = 0.5;
 
@@ -207,7 +211,12 @@ fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> vec4f {
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius + altitude, sunZenithCos) * earthShadow;
     let opticalDepth = lightOpticalDepth(position, p.sunDirection, t, noise);
     let sunScatter = multiScatter(opticalDepth, phases);
-    let ambient = skyAmbient * mix(0.18, 0.75, hf) + groundBounce * (1.0 - hf) * 0.5;
+    // The sky lights a sample through the cloud above it. While the sun is high its optical depth is a fair stand-in
+    // for the depth toward the zenith, so the sky ambient fades into the cloud bases instead of filling them flat;
+    // near the horizon the stand-in is wrong and the term fades out. The ground bounce stays small for the same
+    // reason: a uniform fill from below is what made every base one shade of grey.
+    let skyOcclusion = exp(-opticalDepth * 0.3 * saturate(p.sunDirection.y * 1.5));
+    let ambient = skyAmbient * mix(0.12, 0.75, hf) * skyOcclusion + groundBounce * (1.0 - hf) * 0.1;
     let extinction = EXTINCTION * sampleDensity;
     let scattered = ALBEDO * extinction * (p.sunIlluminance * sunTransmittance * sunScatter + ambient);
     let stepTransmittance = exp(-extinction * step);

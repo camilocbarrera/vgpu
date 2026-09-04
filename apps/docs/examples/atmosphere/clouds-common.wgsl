@@ -64,9 +64,10 @@ export fn cloudDensity(
   // A small floor keeps the air between clouds clear instead of a faint fog.
   base = saturate((base - 0.06) / 0.94);
   if (base <= 0.0) { return 0.0; }
-  // Interior Worley structure so the optical depth varies, and a sharpening that makes the surface opaque within
-  // metres like a real water cloud. The erosion below runs on the soft base first: it needs the wide edge band.
-  let interior = mix(0.6, 1.0, lowFbm) * c.density;
+  // Interior Worley structure so the optical depth varies (a wide range, or the sun sees every column as the same
+  // slab and the bases come out flat), and a sharpening that makes the surface opaque within metres like a real
+  // water cloud. The erosion below runs on the soft base first: it needs the wide edge band.
+  let interior = mix(0.35, 1.0, lowFbm) * c.density;
   if (cheap) { return saturate(base * 2.2) * interior; }
   // Erosion only matters near the surface of the cloud. Three LOD rings by feature size: the coarse detail
   // (hundreds of metres) survives to 4x detailLodDistance, the curl to 2x, the fine scale (tens of metres) to 1x.
