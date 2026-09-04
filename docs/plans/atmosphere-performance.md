@@ -46,8 +46,8 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
 3. Terrain as a rasterized mesh instead of a raymarch, so models can join the same depth buffer later. Done.
 4. Ghosting: reproject the cloud history with translation (needs the per-texel mean depth stored), and raise the
    refresh fraction with full blend while the camera or the lighting changes, back to 1/16 at rest. Done.
-5. Compact the cloud march: render the live texels of the frame into a small buffer and resolve into the history,
-   so a 1/16 refresh really costs 1/16 of the march.
+5. Compact the cloud march: render the live texels of the frame into a small buffer and resolve into the history.
+   Done; the pass turned out latency-bound, see the finding below the results.
 
 ## Results
 
@@ -63,13 +63,15 @@ Same machine and method as the baseline. ms per frame.
 
 | 4 cloud ghosting: parallax reprojection + fast refresh after changes | 2.5 | 1.7 | 0.39 | 1.63 | 1.2 | 0.23 | on battery. The cloud history now stores the mean cloud depth (second attachment) and reprojects through the world point at that depth, so altitude changes no longer smear; any change of sun, haze, altitude or cloud parameters switches the next two frames to a checkerboard refresh (one texel in two, full blend), which reads as a 33 ms crossfade instead of a one-second ghost. The checkerboard frames cost 1.42 ms against 1.17 at rest |
 
-Finding from step 4: marching every cloud texel costs 1.68 ms against 1.17 for one in sixteen. The temporal scheme
-saves only a fifth of the pass because the live texels are scattered one per 4x4 block: every SIMD group still runs
-the march at the pace of its slowest live texel. Compacting the live texels into a small buffer (a march pass over
-w/4 x h/4, then a resolve pass that scatters them and reprojects the rest) should cut the cloud pass by an order of
-magnitude and is the next step.
+| 5 compact cloud march + proper march noise | 1.6 | 0.87 | 0.39 | 1.33 | 0.86 | 0.23 | on battery. The live texels are marched packed into a viewport of the compact size (w/4 x h/4 at rest, w/2 x h in the fast mode) and a resolve pass scatters them into the history and reprojects the rest. The march start and light-sample jitter moved from an integer hash that was a linear ramp along rows (0.014 per pixel: every row shared one offset, so the step quantisation drew horizontal bands on cloud undersides at sunset) to interleaved gradient noise animated per frame while accumulating. The fast mode now selects a real checkerboard (the first half of the Bayer ranks); the previous rank % 2 test picked row pairs, which showed as horizontal stripes while the altitude changed |
 
-After steps 1 to 4 the live frame is about 1.7 ms of GPU work at 60 fps against 8.7 ms at 120 fps before: about a
-tenth of the GPU load. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
+Finding from step 4, revised by step 5: marching every cloud texel cost 1.68 ms against 1.17 for one in sixteen,
+and packing the live texels only brought the pass to 0.86 ms. The pass is latency-bound, not throughput-bound: a
+long ray through thick cloud is a chain of ~160 steps each with several dependent texture fetches plus a six-sample
+light march, and with only 19k texels in flight the GPU cannot hide that chain. Further cloud savings have to shorten
+the per-ray chain (fewer steps, cheaper density far away, a shorter light march), not the texel count.
+
+After steps 1 to 5 the live frame is about 1.3 ms of GPU work at 60 fps against 8.7 ms at 120 fps before: about a
+thirteenth of the GPU load. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
 The depth prepass is also the entry point for rasterized models: anything that writes into it inherits the aerial
 perspective, the cloud occlusion and the sky compositing.

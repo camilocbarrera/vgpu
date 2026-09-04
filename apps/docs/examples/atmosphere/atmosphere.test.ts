@@ -77,6 +77,7 @@ describe('atmosphere graph on the mock adapter', () => {
       // It also stales the cloud history: the next frames refresh clouds four times faster than at rest.
       expect(graph.cloudChangeFrames).toBe(CLOUD_FAST_REFRESH_PERIOD);
       expect(graph.cloudsTargets.read.colors).toHaveLength(2);
+      expect(graph.cloudMarch.size).toEqual(graph.cloudsTargets.write.size);
       frame(gpu, (current) => renderGraph(current, graph, output));
       expect(graph.lutPhase).toBe('transmittance');
       frame(gpu, (current) => renderGraph(current, graph, output));

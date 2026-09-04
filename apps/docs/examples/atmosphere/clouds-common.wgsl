@@ -90,6 +90,39 @@ export fn cloudDensity(
   return saturate(eroded * 2.2) * interior;
 }
 
+/** Both intersections with a sphere at the origin: (near, far), or (-1, -1) when missed. */
+fn raySphereBoth(origin: vec3f, dir: vec3f, radius: f32) -> vec2f {
+  let b = 2.0 * dot(dir, origin);
+  let c = dot(origin, origin) - radius * radius;
+  let delta = b * b - 4.0 * c;
+  if (delta < 0.0) { return vec2f(-1.0); }
+  let root = sqrt(delta);
+  return vec2f((-b - root) * 0.5, (-b + root) * 0.5);
+}
+
+export struct MarchRange { start: f32, end: f32, valid: bool };
+
+/** Entry/exit of the cloud shell along a ray, for a camera below, inside or above it. */
+export fn cloudRange(c: Clouds, origin: vec3f, dir: vec3f, viewHeight: f32) -> MarchRange {
+  let rBottom = c.groundRadius + c.bottom;
+  let rTop = c.groundRadius + c.top;
+  let bottom = raySphereBoth(origin, dir, rBottom);
+  let top = raySphereBoth(origin, dir, rTop);
+  if (viewHeight < rBottom) {
+    // Below the layer: the far bottom intersection is the entry, the far top intersection is the exit.
+    return MarchRange(max(bottom.y, 0.0), top.y, top.y > 0.0);
+  }
+  if (viewHeight > rTop) {
+    // Above the layer: enter at the near top intersection, exit at the near bottom one (or the far top one).
+    if (top.x < 0.0) { return MarchRange(0.0, 0.0, false); }
+    let exit = select(top.y, bottom.x, bottom.x > 0.0);
+    return MarchRange(top.x, exit, true);
+  }
+  // Inside the layer.
+  let exit = select(top.y, bottom.x, bottom.x > 0.0);
+  return MarchRange(0.0, exit, true);
+}
+
 /** 2D approximation of the cloud shadow on the ground: coverage where the sun ray crosses mid-layer. */
 export fn cloudShadow(weather: texture_2d<f32>, weatherSampler: sampler, c: Clouds, position: vec3f, altitude: f32, sunDir: vec3f) -> f32 {
   if (sunDir.y <= 0.02) { return 1.0; }
