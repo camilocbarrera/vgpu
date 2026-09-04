@@ -1,4 +1,27 @@
-import type { Compute, Effect, Frame, Gpu, PingPongTargets, SharedUniforms, StorageBuffer, Surface, Target, Texture } from 'vgpu';
+import {
+  clock as createClock,
+  compute as createCompute,
+  effect as createEffect,
+  frame as createFrame,
+  frameLoop,
+  pingPong,
+  sampler as createSampler,
+  storage as createStorage,
+  surface as createSurface,
+  target as createTarget,
+  texture as createTexture,
+  uniforms as createUniforms,
+  type Compute,
+  type Effect,
+  type Frame,
+  type Gpu,
+  type PingPongTargets,
+  type SharedUniforms,
+  type StorageBuffer,
+  type Surface,
+  type Target,
+  type Texture,
+} from 'vgpu';
 import { cameraUniforms, sunDirection, type CameraUniformValues } from './camera';
 import { ATMOSPHERE_PHYSICS, CLOUD_TUNING, DEFAULT_PRESET, LUT_SIZES, PRESETS, TONEMAPS, type AtmosphereState } from './tuning';
 import transmittanceLutWgsl from './transmittance-lut.wgsl';
@@ -87,7 +110,7 @@ export interface AtmosphereGraph {
 /** Frames needed for every cloud texel to be re-marched at least once. */
 export const CLOUD_CONVERGENCE_FRAMES = 16;
 
-interface ThumbOptions {
+export interface ThumbOptions {
   time?: number;
   onVariantRendered?: (variant: 'noon', pixels: Uint8Array, size: readonly [number, number]) => void | Promise<void>;
 }
@@ -108,7 +131,7 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   const { init } = await import('vgpu');
   const { installControls } = await import('./controls');
   const gpu = await init();
-  const surface = gpu.surface(canvas, { dpr: [1, 1.5] });
+  const surface = createSurface(gpu, canvas, { dpr: [1, 1.5] });
   const graph = await createGraph(gpu, surface, 'atmosphere-live');
   graph.accumulate = true;
   const controls = installControls(canvas, { ...PRESETS[DEFAULT_PRESET] });
@@ -119,8 +142,9 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
     if (disposed) return;
     resizeGraph(graph, surface.size);
   });
-  const loop = gpu.frame.loop((frame) => {
-    const state = { ...controls.getState(), time: gpu.time };
+  const timeline = createClock(gpu);
+  const loop = frameLoop(gpu, (frame) => {
+    const state = { ...controls.getState(), time: timeline.time };
     applyState(graph, state, surface.size);
     renderGraph(frame, graph, surface);
   });
@@ -133,6 +157,23 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
     destroyGraph(graph);
     surface.dispose();
     gpu.dispose();
+  };
+}
+
+export function createRenderer({ canvas }: { readonly canvas: HTMLCanvasElement }) {
+  let cleanup: (() => void) | undefined;
+  let disposed = false;
+  const ready = run(canvas).then((nextCleanup) => {
+    if (disposed) nextCleanup();
+    else cleanup = nextCleanup;
+  });
+  return {
+    ready,
+    dispose(): void {
+      if (disposed) return;
+      disposed = true;
+      cleanup?.();
+    },
   };
 }
 
@@ -154,12 +195,12 @@ export async function renderStill(gpu: Gpu, output: Target, state: AtmosphereSta
   if (debug) {
     applyState(graph, state, output.size);
     bakeLuts(gpu, graph);
-    gpu.frame((frame) => frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect)));
+    createFrame(gpu, (frame) => frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect)));
     const sources = { transmittance: graph.transmittance, multiscatter: graph.multiScatter, weather: graph.weatherMap, terrain: graph.terrainMap, 'sky-view': graph.skyView } as const;
     const gains = { transmittance: 1, multiscatter: 1, weather: 1, terrain: 0.3, 'sky-view': 2 ** state.exposureEv } as const;
     graph.lutPreview.set({ preview: { gain: gains[debug], channel: 0, pad: [0, 0] }, lut: sources[debug], linearSampler: graph.sampler });
     await graph.lutPreview.compile(output);
-    gpu.frame((frame) => frame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(graph.lutPreview)));
+    createFrame(gpu, (frame) => frame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(graph.lutPreview)));
   } else {
     renderState(gpu, graph, output, state);
   }
@@ -169,47 +210,47 @@ export async function renderStill(gpu: Gpu, output: Target, state: AtmosphereSta
 }
 
 export async function createGraph(gpu: Gpu, output: Output, label: string): Promise<AtmosphereGraph> {
-  const sampler = gpu.sampler({ minFilter: 'linear', magFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge', addressModeW: 'clamp-to-edge' });
-  const atmosphere = gpu.uniforms<AtmosphereUniformValues>({ ...ATMOSPHERE_PHYSICS, sunDirection: [0, 1, 0] });
-  const camera = gpu.uniforms<CameraUniformValues>(cameraUniforms(PRESETS[DEFAULT_PRESET], output.size));
-  const clouds = gpu.uniforms<CloudUniformValues>(cloudUniforms(PRESETS[DEFAULT_PRESET]));
-  const noiseSampler = gpu.sampler({ minFilter: 'linear', magFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat', addressModeW: 'repeat' });
-  const transmittance = gpu.target({ size: LUT_SIZES.transmittance, format: HDR_FORMAT, label: `${label}-transmittance` });
-  const multiScatter = gpu.texture({ size: [LUT_SIZES.multiScatter, LUT_SIZES.multiScatter], format: HDR_FORMAT, label: `${label}-multiscatter` });
-  const skyView = gpu.target({ size: LUT_SIZES.skyView, format: HDR_FORMAT, label: `${label}-sky-view` });
-  const aerial = gpu.texture({ size: [LUT_SIZES.aerial, LUT_SIZES.aerial, LUT_SIZES.aerial], format: HDR_FORMAT, dimension: '3d', label: `${label}-aerial` });
-  const scene = gpu.target({ size: output.size, format: HDR_FORMAT, label: `${label}-scene` });
+  const sampler = createSampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge', addressModeW: 'clamp-to-edge' });
+  const atmosphere = createUniforms<AtmosphereUniformValues>(gpu, { ...ATMOSPHERE_PHYSICS, sunDirection: [0, 1, 0] });
+  const camera = createUniforms<CameraUniformValues>(gpu, cameraUniforms(PRESETS[DEFAULT_PRESET], output.size));
+  const clouds = createUniforms<CloudUniformValues>(gpu, cloudUniforms(PRESETS[DEFAULT_PRESET]));
+  const noiseSampler = createSampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat', addressModeW: 'repeat' });
+  const transmittance = createTarget(gpu, { size: LUT_SIZES.transmittance, format: HDR_FORMAT, label: `${label}-transmittance` });
+  const multiScatter = createTexture(gpu, { size: [LUT_SIZES.multiScatter, LUT_SIZES.multiScatter], format: HDR_FORMAT, label: `${label}-multiscatter` });
+  const skyView = createTarget(gpu, { size: LUT_SIZES.skyView, format: HDR_FORMAT, label: `${label}-sky-view` });
+  const aerial = createTexture(gpu, { size: [LUT_SIZES.aerial, LUT_SIZES.aerial, LUT_SIZES.aerial], format: HDR_FORMAT, dimension: '3d', label: `${label}-aerial` });
+  const scene = createTarget(gpu, { size: output.size, format: HDR_FORMAT, label: `${label}-scene` });
   const cloudSize = cloudSizeFor(output.size);
-  const cloudsTargets = gpu.pingPong(cloudSize[0], cloudSize[1], { format: HDR_FORMAT, label: `${label}-clouds` });
-  const reprojection = gpu.uniforms<ReprojectionUniformValues>(reprojectionUniforms(undefined, 0, false));
+  const cloudsTargets = pingPong(gpu, cloudSize[0], cloudSize[1], { format: HDR_FORMAT, label: `${label}-clouds` });
+  const reprojection = createUniforms<ReprojectionUniformValues>(gpu, reprojectionUniforms(undefined, 0, false));
   const noise = CLOUD_TUNING.noise;
-  const shapeNoise = gpu.texture({ size: [noise.shape, noise.shape, noise.shape], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-shape` });
-  const detailNoise = gpu.texture({ size: [noise.detail, noise.detail, noise.detail], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-detail` });
-  const weatherMap = gpu.texture({ size: [noise.weather, noise.weather], format: 'rgba8unorm', label: `${label}-weather` });
-  const terrainMap = gpu.texture({ size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: HDR_FORMAT, label: `${label}-terrain` });
-  const terrainAlbedoMap = gpu.texture({ size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: 'rgba8unorm', label: `${label}-terrain-albedo` });
-  const curlNoise = gpu.texture({ size: [CURL_SIZE, CURL_SIZE], format: 'rgba8unorm', label: `${label}-curl` });
+  const shapeNoise = createTexture(gpu, { size: [noise.shape, noise.shape, noise.shape], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-shape` });
+  const detailNoise = createTexture(gpu, { size: [noise.detail, noise.detail, noise.detail], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-detail` });
+  const weatherMap = createTexture(gpu, { size: [noise.weather, noise.weather], format: 'rgba8unorm', label: `${label}-weather` });
+  const terrainMap = createTexture(gpu, { size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: HDR_FORMAT, label: `${label}-terrain` });
+  const terrainAlbedoMap = createTexture(gpu, { size: [TERRAIN_MAP_SIZE, TERRAIN_MAP_SIZE], format: 'rgba8unorm', label: `${label}-terrain-albedo` });
+  const curlNoise = createTexture(gpu, { size: [CURL_SIZE, CURL_SIZE], format: 'rgba8unorm', label: `${label}-curl` });
 
-  const transmittanceEffect = gpu.effect(transmittanceLutWgsl, { label: `${label}-transmittance`, set: { atmosphere } });
-  const multiScatterCompute = gpu.compute(multiScatterLutWgsl, { label: `${label}-multiscatter`, set: { atmosphere, transmittanceLut: transmittance, lutSampler: sampler, multiScatterLut: multiScatter } });
-  const skyViewEffect = gpu.effect(skyViewLutWgsl, { label: `${label}-sky-view`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler } });
-  const aerialCompute = gpu.compute(aerialLutWgsl, { label: `${label}-aerial`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler, aerialLut: aerial } });
-  const frameConstants = gpu.storage(FRAME_CONSTANTS_BYTES, 'read-write');
-  const frameConstantsCompute = gpu.compute(frameConstantsWgsl, { label: `${label}-frame-constants`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, lutSampler: sampler, frameConstants } });
-  const sceneEffect = gpu.effect(sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap, terrainAlbedoMap, frame: frameConstants } });
-  const cloudsEffect = gpu.effect(cloudsWgsl, { label: `${label}-clouds`, set: {
+  const transmittanceEffect = createEffect(gpu, transmittanceLutWgsl, { label: `${label}-transmittance`, set: { atmosphere } });
+  const multiScatterCompute = createCompute(gpu, multiScatterLutWgsl, { label: `${label}-multiscatter`, set: { atmosphere, transmittanceLut: transmittance, lutSampler: sampler, multiScatterLut: multiScatter } });
+  const skyViewEffect = createEffect(gpu, skyViewLutWgsl, { label: `${label}-sky-view`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler } });
+  const aerialCompute = createCompute(gpu, aerialLutWgsl, { label: `${label}-aerial`, set: { atmosphere, camera, transmittanceLut: transmittance, multiScatterLut: multiScatter, lutSampler: sampler, aerialLut: aerial } });
+  const frameConstants = createStorage(gpu, FRAME_CONSTANTS_BYTES, 'read-write');
+  const frameConstantsCompute = createCompute(gpu, frameConstantsWgsl, { label: `${label}-frame-constants`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, lutSampler: sampler, frameConstants } });
+  const sceneEffect = createEffect(gpu, sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap, terrainAlbedoMap, frame: frameConstants } });
+  const cloudsEffect = createEffect(gpu, cloudsWgsl, { label: `${label}-clouds`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial,
     shapeNoise, detailNoise, weatherMap, curlNoise, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, reprojection, frame: frameConstants,
   } });
-  const presentEffect = gpu.effect(presentWgsl, { label: `${label}-present`, set: { present: { exposure: 1, tonemap: 0, dither: 1, pad: 0 }, sceneHdr: scene, cloudsHdr: cloudsTargets.write, linearSampler: sampler } });
+  const presentEffect = createEffect(gpu, presentWgsl, { label: `${label}-present`, set: { present: { exposure: 1, tonemap: 0, dither: 1, pad: 0 }, sceneHdr: scene, cloudsHdr: cloudsTargets.write, linearSampler: sampler } });
   // Cloud noise and weather are static: generate them once with compute into storage textures.
-  gpu.compute(cloudShapeNoiseWgsl, { label: `${label}-cloud-shape-noise`, set: { shapeNoise } }).dispatch(noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP);
-  gpu.compute(cloudDetailNoiseWgsl, { label: `${label}-cloud-detail-noise`, set: { detailNoise } }).dispatch(noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP);
-  gpu.compute(weatherMapWgsl, { label: `${label}-weather-map`, set: { weatherMap } }).dispatch(noise.weather / WEATHER_WORKGROUP, noise.weather / WEATHER_WORKGROUP, 1);
-  gpu.compute(curlNoiseWgsl, { label: `${label}-curl-noise`, set: { curlNoise } }).dispatch(CURL_SIZE / WEATHER_WORKGROUP, CURL_SIZE / WEATHER_WORKGROUP, 1);
+  createCompute(gpu, cloudShapeNoiseWgsl, { label: `${label}-cloud-shape-noise`, set: { shapeNoise } }).dispatch(noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP, noise.shape / NOISE_WORKGROUP);
+  createCompute(gpu, cloudDetailNoiseWgsl, { label: `${label}-cloud-detail-noise`, set: { detailNoise } }).dispatch(noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP, noise.detail / NOISE_WORKGROUP);
+  createCompute(gpu, weatherMapWgsl, { label: `${label}-weather-map`, set: { weatherMap } }).dispatch(noise.weather / WEATHER_WORKGROUP, noise.weather / WEATHER_WORKGROUP, 1);
+  createCompute(gpu, curlNoiseWgsl, { label: `${label}-curl-noise`, set: { curlNoise } }).dispatch(CURL_SIZE / WEATHER_WORKGROUP, CURL_SIZE / WEATHER_WORKGROUP, 1);
   // The heightfield is baked once too: the terrain march then costs one texture tap per step instead of a 6-octave fbm.
-  gpu.compute(terrainHeightmapWgsl, { label: `${label}-terrain-heightmap`, set: { terrainMap, albedoMap: terrainAlbedoMap } }).dispatch(TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, 1);
-  const lutPreview = gpu.effect(lutPreviewWgsl, { label: `${label}-lut-preview` });
+  createCompute(gpu, terrainHeightmapWgsl, { label: `${label}-terrain-heightmap`, set: { terrainMap, albedoMap: terrainAlbedoMap } }).dispatch(TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, TERRAIN_MAP_SIZE / WEATHER_WORKGROUP, 1);
+  const lutPreview = createEffect(gpu, lutPreviewWgsl, { label: `${label}-lut-preview` });
 
   const graph: AtmosphereGraph = {
     atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, curlNoise, terrainMap, terrainAlbedoMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, scene,
@@ -228,7 +269,7 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
 
 /** Transmittance and multi-scattering only depend on the medium: bake both up front outside a frame loop. */
 export function bakeLuts(gpu: Gpu, graph: AtmosphereGraph): void {
-  gpu.frame((frame) => encodeTransmittance(frame, graph));
+  createFrame(gpu, (frame) => encodeTransmittance(frame, graph));
   dispatchMultiScatter(graph);
 }
 
@@ -288,8 +329,8 @@ function renderState(gpu: Gpu, graph: AtmosphereGraph, output: Target, state: At
   applyState(graph, state, output.size);
   if (graph.lutPhase !== 'ready') bakeLuts(gpu, graph);
   // The per-frame constants read the sky-view LUT before this frame's pass writes it: make it current first.
-  gpu.frame((frame) => frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect)));
-  for (let i = 0; i < CLOUD_CONVERGENCE_FRAMES; i++) gpu.frame((frame) => renderGraph(frame, graph, output));
+  createFrame(gpu, (frame) => frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect)));
+  for (let i = 0; i < CLOUD_CONVERGENCE_FRAMES; i++) createFrame(gpu, (frame) => renderGraph(frame, graph, output));
 }
 
 /** 4x4 Bayer sequence, centred: the sub-texel offsets a texel cycles through while accumulating. */

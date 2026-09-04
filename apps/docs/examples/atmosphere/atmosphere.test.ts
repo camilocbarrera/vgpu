@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { init } from 'vgpu/mock';
+import { frame, init, target } from 'vgpu/mock';
 import { cameraUniforms, sunDirection } from './camera';
-import { CLOUD_CONVERGENCE_FRAMES, applyState, bakeLuts, createGraph, renderGraph } from './example';
+import { CLOUD_CONVERGENCE_FRAMES, applyState, bakeLuts, createGraph, renderGraph } from './renderer';
 import { LUT_SIZES, PRESETS } from './tuning';
 
 const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
@@ -36,8 +36,8 @@ describe('atmosphere graph on the mock adapter', () => {
   it('creates the storage LUTs, bakes and renders one frame without binding errors', async () => {
     const gpu = await init();
     try {
-      const target = gpu.target({ size: [96, 54], format: 'rgba8unorm' });
-      const graph = await createGraph(gpu, target, 'atmosphere-test');
+      const output = target(gpu, { size: [96, 54], format: 'rgba8unorm' });
+      const graph = await createGraph(gpu, output, 'atmosphere-test');
       expect(graph.aerial.dimension).toBe('3d');
       expect(graph.aerial.size).toEqual([LUT_SIZES.aerial, LUT_SIZES.aerial, LUT_SIZES.aerial]);
       expect([...graph.multiScatter.usage]).toContain('storage_binding');
@@ -47,21 +47,21 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.curlNoise.format).toBe('rgba8unorm');
       expect(graph.terrainMap.size).toEqual([2048, 2048]);
       expect([...graph.terrainMap.usage]).toContain('storage_binding');
-      applyState(graph, PRESETS['golden-hour'], target.size);
+      applyState(graph, PRESETS['golden-hour'], output.size);
       expect(graph.lutPhase).toBe('stale');
       bakeLuts(gpu, graph);
       expect(graph.lutPhase).toBe('ready');
-      expect(() => gpu.frame((frame) => renderGraph(frame, graph, target))).not.toThrow();
+      expect(() => frame(gpu, (current) => renderGraph(current, graph, output))).not.toThrow();
       // Changing the haze invalidates the medium-dependent tables; the next frame re-encodes them.
-      applyState(graph, { ...PRESETS['golden-hour'], haze: 4 }, target.size);
+      applyState(graph, { ...PRESETS['golden-hour'], haze: 4 }, output.size);
       expect(graph.lutPhase).toBe('stale');
-      gpu.frame((frame) => renderGraph(frame, graph, target));
+      frame(gpu, (current) => renderGraph(current, graph, output));
       expect(graph.lutPhase).toBe('transmittance');
-      gpu.frame((frame) => renderGraph(frame, graph, target));
+      frame(gpu, (current) => renderGraph(current, graph, output));
       expect(graph.lutPhase).toBe('ready');
       // The temporal cloud update alternates the ping-pong buffers and counts frames.
       const before = graph.cloudsTargets.write;
-      gpu.frame((frame) => renderGraph(frame, graph, target));
+      frame(gpu, (current) => renderGraph(current, graph, output));
       expect(graph.cloudsTargets.read).toBe(before);
       expect(graph.frame).toBe(4);
       expect(CLOUD_CONVERGENCE_FRAMES).toBe(16);

@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
-import { init } from 'vgpu/node';
+import { frame, init, target as createTarget } from 'vgpu/node';
 import { writePng } from '@vgpu/cli/lib/snapshot/png.js';
 import { transformWgsl } from '@vgpu/wgsl/loader-vite';
 
@@ -17,7 +17,7 @@ const entry = path.join(cacheDir, 'entry.ts');
 const bundle = path.join(cacheDir, 'atmosphere.mjs');
 
 await mkdir(cacheDir, { recursive: true });
-await writeFile(entry, "export { renderStill, createGraph, applyState, bakeLuts, renderGraph } from '../examples/atmosphere/example.ts';\nexport { PRESETS } from '../examples/atmosphere/tuning.ts';\n");
+await writeFile(entry, "export { renderStill, createGraph, applyState, bakeLuts, renderGraph } from '../examples/atmosphere/renderer.ts';\nexport { PRESETS } from '../examples/atmosphere/tuning.ts';\n");
 await build({ entryPoints: [entry], outfile: bundle, bundle: true, platform: 'node', format: 'esm', sourcemap: false, external: ['vgpu', 'vgpu/node'], plugins: [wgslPlugin()], logLevel: 'silent' });
 const { renderStill, createGraph, applyState, bakeLuts, renderGraph, PRESETS } = await import(pathToFileURL(bundle).href);
 await rm(cacheDir, { recursive: true, force: true });
@@ -31,7 +31,7 @@ for (const name of presetNames) {
   const state = { ...base, ...args.overrides };
   const gpu = await init();
   try {
-    const target = gpu.target({ size, format: 'rgba8unorm', label: `atmosphere-${name}` });
+    const target = createTarget(gpu, { size, format: 'rgba8unorm', label: `atmosphere-${name}` });
     if (args.bench) {
       console.log(`- ${name}: ${await bench(gpu, target, state, args.bench)}`);
       continue;
@@ -55,7 +55,7 @@ async function renderAccumulated(gpu, target, state, frames) {
   graph.accumulate = true;
   applyState(graph, state, target.size);
   bakeLuts(gpu, graph);
-  for (let i = 0; i < frames; i++) gpu.frame((frame) => renderGraph(frame, graph, target));
+  for (let i = 0; i < frames; i++) frame(gpu, (current) => renderGraph(current, graph, target));
   await gpu.gpu.queue.onSubmittedWorkDone();
 }
 
@@ -64,12 +64,12 @@ async function bench(gpu, target, state, frames) {
   const graph = await createGraph(gpu, target, 'atmosphere-bench');
   applyState(graph, state, target.size);
   bakeLuts(gpu, graph);
-  gpu.frame((frame) => renderGraph(frame, graph, target));
+  frame(gpu, (current) => renderGraph(current, graph, target));
   await gpu.gpu.queue.onSubmittedWorkDone();
   const started = performance.now();
   for (let i = 0; i < frames; i++) {
     applyState(graph, { ...state, time: state.time + i / 60 }, target.size);
-    gpu.frame((frame) => renderGraph(frame, graph, target));
+    frame(gpu, (current) => renderGraph(current, graph, target));
   }
   await gpu.gpu.queue.onSubmittedWorkDone();
   const perFrame = (performance.now() - started) / frames;
@@ -77,7 +77,7 @@ async function bench(gpu, target, state, frames) {
   const startedCloudless = performance.now();
   for (let i = 0; i < frames; i++) {
     applyState(graph, { ...cloudless, time: state.time + i / 60 }, target.size);
-    gpu.frame((frame) => renderGraph(frame, graph, target));
+    frame(gpu, (current) => renderGraph(current, graph, target));
   }
   await gpu.gpu.queue.onSubmittedWorkDone();
   const perFrameCloudless = (performance.now() - startedCloudless) / frames;
