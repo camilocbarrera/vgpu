@@ -1,4 +1,4 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PLANET_RADIUS_OFFSET, SunShadow, cameraRay, meanTransmittance, miePhase, rayleighPhase, raySphere, sampleMedium, sampleMultiScatter, sampleTransmittance, sunShadowSample } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_DEPTH, AERIAL_LUT_HEIGHT, AERIAL_LUT_WIDTH, Atmosphere, Camera, PLANET_RADIUS_OFFSET, SunShadow, cameraRay, meanTransmittance, miePhase, rayleighPhase, raySphere, sampleMedium, sampleMultiScatter, sampleTransmittance, sunShadowSample } from "./atmosphere-common.wgsl";
 import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
@@ -8,7 +8,8 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(4) var lutSampler: sampler;
 @group(0) @binding(5) var aerialLut: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(6) var sunShadowMap0: texture_depth_2d;
-@group(0) @binding(7) var aerialLossLut: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(7) var aerialUnshadowedLut: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(14) var aerialDirectLut: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(8) var<uniform> clouds: Clouds;
 @group(0) @binding(9) var cloudShadowMap: texture_2d<f32>;
 @group(0) @binding(10) var shadowSampler: sampler_comparison;
@@ -16,18 +17,18 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(12) var sunShadowMap1: texture_depth_2d;
 @group(0) @binding(13) var sunShadowMap2: texture_depth_2d;
 
-struct AerialResult { luminance: vec3f, loss: vec3f, transmittance: vec3f };
+struct AerialResult { luminance: vec3f, unshadowed: vec3f, direct: vec3f, transmittance: vec3f };
 
 /**
- * The integrateScattering loop of atmosphere-common.wgsl (Mie/Rayleigh phase, multiple scattering, no ground) with
- * one addition: every sample also asks the sun's shadow map whether it sees the sun (one depth comparison; the map
- * is last frame's, a frame late when the sun moves), and the air under the cloud layer asks the cloud shadow map how
- * much of it, so only lit samples add single scattering. The single scattering
- * removed this way is accumulated separately, so sky pixels, which read the terrain-agnostic sky-view LUT, can take
- * it out too. The multiple-scattering ambient stays unshadowed.
+ * The integrateScattering loop of atmosphere-common.wgsl (Mie/Rayleigh phase, multiple scattering, no ground), kept
+ * three ways. `unshadowed` and `direct` (its single-scattering part alone) are what the scene pass reads: it shadows the
+ * single scattering itself, per pixel, against the sun's cascades and the cloud map, since a froxel column is far too
+ * coarse for a shadow edge. `luminance` is shadowed here per sample (one depth comparison, last frame's map, and the
+ * cloud map under the layer) for the cloud pass, whose texels only need a tint. The multiple-scattering ambient stays
+ * unshadowed everywhere.
  */
 fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampleCount: f32) -> AerialResult {
-  var result = AerialResult(vec3f(0.0), vec3f(0.0), vec3f(1.0));
+  var result = AerialResult(vec3f(0.0), vec3f(0.0), vec3f(0.0), vec3f(1.0));
   let tBottom = raySphere(origin, dir, p.groundRadius);
   let tTop = raySphere(origin, dir, p.atmosphereRadius);
   var tMax = 0.0;
@@ -65,7 +66,8 @@ fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampl
     let stepTransmittance = exp(-extinction * dt);
     let integral = throughput * (1.0 - stepTransmittance) / extinction;
     result.luminance += (direct * lit + ambient) * integral;
-    result.loss += direct * (1.0 - lit) * integral;
+    result.unshadowed += (direct + ambient) * integral;
+    result.direct += direct * integral;
     throughput *= stepTransmittance;
   }
   result.transmittance = throughput;
@@ -76,13 +78,15 @@ fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampl
 @compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3u) {
   let p = atmosphere;
-  let uv = (vec2f(id.xy) + 0.5) / AERIAL_LUT_SIZE;
+  let uv = (vec2f(id.xy) + 0.5) / vec2f(AERIAL_LUT_WIDTH, AERIAL_LUT_HEIGHT);
   let dir = cameraRay(camera, vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0));
-  var slice = (f32(id.z) + 0.5) / AERIAL_LUT_SIZE;
-  slice = slice * slice * AERIAL_LUT_SIZE;
+  var slice = (f32(id.z) + 0.5) / AERIAL_LUT_DEPTH;
+  slice = slice * slice * AERIAL_LUT_DEPTH;
   let tMax = slice * AERIAL_KM_PER_SLICE;
   let sampleCount = max(1.0, f32(id.z + 1u) * 2.0);
   let result = integrateAerial(p, camera.position, dir, tMax, sampleCount);
-  textureStore(aerialLut, id, vec4f(result.luminance, 1.0 - meanTransmittance(result.transmittance)));
-  textureStore(aerialLossLut, id, vec4f(result.loss, 0.0));
+  let opacity = 1.0 - meanTransmittance(result.transmittance);
+  textureStore(aerialLut, id, vec4f(result.luminance, opacity));
+  textureStore(aerialUnshadowedLut, id, vec4f(result.unshadowed, opacity));
+  textureStore(aerialDirectLut, id, vec4f(result.direct, 0.0));
 }

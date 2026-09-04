@@ -8,9 +8,12 @@ export const TRANSMITTANCE_LUT_HEIGHT: f32 = 64.0;
 export const MULTISCATTER_LUT_SIZE: f32 = 32.0;
 export const SKY_VIEW_LUT_WIDTH: f32 = 192.0;
 export const SKY_VIEW_LUT_HEIGHT: f32 = 108.0;
-export const AERIAL_LUT_SIZE: f32 = 32.0;
+/** Froxel volume: screen columns at roughly the display aspect, quadratic depth slices. */
+export const AERIAL_LUT_WIDTH: f32 = 96.0;
+export const AERIAL_LUT_HEIGHT: f32 = 64.0;
+export const AERIAL_LUT_DEPTH: f32 = 32.0;
 export const AERIAL_KM_PER_SLICE: f32 = 4.0;
-/** AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE: the far end of the aerial-perspective volume. */
+/** AERIAL_KM_PER_SLICE * AERIAL_LUT_DEPTH: the far end of the aerial-perspective volume. */
 export const AERIAL_MAX_DISTANCE: f32 = 128.0;
 
 export struct Atmosphere {

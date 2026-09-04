@@ -47,7 +47,7 @@ describe('atmosphere graph on the mock adapter', () => {
       const output = target(gpu, { size: [96, 54], format: 'rgba8unorm' });
       const graph = await createGraph(gpu, output, 'atmosphere-test');
       expect(graph.aerial.dimension).toBe('3d');
-      expect(graph.aerial.size).toEqual([LUT_SIZES.aerial, LUT_SIZES.aerial, LUT_SIZES.aerial]);
+      expect(graph.aerial.size).toEqual([96, 64, 32]);
       expect([...graph.multiScatter.usage]).toContain('storage_binding');
       expect(graph.shapeNoise.dimension).toBe('3d');
       expect(graph.shapeNoise.format).toBe('rgba8unorm');
@@ -60,7 +60,7 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.sunShadows[0]?.size).toEqual([2048, 2048]);
       expect(graph.cloudShadowMap.size).toEqual([512, 512]);
       expect(graph.sunShadows[2]?.depth?.format).toBe('depth32float');
-      expect(graph.aerialLoss.dimension).toBe('3d');
+      expect(graph.aerialDirect.dimension).toBe('3d');
       expect(graph.terrainDepth.depth?.format).toBe('depth32float');
       expect(graph.bakedSunDirection).toBeUndefined();
       applyState(graph, PRESETS['golden-hour'], output.size);

@@ -57,7 +57,7 @@ export const LUT_SIZES = {
   transmittance: [256, 64] as const,
   multiScatter: 32,
   skyView: [192, 108] as const,
-  aerial: 32,
+  aerial: [96, 64, 32] as const,
 } as const;
 
 export const CAMERA_TUNING = { fovDegrees: 60, maxAltitudeKm: 80 } as const;

@@ -1,4 +1,4 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, FrameConstants, PI, PLANET_RADIUS_OFFSET, cameraRay, raySphere, sampleTransmittance } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_DEPTH, AERIAL_MAX_DISTANCE, Atmosphere, Camera, FrameConstants, PI, PLANET_RADIUS_OFFSET, cameraRay, raySphere, sampleTransmittance } from "./atmosphere-common.wgsl";
 import { Clouds, cloudDensity, cloudRange, heightFraction } from "./clouds-common.wgsl";
 import { CloudUpdate, compactToTexel } from "./clouds-temporal.wgsl";
 
@@ -131,7 +131,7 @@ fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
   var slice = distance / AERIAL_KM_PER_SLICE;
   var weight = 1.0;
   if (slice < 0.5) { weight = saturate(slice * 2.0); slice = 0.5; }
-  let w = sqrt(slice / AERIAL_LUT_SIZE);
+  let w = sqrt(slice / AERIAL_LUT_DEPTH);
   return weight * textureSampleLevel(aerialLut, lutSampler, vec3f(uv, w), 0.0);
 }
 
@@ -231,7 +231,7 @@ fn marchClouds(p: Atmosphere, dir: vec3f, noise: f32, uv: vec2f) -> vec4f {
   if (opacity <= 0.0) { return empty; }
   // Aerial perspective at the transmittance-weighted mean depth, applied to the cloud's own contribution.
   let meanDepth = depthSum / opacity;
-  let aerial = sampleAerial(uv, min(meanDepth, AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE));
+  let aerial = sampleAerial(uv, min(meanDepth, AERIAL_MAX_DISTANCE));
   let color = luminance * (1.0 - aerial.a) + aerial.rgb * opacity;
   return vec4f(color, transmittance);
 }

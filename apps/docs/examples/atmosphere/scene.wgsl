@@ -1,4 +1,4 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, AERIAL_MAX_DISTANCE, Atmosphere, Camera, FrameConstants, PI, SunShadow, TERRAIN_TRANSMITTANCE_ENTRIES, cameraRay, raySphere, sampleTransmittance, skyViewUvFast, sunShadowSoft } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_DEPTH, AERIAL_MAX_DISTANCE, Atmosphere, Camera, FrameConstants, PI, SunShadow, TERRAIN_TRANSMITTANCE_ENTRIES, cameraRay, raySphere, sampleTransmittance, skyViewUvFast, sunShadowSample, sunShadowSoft } from "./atmosphere-common.wgsl";
 import { TERRAIN_MAX_HEIGHT, TERRAIN_NEAR, sampleTerrainAlbedoNoise, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
 import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 
@@ -12,7 +12,8 @@ import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(9) var terrainMap: texture_2d<f32>;
 @group(0) @binding(10) var<storage, read> frame: FrameConstants;
 @group(0) @binding(11) var terrainAlbedoMap: texture_2d<f32>;
-@group(0) @binding(12) var aerialLossLut: texture_3d<f32>;
+@group(0) @binding(12) var aerialUnshadowedLut: texture_3d<f32>;
+@group(0) @binding(20) var aerialDirectLut: texture_3d<f32>;
 @group(0) @binding(13) var terrainDepth: texture_depth_2d;
 @group(0) @binding(14) var cloudShadowMap: texture_2d<f32>;
 @group(0) @binding(15) var sunShadowMap0: texture_depth_2d;
@@ -50,18 +51,61 @@ fn aerialCoordinate(distance: f32) -> AerialCoordinate {
   var slice = distance / AERIAL_KM_PER_SLICE;
   var weight = 1.0;
   if (slice < 0.5) { weight = saturate(slice * 2.0); slice = 0.5; }
-  return AerialCoordinate(sqrt(slice / AERIAL_LUT_SIZE), weight);
+  return AerialCoordinate(sqrt(slice / AERIAL_LUT_DEPTH), weight);
 }
 
+/** In-scatter with no shadow at all (rgb) and 1 - transmittance (a) up to `distance` along the pixel's ray. */
 fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
   let c = aerialCoordinate(distance);
-  return c.weight * textureSampleLevel(aerialLut, lutSampler, vec3f(uv, c.w), 0.0);
+  return c.weight * textureSampleLevel(aerialUnshadowedLut, lutSampler, vec3f(uv, c.w), 0.0);
 }
 
-/** Single scattering the aerial pass left out because the air was in terrain shadow (aerial-lut.wgsl). */
-fn sampleAerialLoss(uv: vec2f, distance: f32) -> vec3f {
+/** Single scattering alone, unshadowed, up to `distance`. */
+fn sampleAerialDirect(uv: vec2f, distance: f32) -> vec3f {
   let c = aerialCoordinate(distance);
-  return c.weight * textureSampleLevel(aerialLossLut, lutSampler, vec3f(uv, c.w), 0.0).rgb;
+  return c.weight * textureSampleLevel(aerialDirectLut, lutSampler, vec3f(uv, c.w), 0.0).rgb;
+}
+
+const VOLUMETRIC_STEPS: i32 = 32;
+
+/** pcg2d (Jarzynski & Olano 2020), for the per-pixel offset of the volumetric shadow samples. */
+fn pixelHash(pixel: vec2u) -> f32 {
+  var v = pixel * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v ^= v >> vec2u(16u);
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v ^= v >> vec2u(16u);
+  return f32(v.x) / 4294967295.0;
+}
+
+/**
+ * Single scattering that the terrain and the clouds keep from the air along this pixel's ray, up to `tEnd`: the
+ * volumetric shadow, at pixel resolution. The ray is cut at the aerial LUT's own quadratic slices; each interval takes
+ * its share of the unshadowed single scattering from the LUT and asks the sun's cascades and the cloud map, at one
+ * point inside the interval offset per pixel, whether that air saw the sun. A froxel column could not resolve this
+ * edge: it is where the terrain's silhouette meets the haze, and it moves with every camera pitch.
+ */
+fn volumetricShadowLoss(p: Atmosphere, uv: vec2f, origin: vec3f, dir: vec3f, tEnd: f32, noise: f32) -> vec3f {
+  var loss = vec3f(0.0);
+  var previous = vec3f(0.0);
+  var previousT = 0.0;
+  for (var i = 1; i <= VOLUMETRIC_STEPS; i += 1) {
+    let f = f32(i) / f32(VOLUMETRIC_STEPS);
+    let t = min(f * f * AERIAL_MAX_DISTANCE, tEnd);
+    let cumulative = sampleAerialDirect(uv, t);
+    let increment = cumulative - previous;
+    previous = cumulative;
+    let position = origin + dir * mix(previousT, t, noise);
+    previousT = t;
+    let fromGround = position - vec3f(0.0, p.groundRadius, 0.0);
+    var lit = sunShadowSample(sunShadow, sunShadowMap0, sunShadowMap1, sunShadowMap2, shadowSampler, fromGround, 1.0);
+    if (length(position) - p.groundRadius < clouds.bottom) { lit *= sampleCloudShadow(clouds, sunShadow, cloudShadowMap, lutSampler, fromGround); }
+    loss += increment * (1.0 - lit);
+    if (t >= tEnd) { break; }
+  }
+  return loss;
 }
 
 /** Sun disc with wavelength-dependent limb darkening, softened over one pixel. */
@@ -125,9 +169,10 @@ fn terrainShadow(p: Atmosphere, position: vec3f, normal: vec3f, sunDir: vec3f) -
   let terrain = terrainHit(p, origin, dir, vec2i(fragCoord.xy));
   let hitsGround = tSphere >= 0.0 || terrain.distance >= 0.0;
   let sky = sampleSkyView(dir, viewHeight, hitsGround);
-  // The sky-view LUT knows nothing about terrain: take out the single scattering the aerial pass found in terrain
-  // shadow along this ray, so the haze in front of a ridge that hides the sun stops glowing on sky pixels too.
-  let skyLuminance = max(sky.rgb - sampleAerialLoss(uv, AERIAL_MAX_DISTANCE), vec3f(0.0));
+  let noise = pixelHash(vec2u(fragCoord.xy));
+  // The sky-view LUT knows nothing about terrain or clouds: take out the single scattering they shadow along this
+  // ray, so the haze in front of a ridge that hides the sun stops glowing on sky pixels too.
+  let skyLuminance = max(sky.rgb - volumetricShadowLoss(p, uv, origin, dir, AERIAL_MAX_DISTANCE, noise), vec3f(0.0));
   let skyAmbient = frame.skyAmbient;
   var color = skyLuminance;
   // Alpha carries the geometry distance (km) so the cloud pass can stop at terrain; -1 means sky.
@@ -143,7 +188,7 @@ fn terrainShadow(p: Atmosphere, position: vec3f, normal: vec3f, sunDir: vec3f) -
     let ambientOcclusion = 0.6 + 0.4 * normal.y;
     let lit = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient * ambientOcclusion);
     let aerial = sampleAerial(uv, terrain.distance);
-    color = lit * (1.0 - aerial.a) + aerial.rgb;
+    color = lit * (1.0 - aerial.a) + aerial.rgb - volumetricShadowLoss(p, uv, origin, dir, terrain.distance, noise);
   } else if (tSphere >= 0.0) {
     hitDistance = tSphere;
     let position = origin + tSphere * dir;
@@ -155,7 +200,7 @@ fn terrainShadow(p: Atmosphere, position: vec3f, normal: vec3f, sunDir: vec3f) -
     let ground = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient);
     if (tSphere < AERIAL_MAX_DISTANCE) {
       let aerial = sampleAerial(uv, tSphere);
-      color = ground * (1.0 - aerial.a) + aerial.rgb;
+      color = ground * (1.0 - aerial.a) + aerial.rgb - volumetricShadowLoss(p, uv, origin, dir, tSphere, noise);
     } else {
       color = ground * sky.a + skyLuminance;
     }

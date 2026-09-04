@@ -58,6 +58,7 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
 13. Three cascades for resolution near the camera. Done.
 14. Cloud shadow map in the sun's frame. Done. Every "does this point see the sun" question now goes through the
     sun's frame: three depth cascades for the terrain, one transmittance map for the clouds.
+15. Volumetric shadow at pixel resolution instead of per froxel; aerial LUT at 96x64. Done.
 
 ## Results
 
@@ -93,6 +94,8 @@ Same machine and method as the baseline. ms per frame.
 
 | 14 cloud shadow map in the sun's frame | 2.7 | 1.44 | 0.34 | 2.30 | 1.33 | 0.21 | on battery. The cloud transmittance map is laid out in the far cascade's clip space instead of the terrain's xz: each texel is one light ray, so terrain and air at any altitude below the layer read exactly their own column by projecting through the cascade matrix (the ground-xz map was only right at the ground). Same 512² and 8 samples, 0.61 ms; the compute reads the inverse of the far cascade and a starting point on the ray, and intersects the layer's two spheres along the light |
 
+| 15 volumetric shadow per pixel; aerial LUT 96x64x32 | 6.0 | 1.44 | 3.10 | 4.01 | 1.33 | 1.50 | on battery. Feature, not a saving. The terrain's shadow in the haze was evaluated per froxel column of a 32x32 LUT, so its edge came out in 35-pixel blocks that re-aliased with every camera pitch (bands sliding across the haze at high haze). The LUT now stores the unshadowed in-scatter and its single-scattering part alone, at 96x64 columns, and the scene pass shadows that part per pixel: 32 intervals along the ray at the LUT's own depth slices, each asking the sun's cascades and the cloud map at a per-pixel-offset point. The result is the mountain's real silhouette drawn into the haze as light shafts, stable under rotation. The LUT keeps a shadowed copy for the cloud pass, whose texels only need a tint. 16 intervals would cost 0.98 ms but show grain |
+
 Measuring temporal behaviour: `node scripts/render-atmosphere.mjs --preset golden-hour --sun 1.5 --ev 6.5 --temporal 56
 --jump 36:altitude=0.4 --region 480,240,480,70` renders live-loop frames headless and prints, per frame, the mean
 absolute sRGB difference to the previous frame (whole frame and region) and the temporal noise of the region over the
@@ -107,8 +110,10 @@ long ray through thick cloud is a chain of ~160 steps each with several dependen
 light march, and with only 19k texels in flight the GPU cannot hide that chain. Further cloud savings have to shorten
 the per-ray chain (fewer steps, cheaper density far away, a shorter light march), not the texel count.
 
-After steps 1 to 8 the live frame is about 1.8 ms of GPU work at 60 fps against 8.7 ms at 120 fps before (0.5 ms of
-it is the quality bought back at rest), 2.2 ms while the camera or a parameter moves: about a tenth of the GPU load.
+After steps 1 to 8 the live frame was about 1.8 ms of GPU work at 60 fps against 8.7 ms at 120 fps before (0.5 ms
+of it the quality bought back at rest), 2.2 ms while the camera or a parameter moves: about a tenth of the GPU load.
+Steps 11 to 15 then spent 2.2 ms of that headroom on features (cloud shadows, shadow cascades, per-pixel volumetric
+shadow), so the live frame is now about 4 ms at rest at 1.2 Mpx, a quarter of the 60 fps budget.
 The temporal scheme is now purely progressive refinement of a still camera: full refresh on any change, then 1/n
 accumulation with a longer march and a sub-texel jitter until it converges. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
 The depth prepass is also the entry point for rasterized models: anything that writes into it inherits the aerial
