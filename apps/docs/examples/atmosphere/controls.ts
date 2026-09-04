@@ -3,6 +3,8 @@ import { CAMERA_TUNING, TONEMAPS, type AtmosphereState, type Tonemap } from './t
 export interface AtmosphereControls {
   readonly host: HTMLElement;
   getState(): AtmosphereState;
+  /** Shows the measured frame rate next to the hint line. */
+  setFps(fps: number): void;
   dispose(): void;
 }
 
@@ -75,8 +77,13 @@ export function installControls(canvas: HTMLCanvasElement, initial: AtmosphereSt
   host.append(tonemapRow);
 
   const hint = document.createElement('div');
-  hint.textContent = 'Drag to look around';
-  Object.assign(hint.style, { opacity: '0.6', fontWeight: '500' });
+  Object.assign(hint.style, { display: 'flex', justifyContent: 'space-between', opacity: '0.6', fontWeight: '500' });
+  const hintText = document.createElement('span');
+  hintText.textContent = 'Drag to look around';
+  const fps = document.createElement('span');
+  fps.style.fontVariantNumeric = 'tabular-nums';
+  fps.dataset['atmosphereFps'] = '';
+  hint.append(hintText, fps);
   host.append(hint);
 
   const parent = canvas.parentElement;
@@ -107,6 +114,7 @@ export function installControls(canvas: HTMLCanvasElement, initial: AtmosphereSt
   return {
     host,
     getState: () => ({ ...state }),
+    setFps(value) { fps.textContent = `${value.toFixed(0)} fps`; },
     dispose() {
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointermove', onMove);

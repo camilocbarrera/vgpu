@@ -60,7 +60,7 @@ export const LUT_SIZES = {
 
 export const CAMERA_TUNING = { fovDegrees: 60, maxAltitudeKm: 80 } as const;
 
-/** Cloud layer (km) and noise scales; the cloud pass renders at 1/renderScale of the output (full resolution is affordable with the temporal update). */
+/** Cloud layer (km) and noise scales; the cloud pass renders at 1/renderScale of the output and present.wgsl upsamples it depth-aware. */
 export const CLOUD_TUNING = {
   bottom: 1.6,
   top: 4.2,
@@ -74,7 +74,7 @@ export const CLOUD_TUNING = {
   /** Past this distance (km) the erosion and curl are skipped: their features are sub-pixel anyway. */
   detailLodDistance: 16,
   windSpeed: 0.03,
-  renderScale: 1,
+  renderScale: 2,
   noise: { shape: 128, detail: 32, weather: 1024 },
 } as const;
 

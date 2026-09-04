@@ -196,7 +196,9 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
   let origin = camera.position;
   let viewHeight = length(origin);
   var range = cloudRange(origin, dir, viewHeight);
-  let sceneDistance = textureSampleLevel(sceneHdr, lutSampler, uv, 0.0).a;
+  // The scene pixel under this texel's centre, the same one present.wgsl compares against when it upsamples:
+  // a filtered read would blend sky (-1) with terrain distances at silhouettes.
+  let sceneDistance = textureLoad(sceneHdr, vec2i(uv * vec2f(textureDimensions(sceneHdr))), 0).a;
   if (sceneDistance > 0.0) { range.end = min(range.end, sceneDistance); }
   range.end = min(range.end, range.start + MAX_MARCH_DISTANCE);
   if (!range.valid || range.end <= range.start || clouds.coverage <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }

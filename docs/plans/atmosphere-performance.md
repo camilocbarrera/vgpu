@@ -35,13 +35,23 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
 ## Plan
 
 1. Clouds at half resolution (`CLOUD_TUNING.renderScale` 2). The depth-aware upsample in present.wgsl was written for
-   it. Expected: cloud pass /4, frame -45 %.
-2. Frame cap and DPR: `frameLoop(gpu, cb, { fps: 60 })` and `dpr: [1, 1]`. Policy choices, each roughly halves the
-   heat on its own; kept as options for the user.
+   it. Expected: cloud pass /4, frame -45 %. Done.
+2. Frame cap and DPR: `frameLoop(gpu, cb, { fps: 60 })` and `dpr: 1`. Policy choices, each roughly halves the heat
+   on its own. Done, with an fps readout in the panel to see the effect of a change.
 3. Terrain march: reuse last frame's distance as the march start, or a max-mip of the heightmap for long steps.
 4. Ghosting: reproject the cloud history with translation (needs the per-texel mean depth stored), and raise the
    refresh fraction with full blend while the camera or the lighting changes, back to 1/16 at rest.
 
 ## Results
 
-Filled in as each step lands.
+Same machine and method as the baseline. ms per frame.
+
+| Step | 2.7 Mpx full | clouds | scene | 1.2 Mpx full | clouds | scene | Notes |
+|------|-----:|-----:|-----:|-----:|-----:|-----:|-------|
+| 0 baseline | 8.7 | 5.9 | 2.5 | 4.1 | 2.8 | 1.1 | |
+| 1 clouds at half resolution | 4.6 | 1.7 | 2.5 | 2.5 | 1.2 | 1.1 | cloud edges against terrain stay clean (the cloud pass now reads the same scene pixel present.wgsl compares against); silhouettes a touch softer at 3x zoom, not visible at 1x |
+| 2 dpr 1, 60 fps cap | | | | | | | policy: the live surface renders at 1.2 Mpx instead of 2.7, half the frames. The fps cap needed a 1 ms slack in vgpu's frame loop: a strict 1000/fps threshold dropped ticks that landed 0.1 ms short (48 fps measured with a 60 cap). On a display whose rate is not a multiple of the cap the loop settles on the nearest divisor (48 on 144 Hz) |
+
+After steps 1 and 2 the live frame is about 2.5 ms of GPU work at 60 fps against 8.7 ms at 120 fps before: roughly
+a seventh of the GPU load. The terrain march is now the largest pass (45 %), the cloud march second (47 % at 1.2 Mpx,
+where its fixed per-texel overhead weighs more).

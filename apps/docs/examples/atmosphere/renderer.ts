@@ -125,6 +125,8 @@ export interface ThumbOptions {
 }
 
 const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
+const MAX_DPR = 1;
+const MAX_FPS = 60;
 const CLEAR = [0, 0, 0, 1] as const;
 const AERIAL_WORKGROUP = 4;
 const NOISE_WORKGROUP = 4;
@@ -144,7 +146,8 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   // `?bench` in the URL times the passes of a frame on this GPU (bench.ts) before the live loop starts.
   const bench = typeof location !== 'undefined' && new URLSearchParams(location.search).has('bench') ? await import('./bench') : undefined;
   const gpu = await init();
-  const surface = createSurface(gpu, canvas, { dpr: [1, 1.5] });
+  // Device pixels and frame rate are capped: the frame cost is linear in pixels and this is a laptop demo.
+  const surface = createSurface(gpu, canvas, { dpr: MAX_DPR });
   const graph = await createGraph(gpu, surface, 'atmosphere-live');
   graph.accumulate = true;
   if (bench) bench.mountBenchReport(canvas, await bench.runBench(gpu, [canvas.clientWidth, canvas.clientHeight]));
@@ -157,11 +160,21 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
     resizeGraph(graph, surface.size);
   });
   const timeline = createClock(gpu);
+  let fpsWindowStart = performance.now();
+  let fpsWindowFrames = 0;
   const loop = frameLoop(gpu, (frame) => {
     const state = { ...controls.getState(), time: timeline.time };
     applyState(graph, state, surface.size);
     renderGraph(frame, graph, surface);
-  });
+    // Frame rate over half-second windows, so the cap and the cost of a change are visible in the panel.
+    fpsWindowFrames += 1;
+    const elapsed = performance.now() - fpsWindowStart;
+    if (elapsed >= 500) {
+      controls.setFps(fpsWindowFrames * 1000 / elapsed);
+      fpsWindowStart += elapsed;
+      fpsWindowFrames = 0;
+    }
+  }, { fps: MAX_FPS });
   return () => {
     if (disposed) return;
     disposed = true;
