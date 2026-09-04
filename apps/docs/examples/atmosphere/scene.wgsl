@@ -1,4 +1,4 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, FrameConstants, PI, cameraRay, raySphere, sampleTransmittance, skyViewUvFast } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, FrameConstants, PI, TERRAIN_TRANSMITTANCE_ENTRIES, cameraRay, raySphere, sampleTransmittance, skyViewUvFast } from "./atmosphere-common.wgsl";
 import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
 import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 
@@ -15,6 +15,14 @@ import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(10) var<storage, read> frame: FrameConstants;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
+
+/** Sun transmittance at a terrain height from the per-frame table (linear between entries). */
+fn terrainSunTransmittance(surfaceHeight: f32) -> vec3f {
+  let x = saturate(surfaceHeight / TERRAIN_MAX_HEIGHT) * f32(TERRAIN_TRANSMITTANCE_ENTRIES - 1u);
+  let index = u32(floor(x));
+  let next = min(index + 1u, TERRAIN_TRANSMITTANCE_ENTRIES - 1u);
+  return mix(frame.terrainSunTransmittance[index].rgb, frame.terrainSunTransmittance[next].rgb, fract(x));
+}
 
 const TERRAIN_STEPS: i32 = 200;
 const SHADOW_STEPS: i32 = 12;
@@ -139,8 +147,7 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     hitDistance = terrain.distance;
     let normal = sampleTerrainNormal(terrainMap, lutSampler, terrain.position.xz);
     let sunZenithCos = dot(normal, p.sunDirection);
-    let surfaceAltitude = p.groundRadius + terrain.height;
-    let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, surfaceAltitude, p.sunDirection.y);
+    let sunTransmittance = terrainSunTransmittance(terrain.height);
     let shadow = terrainShadow(p, terrain.position, p.sunDirection) * cloudShadow(weatherMap, noiseSampler, clouds, terrain.position, terrain.height, p.sunDirection);
     let albedo = terrainAlbedo(terrain.height, normal, terrain.position.xz);
     let ambientOcclusion = 0.6 + 0.4 * normal.y;

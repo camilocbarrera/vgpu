@@ -32,11 +32,15 @@ export struct Camera {
  * Values that are constant for a whole frame but were being recomputed per pixel or per sample.
  * Written by frame-constants.wgsl (one thread) from the same expressions the passes used, so results are identical.
  */
+export const TERRAIN_TRANSMITTANCE_ENTRIES: u32 = 64u;
+
 export struct FrameConstants {
   skyAmbient: vec3f, sunCosRadius: f32,
   groundBounce: vec3f, sunSinRadius: f32,
   sunHorizontal: vec3f, sunHorizontalLength: f32,
   beta: f32, zenithHorizonAngle: f32, sunSolidAngle: f32, planetShadowNeeded: f32,
+  /** Sun transmittance at terrain heights 0..TERRAIN_MAX_HEIGHT: the sun zenith angle is the same for all terrain. */
+  terrainSunTransmittance: array<vec4f, 64>,
 };
 
 export struct Medium { scattering: vec3f, extinction: vec3f, mie: vec3f, rayleigh: vec3f };

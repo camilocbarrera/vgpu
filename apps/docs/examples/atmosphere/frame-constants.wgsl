@@ -1,4 +1,5 @@
-import { Atmosphere, Camera, FrameConstants, PI, sampleTransmittance, skyViewUv } from "./atmosphere-common.wgsl";
+import { Atmosphere, Camera, FrameConstants, PI, TERRAIN_TRANSMITTANCE_ENTRIES, sampleTransmittance, skyViewUv } from "./atmosphere-common.wgsl";
+import { TERRAIN_MAX_HEIGHT } from "./terrain.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
 @group(0) @binding(1) var<uniform> camera: Camera;
@@ -8,29 +9,31 @@ import { Atmosphere, Camera, FrameConstants, PI, sampleTransmittance, skyViewUv 
 @group(0) @binding(5) var<storage, read_write> frameConstants: FrameConstants;
 
 /**
- * One thread per frame. Every expression here is copied verbatim from the pass that used to evaluate it per
- * pixel, so the baked value is bit-identical. Runs before the sky-view pass, so skyAmbient reads last frame's LUT.
+ * One workgroup per frame. Every scalar expression here is copied verbatim from the pass that used to evaluate it
+ * per pixel, so those values are bit-identical. Runs before the sky-view pass, so skyAmbient reads last frame's LUT.
+ * Each thread also bakes one entry of the terrain sun-transmittance table.
  */
-@compute @workgroup_size(1)
-fn main() {
+@compute @workgroup_size(64)
+fn main(@builtin(local_invocation_id) local: vec3u) {
   let p = atmosphere;
+  let entryHeight = f32(local.x) / f32(TERRAIN_TRANSMITTANCE_ENTRIES - 1u) * TERRAIN_MAX_HEIGHT;
+  frameConstants.terrainSunTransmittance[local.x] = vec4f(sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius + entryHeight, p.sunDirection.y), 0.0);
+  if (local.x != 0u) { return; }
   let viewHeight = length(camera.position);
   let up = camera.position / viewHeight;
   let vHorizon = sqrt(max(0.0, viewHeight * viewHeight - p.groundRadius * p.groundRadius));
   let beta = acos(clamp(vHorizon / viewHeight, -1.0, 1.0));
   let sunHorizontal = p.sunDirection - up * dot(p.sunDirection, up);
   let radius = camera.sunAngularRadius;
-  var f: FrameConstants;
-  f.skyAmbient = textureSampleLevel(skyViewLut, lutSampler, skyViewUv(p, viewHeight, 0.5, 0.0, false), 0.0).rgb;
-  f.sunCosRadius = cos(radius);
-  f.groundBounce = 0.15 * p.sunIlluminance * sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius, p.sunDirection.y) * max(p.sunDirection.y, 0.0) / PI;
-  f.sunSinRadius = sin(radius);
-  f.sunHorizontal = sunHorizontal;
-  f.sunHorizontalLength = length(sunHorizontal);
-  f.beta = beta;
-  f.zenithHorizonAngle = PI - beta;
-  f.sunSolidAngle = PI * sin(radius) * sin(radius);
+  frameConstants.skyAmbient = textureSampleLevel(skyViewLut, lutSampler, skyViewUv(p, viewHeight, 0.5, 0.0, false), 0.0).rgb;
+  frameConstants.sunCosRadius = cos(radius);
+  frameConstants.groundBounce = 0.15 * p.sunIlluminance * sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius, p.sunDirection.y) * max(p.sunDirection.y, 0.0) / PI;
+  frameConstants.sunSinRadius = sin(radius);
+  frameConstants.sunHorizontal = sunHorizontal;
+  frameConstants.sunHorizontalLength = length(sunHorizontal);
+  frameConstants.beta = beta;
+  frameConstants.zenithHorizonAngle = PI - beta;
+  frameConstants.sunSolidAngle = PI * sin(radius) * sin(radius);
   // Below ~3.4 degrees of elevation the planet can shadow cloud samples up to 70 km away (local horizon tilts < 0.7 deg).
-  f.planetShadowNeeded = select(0.0, 1.0, p.sunDirection.y < 0.06);
-  frameConstants = f;
+  frameConstants.planetShadowNeeded = select(0.0, 1.0, p.sunDirection.y < 0.06);
 }

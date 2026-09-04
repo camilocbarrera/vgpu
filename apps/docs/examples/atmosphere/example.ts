@@ -100,8 +100,8 @@ const WEATHER_WORKGROUP = 8;
 const TERRAIN_MAP_SIZE = 2048;
 /** Keep in sync with SIZE in curl-noise.wgsl. */
 const CURL_SIZE = 128;
-/** Size of FrameConstants in atmosphere-common.wgsl: four 16-byte rows. */
-const FRAME_CONSTANTS_BYTES = 64;
+/** Size of FrameConstants in atmosphere-common.wgsl: four 16-byte rows plus the 64-entry terrain transmittance table. */
+const FRAME_CONSTANTS_BYTES = 64 + 64 * 16;
 
 export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   const { init } = await import('vgpu');
