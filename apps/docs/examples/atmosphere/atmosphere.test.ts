@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { frame, init, target } from 'vgpu/mock';
 import { cameraUniforms, sunDirection } from './camera';
-import { CLOUD_CONVERGENCE_FRAMES, applyState, bakeLuts, createGraph, createRenderer, renderGraph } from './renderer';
+import { CLOUD_CONVERGENCE_FRAMES, CLOUD_FAST_REFRESH_PERIOD, applyState, bakeLuts, createGraph, createRenderer, renderGraph } from './renderer';
 import { LUT_SIZES, PRESETS } from './tuning';
 
 const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
@@ -74,6 +74,9 @@ describe('atmosphere graph on the mock adapter', () => {
       // Changing the haze invalidates the medium-dependent tables; the next frame re-encodes them.
       applyState(graph, { ...PRESETS['golden-hour'], haze: 4 }, output.size);
       expect(graph.lutPhase).toBe('stale');
+      // It also stales the cloud history: the next frames refresh clouds four times faster than at rest.
+      expect(graph.cloudChangeFrames).toBe(CLOUD_FAST_REFRESH_PERIOD);
+      expect(graph.cloudsTargets.read.colors).toHaveLength(2);
       frame(gpu, (current) => renderGraph(current, graph, output));
       expect(graph.lutPhase).toBe('transmittance');
       frame(gpu, (current) => renderGraph(current, graph, output));

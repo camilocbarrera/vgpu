@@ -62,6 +62,9 @@ export async function runBench(gpu: Gpu, cssSize: readonly [number, number], dpr
     applyState(graph, { ...preset, cloudCoverage: 0 }, size);
     await time('clouds: coverage 0, reprojection only', cloudsFrame);
     applyState(graph, preset, size);
+    graph.cloudChangeFrames = Number.POSITIVE_INFINITY;
+    await time('clouds: 1/2 of the texels marched (after a change)', cloudsFrame);
+    graph.cloudChangeFrames = 0;
     await time('luts: aerial + frame constants + sky-view', passFrame((frame) => { encodeAerial(graph); encodeFrameConstants(graph); encodeSkyView(frame, graph); }));
     await time('present: tonemap + cloud upsample', passFrame((frame) => encodePresent(frame, graph, output)));
     await time('terrain shadow map (only when the sun moves)', () => { graph.bakedSunDirection = undefined; encodeTerrainShadow(graph); });

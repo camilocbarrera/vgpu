@@ -61,7 +61,8 @@ type ReprojectionUniformValues = {
   forward: Vec3; frame: number;
   right: Vec3; tanHalfFov: number;
   up: Vec3; aspect: number;
-  valid: number; blend: number; jitter: readonly [number, number];
+  position: Vec3; valid: number;
+  blend: number; refreshPeriod: number; jitter: readonly [number, number];
 };
 
 type TerrainMeshUniformValues = { columnOffset: number; columns: number };
@@ -126,12 +127,20 @@ export interface AtmosphereGraph {
   frame: number;
   /** Live rendering blends re-marched cloud texels into their jittered history; stills keep it off to stay deterministic. */
   accumulate: boolean;
+  /**
+   * Frames left of fast cloud refresh: a lighting, cloud or altitude change stales the whole history, so the next
+   * CLOUD_FAST_REFRESH_PERIOD frames re-march one texel in two (a checkerboard) with full blend instead of one in
+   * sixteen accumulated. Two frames of a fine checkerboard read as a quick crossfade; four read as a dot pattern.
+   */
+  cloudChangeFrames: number;
+  cloudStateKey?: string;
   currentCamera?: CameraUniformValues;
   previousCamera?: CameraUniformValues;
 }
 
-/** Frames needed for every cloud texel to be re-marched at least once. */
+/** Frames needed for every cloud texel to be re-marched at least once, at rest and right after a change. */
 export const CLOUD_CONVERGENCE_FRAMES = 16;
+export const CLOUD_FAST_REFRESH_PERIOD = 2;
 
 export interface ThumbOptions {
   time?: number;
@@ -326,8 +335,9 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const terrainDepth = createTarget(gpu, { size: output.size, format: 'r8unorm', depth: 'depth32float', label: `${label}-terrain-depth` });
   const scene = createTarget(gpu, { size: output.size, format: HDR_FORMAT, label: `${label}-scene` });
   const cloudSize = cloudSizeFor(output.size);
-  const cloudsTargets = pingPong(gpu, cloudSize[0], cloudSize[1], { format: HDR_FORMAT, label: `${label}-clouds` });
-  const reprojection = createUniforms<ReprojectionUniformValues>(gpu, reprojectionUniforms(undefined, 0, false));
+  // Two attachments: premultiplied luminance + transmittance, and the mean cloud depth the reprojection needs.
+  const cloudsTargets = pingPong(gpu, cloudSize[0], cloudSize[1], { colors: [{ format: HDR_FORMAT }, { format: 'r16float' }], label: `${label}-clouds` });
+  const reprojection = createUniforms<ReprojectionUniformValues>(gpu, reprojectionUniforms(undefined, 0, false, false));
   const noise = CLOUD_TUNING.noise;
   const shapeNoise = createTexture(gpu, { size: [noise.shape, noise.shape, noise.shape], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-shape` });
   const detailNoise = createTexture(gpu, { size: [noise.detail, noise.detail, noise.detail], format: 'rgba8unorm', dimension: '3d', label: `${label}-cloud-detail` });
@@ -355,7 +365,7 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const sceneEffect = createEffect(gpu, sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap, terrainAlbedoMap, frame: frameConstants, aerialLossLut: aerialLoss, terrainDepth } });
   const cloudsEffect = createEffect(gpu, cloudsWgsl, { label: `${label}-clouds`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial,
-    shapeNoise, detailNoise, weatherMap, curlNoise, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, reprojection, frame: frameConstants,
+    shapeNoise, detailNoise, weatherMap, curlNoise, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, historyDepth: cloudsTargets.read.colors[1], reprojection, frame: frameConstants,
   } });
   const presentEffect = createEffect(gpu, presentWgsl, { label: `${label}-present`, set: { present: { exposure: 1, tonemap: 0, dither: 1, pad: 0 }, sceneHdr: scene, cloudsHdr: cloudsTargets.write, linearSampler: sampler } });
   // Cloud noise and weather are static: generate them once with compute into storage textures.
@@ -370,7 +380,7 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const graph: AtmosphereGraph = {
     atmosphere, camera, clouds, terrainMesh, shapeNoise, detailNoise, weatherMap, curlNoise, terrainMap, terrainAlbedoMap, terrainShadowMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, aerialLoss, terrainDepth, scene,
     transmittanceEffect, multiScatterCompute, skyViewEffect, aerialCompute, terrainShadowCompute, frameConstants, frameConstantsCompute, terrainDraw, sceneEffect, cloudsEffect, presentEffect, lutPreview, sampler,
-    lutPhase: 'stale', bakedHaze: 1, frame: 0, accumulate: false, sunDirection: sunDirection(PRESETS[DEFAULT_PRESET]), terrainColumns: 0,
+    lutPhase: 'stale', bakedHaze: 1, frame: 0, accumulate: false, cloudChangeFrames: 0, sunDirection: sunDirection(PRESETS[DEFAULT_PRESET]), terrainColumns: 0,
   };
   await Promise.all([
     transmittanceEffect.compile(transmittance),
@@ -418,6 +428,10 @@ export function applyState(graph: AtmosphereGraph, state: AtmosphereState, size:
   // The medium changed, so the baked transmittance and multi-scattering tables are stale.
   if (graph.bakedHaze !== haze) graph.lutPhase = 'stale';
   graph.bakedHaze = haze;
+  // Anything that changes how a cloud texel looks (not where it is: rotation reprojects) stales the cloud history.
+  const cloudStateKey = [state.sunElevation, state.sunAzimuth, state.altitudeKm, haze, state.cloudCoverage, state.cloudDetail, state.cloudType, state.cloudSeed].join(',');
+  if (graph.cloudStateKey !== undefined && graph.cloudStateKey !== cloudStateKey) graph.cloudChangeFrames = CLOUD_FAST_REFRESH_PERIOD;
+  graph.cloudStateKey = cloudStateKey;
 }
 
 /**
@@ -468,10 +482,13 @@ export function encodeScene(frame: Frame, graph: AtmosphereGraph): void {
   frame.pass({ target: graph.scene, clear: CLEAR }, (pass) => pass.draw(graph.sceneEffect));
 }
 
-/** Sixteenth-rate cloud update: this frame's texels are marched, the rest are reprojected from last frame's buffer. */
+/**
+ * Temporal cloud update: this frame's texels are marched (one in sixteen at rest, one in two for two frames after a
+ * change), the rest are reprojected from last frame's buffers.
+ */
 export function encodeClouds(frame: Frame, graph: AtmosphereGraph): void {
-  graph.reprojection.set(reprojectionUniforms(graph.previousCamera, graph.frame, graph.accumulate));
-  graph.cloudsEffect.set({ history: graph.cloudsTargets.read });
+  graph.reprojection.set(reprojectionUniforms(graph.previousCamera, graph.frame, graph.accumulate, graph.cloudChangeFrames > 0));
+  graph.cloudsEffect.set({ history: graph.cloudsTargets.read, historyDepth: graph.cloudsTargets.read.colors[1] });
   frame.pass({ target: graph.cloudsTargets.write, clear: [0, 0, 0, 1] }, (pass) => pass.draw(graph.cloudsEffect));
 }
 
@@ -485,6 +502,7 @@ export function finishFrame(graph: AtmosphereGraph): void {
   graph.cloudsTargets.swap();
   graph.previousCamera = graph.currentCamera;
   graph.frame += 1;
+  if (graph.cloudChangeFrames > 0) graph.cloudChangeFrames -= 1;
 }
 
 /** Stills render enough frames for the temporal cloud update to touch every texel. */
@@ -500,12 +518,16 @@ function renderState(gpu: Gpu, graph: AtmosphereGraph, output: Target, state: At
 const JITTER_SEQUENCE: readonly (readonly [number, number])[] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
   .map((index) => [((index % 4) + 0.5) / 4 - 0.5, (Math.floor(index / 4) + 0.5) / 4 - 0.5] as const);
 
-function reprojectionUniforms(previous: CameraUniformValues | undefined, frame: number, accumulate: boolean): ReprojectionUniformValues {
+/** `fast` (right after a change) refreshes one texel in two with full blend; at rest, one in sixteen accumulated with jitter. */
+function reprojectionUniforms(previous: CameraUniformValues | undefined, frame: number, accumulate: boolean, fast: boolean): ReprojectionUniformValues {
+  const accumulating = accumulate && !fast;
   return {
     forward: previous?.forward ?? [0, 0, 1], frame,
     right: previous?.right ?? [1, 0, 0], tanHalfFov: previous?.tanHalfFov ?? 1,
     up: previous?.up ?? [0, 1, 0], aspect: previous?.aspect ?? 1,
-    valid: previous ? 1 : 0, blend: accumulate ? 0.5 : 1, jitter: accumulate ? JITTER_SEQUENCE[Math.floor(frame / 16) % 16]! : [0, 0],
+    position: previous?.position ?? [0, ATMOSPHERE_PHYSICS.groundRadius, 0], valid: previous ? 1 : 0,
+    blend: accumulating ? 0.5 : 1, refreshPeriod: fast ? CLOUD_FAST_REFRESH_PERIOD : CLOUD_CONVERGENCE_FRAMES,
+    jitter: accumulating ? JITTER_SEQUENCE[Math.floor(frame / 16) % 16]! : [0, 0],
   };
 }
 
@@ -540,7 +562,7 @@ function sameDirection(a: Vec3 | undefined, b: Vec3): boolean {
 }
 
 export function destroyGraph(graph: AtmosphereGraph): void {
-  for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.terrainDepth, graph.cloudsTargets.read, graph.cloudsTargets.write]) target.color.destroy();
+  for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.terrainDepth, graph.cloudsTargets.read, graph.cloudsTargets.write]) for (const color of target.colors) color.destroy();
   graph.terrainDepth.depth?.destroy();
   for (const texture of [graph.multiScatter, graph.aerial, graph.aerialLoss, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.curlNoise, graph.terrainMap, graph.terrainAlbedoMap, graph.terrainShadowMap]) texture.destroy();
 }

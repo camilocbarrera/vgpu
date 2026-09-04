@@ -17,18 +17,25 @@ import { Clouds, cloudDensity, heightFraction } from "./clouds-common.wgsl";
 @group(0) @binding(13) var<uniform> reprojection: Reprojection;
 @group(0) @binding(14) var curlNoise: texture_2d<f32>;
 @group(0) @binding(15) var<storage, read> frame: FrameConstants;
+@group(0) @binding(16) var historyDepth: texture_2d<f32>;
 
 /**
- * Previous frame's camera basis: one texel in sixteen is re-marched per frame, the rest reproject from `history`.
- * `blend` < 1 accumulates each re-marched texel into its reprojected history with a sub-texel `jitter`,
- * which supersamples the edges over time; stills use blend 1 and no jitter so they stay deterministic.
+ * Previous frame's camera: one texel in `refreshPeriod` (16 at rest, 2 while the camera or the lighting changes) is
+ * re-marched per frame, the rest reproject from `history` through the world point at the depth the history stored.
+ * `blend` < 1 accumulates each re-marched texel into its reprojected history with a sub-texel `jitter`, which
+ * supersamples the edges over time; stills and frames right after a change use blend 1 and no jitter.
  */
 struct Reprojection {
   forward: vec3f, frame: f32,
   right: vec3f, tanHalfFov: f32,
   up: vec3f, aspect: f32,
-  valid: f32, blend: f32, jitter: vec2f,
+  position: vec3f, valid: f32,
+  blend: f32, refreshPeriod: f32, jitter: vec2f,
 };
+
+/** Color: premultiplied luminance with transmittance in alpha. Depth: transmittance-weighted mean distance (km), 0 without cloud. */
+struct CloudOutput { @location(0) color: vec4f, @location(1) depth: vec4f };
+struct CloudSample { color: vec4f, depth: f32 };
 
 const MARCH_STEPS: i32 = 160;
 const MIN_MARCH_STEPS: f32 = 80.0;
@@ -157,42 +164,65 @@ fn cloudRange(origin: vec3f, dir: vec3f, viewHeight: f32) -> MarchRange {
 }
 
 /**
- * Which texel of each 4x4 block is re-marched this frame (Bayer order so the refresh is spread out).
+ * Which texels of each 4x4 block are re-marched this frame: those whose Bayer rank matches the frame modulo the
+ * refresh period, so a period of 16 refreshes one texel per block, 2 a checkerboard, 1 all of them.
  * 4x4 rather than 2x2: GPUs shade 2x2 quads together, so one live pixel per quad would save nothing.
  */
-fn updatesThisFrame(texel: vec2i, frame: i32) -> bool {
+fn updatesThisFrame(texel: vec2i, frame: i32, period: i32) -> bool {
   let phase = (texel.x & 3) | ((texel.y & 3) << 2);
-  var order = array<i32, 16>(0, 10, 2, 8, 5, 15, 7, 13, 1, 11, 3, 9, 4, 14, 6, 12);
-  return order[frame % 16] == phase;
+  var rank = array<i32, 16>(0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5);
+  return rank[phase] % period == frame % period;
 }
 
-/** Rotation-only reprojection: clouds are far enough that the camera's translation between frames is negligible. */
-fn reprojectedUv(dir: vec3f) -> vec2f {
-  let z = dot(dir, reprojection.forward);
+/** Where the point at `depth` along this frame's ray fell on the previous frame's screen. */
+fn reprojectedUv(dir: vec3f, depth: f32) -> vec2f {
+  let relative = camera.position + dir * depth - reprojection.position;
+  let z = dot(relative, reprojection.forward);
   if (z <= 1e-3) { return vec2f(-1.0); }
-  let ndc = vec2f(dot(dir, reprojection.right) / (z * reprojection.tanHalfFov * reprojection.aspect), dot(dir, reprojection.up) / (z * reprojection.tanHalfFov));
+  let ndc = vec2f(dot(relative, reprojection.right) / (z * reprojection.tanHalfFov * reprojection.aspect), dot(relative, reprojection.up) / (z * reprojection.tanHalfFov));
   return vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 }
 
-@fragment fn fs_main(@builtin(position) fragCoord: vec4f, @location(0) uv: vec2f) -> @location(0) vec4f {
+/**
+ * Reprojection with parallax. The camera only moves along its axis, but a change of altitude still slides clouds a
+ * few kilometres away by pixels per frame, which a rotation-only reprojection smears into ghosts. First guess the
+ * depth from the middle of the cloud layer along this ray, then refine with the mean depth the history stored there.
+ */
+fn historyUv(dir: vec3f, origin: vec3f, viewHeight: f32) -> vec2f {
+  let range = cloudRange(origin, dir, viewHeight);
+  var depth = 1e4;
+  if (range.valid && range.end > range.start) { depth = 0.5 * (range.start + range.end); }
+  var uv = reprojectedUv(dir, depth);
+  if (all(uv >= vec2f(0.0)) && all(uv <= vec2f(1.0))) {
+    let storedDepth = textureSampleLevel(historyDepth, lutSampler, uv, 0.0).r;
+    if (storedDepth > 0.0) { uv = reprojectedUv(dir, storedDepth); }
+  }
+  return uv;
+}
+
+@fragment fn fs_main(@builtin(position) fragCoord: vec4f, @location(0) uv: vec2f) -> CloudOutput {
   let p = atmosphere;
   let unjitteredDir = cameraRay(camera, vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0));
-  let previousUv = reprojectedUv(unjitteredDir);
+  let origin = camera.position;
+  let previousUv = historyUv(unjitteredDir, origin, length(origin));
   let historyValid = reprojection.valid > 0.5 && all(previousUv >= vec2f(0.0)) && all(previousUv <= vec2f(1.0));
-  if (historyValid && !updatesThisFrame(vec2i(fragCoord.xy), i32(reprojection.frame))) {
-    return textureSampleLevel(history, lutSampler, previousUv, 0.0);
+  if (historyValid && !updatesThisFrame(vec2i(fragCoord.xy), i32(reprojection.frame), i32(reprojection.refreshPeriod))) {
+    return CloudOutput(textureSampleLevel(history, lutSampler, previousUv, 0.0), textureSampleLevel(historyDepth, lutSampler, previousUv, 0.0));
   }
   // Sub-texel jitter only matters when the result is blended into the history.
   let jitteredUv = uv + reprojection.jitter / vec2f(textureDimensions(history));
   let dir = cameraRay(camera, vec2f(jitteredUv.x * 2.0 - 1.0, 1.0 - jitteredUv.y * 2.0));
   let fresh = marchClouds(p, dir, fragCoord.xy, uv);
   if (historyValid && reprojection.blend < 1.0) {
-    return mix(textureSampleLevel(history, lutSampler, previousUv, 0.0), fresh, reprojection.blend);
+    let historyDepthValue = textureSampleLevel(historyDepth, lutSampler, previousUv, 0.0).r;
+    // The depth is not blended: a fresh sample without cloud would pull the stored depth toward zero.
+    let depth = select(historyDepthValue, fresh.depth, fresh.depth > 0.0);
+    return CloudOutput(mix(textureSampleLevel(history, lutSampler, previousUv, 0.0), fresh.color, reprojection.blend), vec4f(depth, 0.0, 0.0, 0.0));
   }
-  return fresh;
+  return CloudOutput(fresh.color, vec4f(fresh.depth, 0.0, 0.0, 0.0));
 }
 
-fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f {
+fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> CloudSample {
   let origin = camera.position;
   let viewHeight = length(origin);
   var range = cloudRange(origin, dir, viewHeight);
@@ -201,7 +231,8 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
   let sceneDistance = textureLoad(sceneHdr, vec2i(uv * vec2f(textureDimensions(sceneHdr))), 0).a;
   if (sceneDistance > 0.0) { range.end = min(range.end, sceneDistance); }
   range.end = min(range.end, range.start + MAX_MARCH_DISTANCE);
-  if (!range.valid || range.end <= range.start || clouds.coverage <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  let empty = CloudSample(vec4f(0.0, 0.0, 0.0, 1.0), 0.0);
+  if (!range.valid || range.end <= range.start || clouds.coverage <= 0.0) { return empty; }
 
   let cosTheta = dot(dir, p.sunDirection);
   let phases = octavePhases(cosTheta);
@@ -261,10 +292,10 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
   }
 
   let opacity = 1.0 - transmittance;
-  if (opacity <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+  if (opacity <= 0.0) { return empty; }
   // Aerial perspective at the transmittance-weighted mean depth, applied to the cloud's own contribution.
   let meanDepth = depthSum / opacity;
   let aerial = sampleAerial(uv, min(meanDepth, AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE));
   let color = luminance * (1.0 - aerial.a) + aerial.rgb * opacity;
-  return vec4f(color, transmittance);
+  return CloudSample(vec4f(color, transmittance), meanDepth);
 }
