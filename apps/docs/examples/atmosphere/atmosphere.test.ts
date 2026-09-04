@@ -52,7 +52,6 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.shapeNoise.dimension).toBe('3d');
       expect(graph.shapeNoise.format).toBe('rgba8unorm');
       expect(graph.cloudsTargets.write.size).toEqual([96, 54]);
-      expect(graph.aerialMie.dimension).toBe('3d');
       expect(graph.curlNoise.format).toBe('rgba8unorm');
       expect(graph.terrainMap.size).toEqual([2048, 2048]);
       expect([...graph.terrainMap.usage]).toContain('storage_binding');

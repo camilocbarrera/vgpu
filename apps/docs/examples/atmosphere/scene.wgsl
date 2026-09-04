@@ -14,7 +14,6 @@ import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(9) var terrainMap: texture_2d<f32>;
 @group(0) @binding(10) var<storage, read> frame: FrameConstants;
 @group(0) @binding(11) var terrainAlbedoMap: texture_2d<f32>;
-@group(0) @binding(12) var aerialMieLut: texture_3d<f32>;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
 
@@ -57,19 +56,33 @@ fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
   return weight * textureSampleLevel(aerialLut, lutSampler, vec3f(uv, w), 0.0);
 }
 
-fn sampleAerialMie(uv: vec2f, distance: f32) -> vec3f {
-  var slice = distance / AERIAL_KM_PER_SLICE;
-  var weight = 1.0;
-  if (slice < 0.5) { weight = saturate(slice * 2.0); slice = 0.5; }
-  let w = sqrt(slice / AERIAL_LUT_SIZE);
-  return weight * textureSampleLevel(aerialMieLut, lutSampler, vec3f(uv, w), 0.0).rgb;
-}
-
 /** Only the narrow forward-scattering lobe behaves like glare when the direct sun is terrain-occluded. */
 fn terrainSunOcclusion(p: Atmosphere, dir: vec3f) -> f32 {
   let angle = acos(clamp(dot(dir, p.sunDirection), -1.0, 1.0));
-  let forwardLobe = 1.0 - smoothstep(0.025, 0.14, angle);
+  let forwardLobe = 1.0 - smoothstep(0.025, 0.35, angle);
   return (1.0 - frame.sunTerrainVisibility) * forwardLobe;
+}
+
+fn directionUv(dir: vec3f) -> vec2f {
+  let viewDepth = max(dot(dir, camera.forward), 1e-4);
+  let ndc = vec2f(
+    dot(dir, camera.right) / (viewDepth * camera.tanHalfFov * camera.aspect),
+    dot(dir, camera.up) / (viewDepth * camera.tanHalfFov),
+  );
+  return vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+/** A wider off-sun lookup keeps ambient haze while excluding the forward solar lobe. */
+fn aerialHaloBaselineUv(p: Atmosphere, dir: vec3f) -> vec2f {
+  let baselineAngle = 0.35;
+  let cosAngle = clamp(dot(dir, p.sunDirection), -1.0, 1.0);
+  if (cosAngle <= cos(baselineAngle)) { return directionUv(dir); }
+  var tangent = dir - p.sunDirection * cosAngle;
+  if (dot(tangent, tangent) < 1e-6) {
+    tangent = camera.up - p.sunDirection * dot(camera.up, p.sunDirection);
+  }
+  tangent = normalize(tangent);
+  return directionUv(normalize(p.sunDirection * cos(baselineAngle) + tangent * sin(baselineAngle)));
 }
 
 /** Sun disc with wavelength-dependent limb darkening, softened over one pixel. */
@@ -181,7 +194,8 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let ambientOcclusion = 0.6 + 0.4 * normal.y;
     let lit = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient * ambientOcclusion);
     let aerial = sampleAerial(uv, terrain.distance);
-    let aerialLight = max(aerial.rgb - sampleAerialMie(uv, terrain.distance) * sunOcclusion * 0.7, vec3f(0.0));
+    let aerialBaseline = sampleAerial(aerialHaloBaselineUv(p, dir), terrain.distance);
+    let aerialLight = mix(aerial.rgb, aerialBaseline.rgb, sunOcclusion);
     color = lit * (1.0 - aerial.a) + aerialLight;
   } else if (tSphere >= 0.0) {
     hitDistance = tSphere;
@@ -194,7 +208,8 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let ground = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient);
     if (tSphere < AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE) {
       let aerial = sampleAerial(uv, tSphere);
-      let aerialLight = max(aerial.rgb - sampleAerialMie(uv, tSphere) * sunOcclusion * 0.7, vec3f(0.0));
+      let aerialBaseline = sampleAerial(aerialHaloBaselineUv(p, dir), tSphere);
+      let aerialLight = mix(aerial.rgb, aerialBaseline.rgb, sunOcclusion);
       color = ground * (1.0 - aerial.a) + aerialLight;
     } else {
       color = ground * sky.a + sky.rgb;

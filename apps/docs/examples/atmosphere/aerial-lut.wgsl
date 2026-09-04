@@ -6,7 +6,6 @@ import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, cameraRay, in
 @group(0) @binding(3) var multiScatterLut: texture_2d<f32>;
 @group(0) @binding(4) var lutSampler: sampler;
 @group(0) @binding(5) var aerialLut: texture_storage_3d<rgba16float, write>;
-@group(0) @binding(6) var aerialMieLut: texture_storage_3d<rgba16float, write>;
 
 /** Froxel volume: xy = screen, z = quadratic depth slices. rgb = in-scattered luminance, a = 1 - transmittance. */
 @compute @workgroup_size(4, 4, 4)
@@ -20,5 +19,4 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let sampleCount = max(1.0, f32(id.z + 1u) * 2.0);
   let result = integrateScattering(p, camera.position, dir, p.sunDirection, tMax, sampleCount, true, false, true, transmittanceLut, multiScatterLut, lutSampler);
   textureStore(aerialLut, id, vec4f(result.luminance, 1.0 - meanTransmittance(result.transmittance)));
-  textureStore(aerialMieLut, id, vec4f(result.directMie, 1.0));
 }
