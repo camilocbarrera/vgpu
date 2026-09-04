@@ -14,6 +14,7 @@ import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(9) var terrainMap: texture_2d<f32>;
 @group(0) @binding(10) var<storage, read> frame: FrameConstants;
 @group(0) @binding(11) var terrainAlbedoMap: texture_2d<f32>;
+@group(0) @binding(12) var aerialMieLut: texture_3d<f32>;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
 
@@ -30,14 +31,22 @@ const SHADOW_STEPS: i32 = 12;
 
 struct TerrainHit { distance: f32, position: vec3f, height: f32 };
 
-fn sampleSkyView(dir: vec3f, viewHeight: f32, intersectGround: bool) -> vec4f {
+struct SkyLutCoordinates { view: vec2f, haloBaseline: vec2f };
+
+fn skyLutCoordinates(dir: vec3f, viewHeight: f32, intersectGround: bool) -> SkyLutCoordinates {
   let up = camera.position / viewHeight;
   let viewZenithCos = dot(dir, up);
   let dirHorizontal = dir - up * viewZenithCos;
   let dirLength = length(dirHorizontal);
   var lightViewCos = 1.0;
   if (frame.sunHorizontalLength > 1e-5 && dirLength > 1e-5) { lightViewCos = dot(frame.sunHorizontal / frame.sunHorizontalLength, dirHorizontal / dirLength); }
-  return textureSampleLevel(skyViewLut, lutSampler, skyViewUvFast(frame, viewZenithCos, lightViewCos, intersectGround), 0.0);
+  // Eight degrees away from the sun is a stable local background when the
+  // forward lobe itself is hidden by terrain.
+  let baselineLightViewCos = min(lightViewCos, cos(0.14));
+  return SkyLutCoordinates(
+    skyViewUvFast(frame, viewZenithCos, lightViewCos, intersectGround),
+    skyViewUvFast(frame, viewZenithCos, baselineLightViewCos, intersectGround),
+  );
 }
 
 fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
@@ -46,6 +55,21 @@ fn sampleAerial(uv: vec2f, distance: f32) -> vec4f {
   if (slice < 0.5) { weight = saturate(slice * 2.0); slice = 0.5; }
   let w = sqrt(slice / AERIAL_LUT_SIZE);
   return weight * textureSampleLevel(aerialLut, lutSampler, vec3f(uv, w), 0.0);
+}
+
+fn sampleAerialMie(uv: vec2f, distance: f32) -> vec3f {
+  var slice = distance / AERIAL_KM_PER_SLICE;
+  var weight = 1.0;
+  if (slice < 0.5) { weight = saturate(slice * 2.0); slice = 0.5; }
+  let w = sqrt(slice / AERIAL_LUT_SIZE);
+  return weight * textureSampleLevel(aerialMieLut, lutSampler, vec3f(uv, w), 0.0).rgb;
+}
+
+/** Only the narrow forward-scattering lobe behaves like glare when the direct sun is terrain-occluded. */
+fn terrainSunOcclusion(p: Atmosphere, dir: vec3f) -> f32 {
+  let angle = acos(clamp(dot(dir, p.sunDirection), -1.0, 1.0));
+  let forwardLobe = 1.0 - smoothstep(0.025, 0.14, angle);
+  return (1.0 - frame.sunTerrainVisibility) * forwardLobe;
 }
 
 /** Sun disc with wavelength-dependent limb darkening, softened over one pixel. */
@@ -138,9 +162,12 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
   let tSphere = raySphere(origin, dir, p.groundRadius);
   let terrain = marchTerrain(p, origin, dir);
   let hitsGround = tSphere >= 0.0 || terrain.distance >= 0.0;
-  let sky = sampleSkyView(dir, viewHeight, hitsGround);
+  let skyCoordinates = skyLutCoordinates(dir, viewHeight, hitsGround);
+  let sky = textureSampleLevel(skyViewLut, lutSampler, skyCoordinates.view, 0.0);
+  let sunOcclusion = terrainSunOcclusion(p, dir);
   let skyAmbient = frame.skyAmbient;
-  var color = sky.rgb;
+  let haloBaseline = textureSampleLevel(skyViewLut, lutSampler, skyCoordinates.haloBaseline, 0.0).rgb;
+  var color = mix(sky.rgb, haloBaseline, sunOcclusion);
   // Alpha carries the geometry distance (km) so the cloud pass can stop at terrain; -1 means sky.
   var hitDistance = -1.0;
 
@@ -154,7 +181,8 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let ambientOcclusion = 0.6 + 0.4 * normal.y;
     let lit = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient * ambientOcclusion);
     let aerial = sampleAerial(uv, terrain.distance);
-    color = lit * (1.0 - aerial.a) + aerial.rgb;
+    let aerialLight = max(aerial.rgb - sampleAerialMie(uv, terrain.distance) * sunOcclusion * 0.7, vec3f(0.0));
+    color = lit * (1.0 - aerial.a) + aerialLight;
   } else if (tSphere >= 0.0) {
     hitDistance = tSphere;
     let position = origin + tSphere * dir;
@@ -166,13 +194,16 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
     let ground = albedo * (p.sunIlluminance * sunTransmittance * max(sunZenithCos, 0.0) * shadow / PI + skyAmbient);
     if (tSphere < AERIAL_KM_PER_SLICE * AERIAL_LUT_SIZE) {
       let aerial = sampleAerial(uv, tSphere);
-      color = ground * (1.0 - aerial.a) + aerial.rgb;
+      let aerialLight = max(aerial.rgb - sampleAerialMie(uv, tSphere) * sunOcclusion * 0.7, vec3f(0.0));
+      color = ground * (1.0 - aerial.a) + aerialLight;
     } else {
       color = ground * sky.a + sky.rgb;
     }
   } else {
     let viewTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, viewHeight, dot(dir, origin / viewHeight));
-    color += (sunDisc(p, dir) + sunGlare(p, dir)) * viewTransmittance;
+    // The sky LUT keeps the physically visible atmospheric scattering, while
+    // the direct disc and its analytic glare disappear behind local terrain.
+    color += (sunDisc(p, dir) + sunGlare(p, dir)) * viewTransmittance * frame.sunTerrainVisibility;
   }
   return vec4f(color, hitDistance);
 }

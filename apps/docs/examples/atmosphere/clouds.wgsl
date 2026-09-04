@@ -242,8 +242,8 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
     let up = position / length(position);
     let sunZenithCos = dot(up, p.sunDirection);
     // Planet shadow: after sunset only clouds whose own horizon still shows the sun stay lit. The ray test is
-    // skipped while the sun is high enough that no sample within reach can be shadowed (see frame-constants.wgsl).
-    let earthShadow = select(1.0, 0.0, frame.planetShadowNeeded > 0.5 && raySphere(position + up * PLANET_RADIUS_OFFSET, p.sunDirection, p.groundRadius) >= 0.0);
+    // skipped while the sun is high enough that no sample within reach can be shadowed.
+    let earthShadow = select(1.0, 0.0, p.sunDirection.y < 0.06 && raySphere(position + up * PLANET_RADIUS_OFFSET, p.sunDirection, p.groundRadius) >= 0.0);
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius + altitude, sunZenithCos) * earthShadow;
     let opticalDepth = lightOpticalDepth(position, p.sunDirection, t);
     let sunScatter = multiScatter(opticalDepth, phases);

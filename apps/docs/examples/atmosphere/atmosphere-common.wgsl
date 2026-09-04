@@ -38,13 +38,13 @@ export struct FrameConstants {
   skyAmbient: vec3f, sunCosRadius: f32,
   groundBounce: vec3f, sunSinRadius: f32,
   sunHorizontal: vec3f, sunHorizontalLength: f32,
-  beta: f32, zenithHorizonAngle: f32, sunSolidAngle: f32, planetShadowNeeded: f32,
+  beta: f32, zenithHorizonAngle: f32, sunSolidAngle: f32, sunTerrainVisibility: f32,
   /** Sun transmittance at terrain heights 0..TERRAIN_MAX_HEIGHT: the sun zenith angle is the same for all terrain. */
   terrainSunTransmittance: array<vec4f, 64>,
 };
 
 export struct Medium { scattering: vec3f, extinction: vec3f, mie: vec3f, rayleigh: vec3f };
-export struct ScatteringResult { luminance: vec3f, transmittance: vec3f, multiScatAs1: vec3f };
+export struct ScatteringResult { luminance: vec3f, transmittance: vec3f, multiScatAs1: vec3f, directMie: vec3f };
 export struct SkyViewParams { viewZenithCos: f32, lightViewCos: f32 };
 export struct TransmittanceParams { viewHeight: f32, viewZenithCos: f32 };
 
@@ -185,7 +185,7 @@ export fn integrateScattering(
   mieRayleighPhase: bool, includeGround: bool, useMultiScatter: bool,
   transmittanceLut: texture_2d<f32>, multiScatterLut: texture_2d<f32>, lutSampler: sampler,
 ) -> ScatteringResult {
-  var result = ScatteringResult(vec3f(0.0), vec3f(1.0), vec3f(0.0));
+  var result = ScatteringResult(vec3f(0.0), vec3f(1.0), vec3f(0.0), vec3f(0.0));
   let tBottom = raySphere(origin, dir, p.groundRadius);
   let tTop = raySphere(origin, dir, p.atmosphereRadius);
   var tMax = 0.0;
@@ -208,6 +208,7 @@ export fn integrateScattering(
   var throughput = vec3f(1.0);
   var luminance = vec3f(0.0);
   var multiScatAs1 = vec3f(0.0);
+  var directMie = vec3f(0.0);
   for (var i = 0.0; i < sampleCount; i += 1.0) {
     let t = (i + 0.3) * dt;
     let position = origin + t * dir;
@@ -225,6 +226,10 @@ export fn integrateScattering(
     let extinction = max(medium.extinction, vec3f(1e-7));
     let stepTransmittance = exp(-extinction * dt);
     luminance += throughput * (scattered - scattered * stepTransmittance) / extinction;
+    if (mieRayleighPhase) {
+      let mieScattered = p.sunIlluminance * earthShadow * sunTransmittance * medium.mie * phaseMie;
+      directMie += throughput * (mieScattered - mieScattered * stepTransmittance) / extinction;
+    }
     multiScatAs1 += throughput * (medium.scattering - medium.scattering * stepTransmittance) / extinction;
     throughput *= stepTransmittance;
   }
@@ -240,6 +245,7 @@ export fn integrateScattering(
   result.luminance = luminance;
   result.transmittance = throughput;
   result.multiScatAs1 = multiScatAs1;
+  result.directMie = directMie;
   return result;
 }
 

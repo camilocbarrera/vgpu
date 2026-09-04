@@ -1,5 +1,5 @@
 import { Atmosphere, Camera, FrameConstants, PI, TERRAIN_TRANSMITTANCE_ENTRIES, sampleTransmittance, skyViewUv } from "./atmosphere-common.wgsl";
-import { TERRAIN_MAX_HEIGHT } from "./terrain.wgsl";
+import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, sampleTerrainHeight } from "./terrain.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
 @group(0) @binding(1) var<uniform> camera: Camera;
@@ -7,6 +7,30 @@ import { TERRAIN_MAX_HEIGHT } from "./terrain.wgsl";
 @group(0) @binding(3) var skyViewLut: texture_2d<f32>;
 @group(0) @binding(4) var lutSampler: sampler;
 @group(0) @binding(5) var<storage, read_write> frameConstants: FrameConstants;
+@group(0) @binding(6) var terrainMap: texture_2d<f32>;
+
+/**
+ * Fraction of the solar disc visible above the terrain horizon. The minimum
+ * ray-to-heightfield clearance becomes an angular clearance at the camera,
+ * which gives a stable penumbra over the real angular radius of the sun.
+ */
+fn terrainSunVisibility(p: Atmosphere) -> f32 {
+  let origin = camera.position;
+  let dir = p.sunDirection;
+  var minimumAngularClearance = 1e9;
+  var t = 0.02;
+  for (var i = 0; i < 200; i += 1) {
+    if (t > TERRAIN_MAX_DISTANCE) { break; }
+    let position = origin + dir * t;
+    let altitude = length(position) - p.groundRadius;
+    if (altitude > TERRAIN_MAX_HEIGHT && dir.y >= 0.0) { break; }
+    let clearance = altitude - sampleTerrainHeight(terrainMap, lutSampler, position.xz);
+    minimumAngularClearance = min(minimumAngularClearance, clearance / t);
+    let distanceStep = 0.012 + t * 0.035;
+    t += max(0.5 * distanceStep, min(max(clearance, 0.0) * 0.7, distanceStep));
+  }
+  return smoothstep(-camera.sunAngularRadius, camera.sunAngularRadius, minimumAngularClearance);
+}
 
 /**
  * One workgroup per frame. Every scalar expression here is copied verbatim from the pass that used to evaluate it
@@ -34,6 +58,5 @@ fn main(@builtin(local_invocation_id) local: vec3u) {
   frameConstants.beta = beta;
   frameConstants.zenithHorizonAngle = PI - beta;
   frameConstants.sunSolidAngle = PI * sin(radius) * sin(radius);
-  // Below ~3.4 degrees of elevation the planet can shadow cloud samples up to 70 km away (local horizon tilts < 0.7 deg).
-  frameConstants.planetShadowNeeded = select(0.0, 1.0, p.sunDirection.y < 0.06);
+  frameConstants.sunTerrainVisibility = terrainSunVisibility(p);
 }
