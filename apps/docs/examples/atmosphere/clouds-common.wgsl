@@ -8,6 +8,9 @@ export struct Clouds {
   typeBias: f32, seed: f32, pad0: f32, pad1: f32,
 };
 
+/** Mean of the detail fbm over the noise volume (measured 0.494 over the 32-cube): what the erosion applies where its pattern has faded out. */
+const DETAIL_FBM_MEAN: f32 = 0.5;
+
 export fn heightFraction(c: Clouds, altitude: f32) -> f32 {
   return saturate((altitude - c.bottom) / (c.top - c.bottom));
 }
@@ -67,25 +70,31 @@ export fn cloudDensity(
   if (cheap) { return saturate(base * 2.2) * interior; }
   // Erosion only matters near the surface of the cloud. Three LOD rings by feature size: the coarse detail
   // (hundreds of metres) survives to 4x detailLodDistance, the curl to 2x, the fine scale (tens of metres) to 1x.
+  // Past a ring the pattern is dropped but not the density it removes: the erosion continues at its mean, so a
+  // cloud keeps the same amount of matter at any distance and only loses features that are sub-pixel anyway.
   let edge = 1.0 - smoothstep(0.3, 0.6, base);
+  let strength = edge * c.detailStrength;
+  if (strength <= 0.0) { return saturate(base * 2.2) * interior; }
   let coarseLod = 1.0 - smoothstep(c.detailLodDistance * 3.0, c.detailLodDistance * 4.0, viewDistance);
-  let detailWeight = edge * coarseLod * c.detailStrength;
-  if (detailWeight <= 0.0) { return saturate(base * 2.2) * interior; }
-  let curlLod = 1.0 - smoothstep(c.detailLodDistance * 1.5, c.detailLodDistance * 2.0, viewDistance);
-  let fineLod = 1.0 - smoothstep(c.detailLodDistance * 0.6, c.detailLodDistance, viewDistance);
-  var distorted = p;
-  if (curlLod > 0.0) {
-    // Curl distortion of the lookup makes the edges wispy; it grows toward the cloud top.
-    let flow = textureSampleLevel(curl, noiseSampler, p.xz / (c.detailScale * 5.0), 0.0).rg * 2.0 - 1.0;
-    distorted = p + vec3f(flow.x, 0.0, flow.y) * c.curlStrength * curlLod * (0.3 + 0.7 * hf);
+  var detailFbm = DETAIL_FBM_MEAN;
+  if (coarseLod > 0.0) {
+    let curlLod = 1.0 - smoothstep(c.detailLodDistance * 1.5, c.detailLodDistance * 2.0, viewDistance);
+    let fineLod = 1.0 - smoothstep(c.detailLodDistance * 0.6, c.detailLodDistance, viewDistance);
+    var distorted = p;
+    if (curlLod > 0.0) {
+      // Curl distortion of the lookup makes the edges wispy; it grows toward the cloud top.
+      let flow = textureSampleLevel(curl, noiseSampler, p.xz / (c.detailScale * 5.0), 0.0).rg * 2.0 - 1.0;
+      distorted = p + vec3f(flow.x, 0.0, flow.y) * c.curlStrength * curlLod * (0.3 + 0.7 * hf);
+    }
+    let coarse = textureSampleLevel(detail, noiseSampler, distorted / c.detailScale, 0.0).rgb;
+    var sampled = coarse.r * 0.625 + coarse.g * 0.25 + coarse.b * 0.125;
+    if (fineLod > 0.0) {
+      let fine = textureSampleLevel(detail, noiseSampler, distorted / (c.detailScale * 0.27) + vec3f(0.5), 0.0).rgb;
+      sampled = mix(sampled, fine.r * 0.625 + fine.g * 0.25 + fine.b * 0.125, 0.3 * fineLod);
+    }
+    detailFbm = mix(DETAIL_FBM_MEAN, sampled, coarseLod);
   }
-  let coarse = textureSampleLevel(detail, noiseSampler, distorted / c.detailScale, 0.0).rgb;
-  var detailFbm = coarse.r * 0.625 + coarse.g * 0.25 + coarse.b * 0.125;
-  if (fineLod > 0.0) {
-    let fine = textureSampleLevel(detail, noiseSampler, distorted / (c.detailScale * 0.27) + vec3f(0.5), 0.0).rgb;
-    detailFbm = mix(detailFbm, fine.r * 0.625 + fine.g * 0.25 + fine.b * 0.125, 0.3 * fineLod);
-  }
-  let modifier = mix(detailFbm, 1.0 - detailFbm, saturate(hf * 8.0)) * 0.45 * detailWeight;
+  let modifier = mix(detailFbm, 1.0 - detailFbm, saturate(hf * 8.0)) * 0.45 * strength;
   let eroded = saturate(remap(base, modifier, 1.0, 0.0, 1.0));
   return saturate(eroded * 2.2) * interior;
 }
