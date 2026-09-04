@@ -38,7 +38,7 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
    it. Expected: cloud pass /4, frame -45 %. Done.
 2. Frame cap and DPR: `frameLoop(gpu, cb, { fps: 60 })` and `dpr: 1`. Policy choices, each roughly halves the heat
    on its own. Done, with an fps readout in the panel to see the effect of a change.
-3. Terrain march: reuse last frame's distance as the march start, or a max-mip of the heightmap for long steps.
+3. Terrain as a rasterized mesh instead of a raymarch, so models can join the same depth buffer later. Done.
 4. Ghosting: reproject the cloud history with translation (needs the per-texel mean depth stored), and raise the
    refresh fraction with full blend while the camera or the lighting changes, back to 1/16 at rest.
 
@@ -52,6 +52,9 @@ Same machine and method as the baseline. ms per frame.
 | 1 clouds at half resolution | 4.6 | 1.7 | 2.5 | 2.5 | 1.2 | 1.1 | cloud edges against terrain stay clean (the cloud pass now reads the same scene pixel present.wgsl compares against); silhouettes a touch softer at 3x zoom, not visible at 1x |
 | 2 dpr 1, 60 fps cap | | | | | | | policy: the live surface renders at 1.2 Mpx instead of 2.7, half the frames. The fps cap needed a 1 ms slack in vgpu's frame loop: a strict 1000/fps threshold dropped ticks that landed 0.1 ms short (48 fps measured with a 60 cap). On a display whose rate is not a multiple of the cap the loop settles on the nearest divisor (48 on 144 Hz) |
 
-After steps 1 and 2 the live frame is about 2.5 ms of GPU work at 60 fps against 8.7 ms at 120 fps before: roughly
-a seventh of the GPU load. The terrain march is now the largest pass (45 %), the cloud march second (47 % at 1.2 Mpx,
-where its fixed per-texel overhead weighs more).
+| 3 terrain as a mesh, depth prepass + deferred shading | 2.6 | 1.8 | 0.40 | 1.67 | 1.2 | 0.23 | the raymarch is gone: a static ring grid around the camera axis (4096 columns x 512 rings, generated in the vertex shader, only the frustum's azimuth sector drawn) writes depth, and scene.wgsl shades each pixel once from that depth. Forward-shading the mesh was tried first and cost 4.6 ms: sub-pixel triangles near the horizon shade 2x2 quads each, so the same fragment work ran several times per pixel |
+
+After steps 1 to 3 the live frame is about 1.7 ms of GPU work at 60 fps against 8.7 ms at 120 fps before: about a
+tenth of the GPU load. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
+The depth prepass is also the entry point for rasterized models: anything that writes into it inherits the aerial
+perspective, the cloud occlusion and the sky compositing.

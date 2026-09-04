@@ -1,6 +1,7 @@
 import {
   clock as createClock,
   compute as createCompute,
+  draw as createDraw,
   effect as createEffect,
   frame as createFrame,
   frameLoop,
@@ -12,6 +13,7 @@ import {
   texture as createTexture,
   uniforms as createUniforms,
   type Compute,
+  type Draw,
   type Effect,
   type Frame,
   type Gpu,
@@ -22,13 +24,14 @@ import {
   type Target,
   type Texture,
 } from 'vgpu';
-import { cameraUniforms, sunDirection, type CameraUniformValues } from './camera';
+import { cameraUniforms, sunDirection, terrainSector, type CameraUniformValues } from './camera';
 import { ATMOSPHERE_PHYSICS, CLOUD_TUNING, DEFAULT_PRESET, LUT_SIZES, PRESETS, TONEMAPS, type AtmosphereState } from './tuning';
 import transmittanceLutWgsl from './transmittance-lut.wgsl';
 import multiScatterLutWgsl from './multiscatter-lut.wgsl';
 import skyViewLutWgsl from './sky-view-lut.wgsl';
 import aerialLutWgsl from './aerial-lut.wgsl';
 import sceneWgsl from './scene.wgsl';
+import terrainDepthWgsl from './terrain-depth.wgsl';
 import presentWgsl from './present.wgsl';
 import lutPreviewWgsl from './lut-preview.wgsl';
 import cloudShapeNoiseWgsl from './cloud-shape-noise.wgsl';
@@ -61,6 +64,8 @@ type ReprojectionUniformValues = {
   valid: number; blend: number; jitter: readonly [number, number];
 };
 
+type TerrainMeshUniformValues = { columnOffset: number; columns: number };
+
 type CloudUniformValues = {
   bottom: number; top: number; coverage: number; density: number;
   shapeScale: number; detailScale: number; weatherScale: number; wind: number;
@@ -72,6 +77,8 @@ export interface AtmosphereGraph {
   readonly atmosphere: SharedUniforms<AtmosphereUniformValues>;
   readonly camera: SharedUniforms<CameraUniformValues>;
   readonly clouds: SharedUniforms<CloudUniformValues>;
+  /** Which columns of the terrain ring grid this frame draws. */
+  readonly terrainMesh: SharedUniforms<TerrainMeshUniformValues>;
   readonly shapeNoise: Texture;
   readonly detailNoise: Texture;
   readonly weatherMap: Texture;
@@ -89,6 +96,8 @@ export interface AtmosphereGraph {
   readonly aerial: Texture;
   /** Single scattering the aerial pass removed as terrain-shadowed, taken out of the sky-view LUT by sky pixels. */
   readonly aerialLoss: Texture;
+  /** Depth prepass of the terrain ring grid (reversed-Z, depth32float); its color is a masked-out dummy. */
+  readonly terrainDepth: Target;
   readonly scene: Target;
   readonly transmittanceEffect: Effect;
   readonly multiScatterCompute: Compute;
@@ -98,6 +107,9 @@ export interface AtmosphereGraph {
   /** Per-frame constants (sky ambient, sun disc trig, horizon terms) baked by a one-thread compute into a storage buffer. */
   readonly frameConstants: StorageBuffer;
   readonly frameConstantsCompute: Compute;
+  /** Terrain ring grid, one triangle strip per visible column, depth only. */
+  readonly terrainDraw: Draw;
+  /** Shades every pixel once: terrain where the prepass left depth, sky and bare sphere elsewhere. */
   readonly sceneEffect: Effect;
   readonly cloudsEffect: Effect;
   readonly presentEffect: Effect;
@@ -107,6 +119,8 @@ export interface AtmosphereGraph {
   lutPhase: 'stale' | 'transmittance' | 'ready';
   bakedHaze: number;
   sunDirection: Vec3;
+  /** Instances of the terrain strip to draw this frame (terrainSector); 0 when the frustum looks above all terrain. */
+  terrainColumns: number;
   /** Sun the terrain shadow map was last built for; undefined until the first frame. */
   bakedSunDirection?: Vec3;
   frame: number;
@@ -135,6 +149,9 @@ const WEATHER_WORKGROUP = 8;
 const TERRAIN_MAP_SIZE = 2048;
 /** Keep in sync with TERRAIN_SHADOW_MAP_SIZE in terrain.wgsl. */
 const TERRAIN_SHADOW_MAP_SIZE = 512;
+/** Keep in sync with TERRAIN_MESH_COLUMNS and TERRAIN_MESH_RINGS in terrain.wgsl. */
+const TERRAIN_MESH_COLUMNS = 4096;
+const TERRAIN_MESH_RINGS = 512;
 /** Keep in sync with SIZE in curl-noise.wgsl. */
 const CURL_SIZE = 128;
 /** Size of FrameConstants in atmosphere-common.wgsl: four 16-byte rows plus the 64-entry terrain transmittance table. */
@@ -299,12 +316,14 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const atmosphere = createUniforms<AtmosphereUniformValues>(gpu, { ...ATMOSPHERE_PHYSICS, sunDirection: [0, 1, 0] });
   const camera = createUniforms<CameraUniformValues>(gpu, cameraUniforms(PRESETS[DEFAULT_PRESET], output.size));
   const clouds = createUniforms<CloudUniformValues>(gpu, cloudUniforms(PRESETS[DEFAULT_PRESET]));
+  const terrainMesh = createUniforms<TerrainMeshUniformValues>(gpu, { columnOffset: 0, columns: 0 });
   const noiseSampler = createSampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat', addressModeW: 'repeat' });
   const transmittance = createTarget(gpu, { size: LUT_SIZES.transmittance, format: HDR_FORMAT, label: `${label}-transmittance` });
   const multiScatter = createTexture(gpu, { size: [LUT_SIZES.multiScatter, LUT_SIZES.multiScatter], format: HDR_FORMAT, label: `${label}-multiscatter` });
   const skyView = createTarget(gpu, { size: LUT_SIZES.skyView, format: HDR_FORMAT, label: `${label}-sky-view` });
   const aerial = createTexture(gpu, { size: [LUT_SIZES.aerial, LUT_SIZES.aerial, LUT_SIZES.aerial], format: HDR_FORMAT, dimension: '3d', label: `${label}-aerial` });
   const aerialLoss = createTexture(gpu, { size: [LUT_SIZES.aerial, LUT_SIZES.aerial, LUT_SIZES.aerial], format: HDR_FORMAT, dimension: '3d', label: `${label}-aerial-loss` });
+  const terrainDepth = createTarget(gpu, { size: output.size, format: 'r8unorm', depth: 'depth32float', label: `${label}-terrain-depth` });
   const scene = createTarget(gpu, { size: output.size, format: HDR_FORMAT, label: `${label}-scene` });
   const cloudSize = cloudSizeFor(output.size);
   const cloudsTargets = pingPong(gpu, cloudSize[0], cloudSize[1], { format: HDR_FORMAT, label: `${label}-clouds` });
@@ -325,7 +344,15 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const terrainShadowCompute = createCompute(gpu, terrainShadowWgsl, { label: `${label}-terrain-shadow`, set: { atmosphere, terrainMap, lutSampler: sampler, terrainShadowMap } });
   const frameConstants = createStorage(gpu, FRAME_CONSTANTS_BYTES, 'read-write');
   const frameConstantsCompute = createCompute(gpu, frameConstantsWgsl, { label: `${label}-frame-constants`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView.color, lutSampler: sampler, frameConstants, terrainMap } });
-  const sceneEffect = createEffect(gpu, sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap, terrainAlbedoMap, frame: frameConstants, aerialLossLut: aerialLoss } });
+  const terrainDraw = createDraw(gpu, {
+    shader: terrainDepthWgsl,
+    label: `${label}-terrain-depth`,
+    geometry: { topology: 'triangle-strip', vertexCount: 2 * (TERRAIN_MESH_RINGS + 1) },
+    depth: { compare: 'greater' },
+    writeMask: [],
+    set: { atmosphere, camera, mesh: terrainMesh, terrainMap, lutSampler: sampler },
+  });
+  const sceneEffect = createEffect(gpu, sceneWgsl, { label: `${label}-scene`, set: { atmosphere, camera, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial, lutSampler: sampler, clouds, weatherMap, noiseSampler, terrainMap, terrainAlbedoMap, frame: frameConstants, aerialLossLut: aerialLoss, terrainDepth } });
   const cloudsEffect = createEffect(gpu, cloudsWgsl, { label: `${label}-clouds`, set: {
     atmosphere, camera, clouds, transmittanceLut: transmittance, skyViewLut: skyView, aerialLut: aerial,
     shapeNoise, detailNoise, weatherMap, curlNoise, sceneHdr: scene, lutSampler: sampler, noiseSampler, history: cloudsTargets.read, reprojection, frame: frameConstants,
@@ -341,13 +368,14 @@ export async function createGraph(gpu: Gpu, output: Output, label: string): Prom
   const lutPreview = createEffect(gpu, lutPreviewWgsl, { label: `${label}-lut-preview` });
 
   const graph: AtmosphereGraph = {
-    atmosphere, camera, clouds, shapeNoise, detailNoise, weatherMap, curlNoise, terrainMap, terrainAlbedoMap, terrainShadowMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, aerialLoss, scene,
-    transmittanceEffect, multiScatterCompute, skyViewEffect, aerialCompute, terrainShadowCompute, frameConstants, frameConstantsCompute, sceneEffect, cloudsEffect, presentEffect, lutPreview, sampler,
-    lutPhase: 'stale', bakedHaze: 1, frame: 0, accumulate: false, sunDirection: sunDirection(PRESETS[DEFAULT_PRESET]),
+    atmosphere, camera, clouds, terrainMesh, shapeNoise, detailNoise, weatherMap, curlNoise, terrainMap, terrainAlbedoMap, terrainShadowMap, cloudsTargets, reprojection, transmittance, multiScatter, skyView, aerial, aerialLoss, terrainDepth, scene,
+    transmittanceEffect, multiScatterCompute, skyViewEffect, aerialCompute, terrainShadowCompute, frameConstants, frameConstantsCompute, terrainDraw, sceneEffect, cloudsEffect, presentEffect, lutPreview, sampler,
+    lutPhase: 'stale', bakedHaze: 1, frame: 0, accumulate: false, sunDirection: sunDirection(PRESETS[DEFAULT_PRESET]), terrainColumns: 0,
   };
   await Promise.all([
     transmittanceEffect.compile(transmittance),
     skyViewEffect.compile(skyView),
+    terrainDraw.compile(terrainDepth),
     sceneEffect.compile(scene),
     cloudsEffect.compile(cloudsTargets.write),
     presentEffect.compile({ colors: [output.format] }),
@@ -380,9 +408,12 @@ export function applyState(graph: AtmosphereGraph, state: AtmosphereState, size:
     mieScattering: scale(ATMOSPHERE_PHYSICS.mieScattering, haze),
     mieAbsorption: scale(ATMOSPHERE_PHYSICS.mieAbsorption, haze),
   });
-  graph.camera.set(cameraUniforms(state, size));
-  graph.clouds.set(cloudUniforms(state));
   graph.currentCamera = cameraUniforms(state, size);
+  graph.camera.set(graph.currentCamera);
+  graph.clouds.set(cloudUniforms(state));
+  const sector = terrainSector(graph.currentCamera, TERRAIN_MESH_COLUMNS);
+  graph.terrainMesh.set({ columnOffset: sector.first, columns: sector.count });
+  graph.terrainColumns = sector.count;
   graph.presentEffect.set({ present: { exposure: 2 ** state.exposureEv, tonemap: TONEMAPS.indexOf(state.tonemap), dither: 1, pad: 0 } });
   // The medium changed, so the baked transmittance and multi-scattering tables are stale.
   if (graph.bakedHaze !== haze) graph.lutPhase = 'stale';
@@ -429,7 +460,11 @@ export function encodeSkyView(frame: Frame, graph: AtmosphereGraph): void {
   frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect));
 }
 
+/** Terrain depth prepass (reversed-Z, cleared to 0 = no terrain), then one fullscreen pass shades every pixel once. */
 export function encodeScene(frame: Frame, graph: AtmosphereGraph): void {
+  frame.pass({ target: graph.terrainDepth, clear: [0, 0, 0, 0], clearDepth: 0 }, (pass) => {
+    if (graph.terrainColumns > 0) pass.draw(graph.terrainDraw, { instances: graph.terrainColumns });
+  });
   frame.pass({ target: graph.scene, clear: CLEAR }, (pass) => pass.draw(graph.sceneEffect));
 }
 
@@ -476,6 +511,7 @@ function reprojectionUniforms(previous: CameraUniformValues | undefined, frame: 
 
 function resizeGraph(graph: AtmosphereGraph, size: readonly [number, number]): void {
   graph.scene.resize(size);
+  graph.terrainDepth.resize(size);
   const cloudSize = cloudSizeFor(size);
   graph.cloudsTargets.read.resize(cloudSize);
   graph.cloudsTargets.write.resize(cloudSize);
@@ -504,6 +540,7 @@ function sameDirection(a: Vec3 | undefined, b: Vec3): boolean {
 }
 
 export function destroyGraph(graph: AtmosphereGraph): void {
-  for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.cloudsTargets.read, graph.cloudsTargets.write]) target.color.destroy();
+  for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.terrainDepth, graph.cloudsTargets.read, graph.cloudsTargets.write]) target.color.destroy();
+  graph.terrainDepth.depth?.destroy();
   for (const texture of [graph.multiScatter, graph.aerial, graph.aerialLoss, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.curlNoise, graph.terrainMap, graph.terrainAlbedoMap, graph.terrainShadowMap]) texture.destroy();
 }

@@ -59,9 +59,13 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.terrainShadowMap.size).toEqual([512, 512]);
       expect([...graph.terrainShadowMap.usage]).toContain('storage_binding');
       expect(graph.aerialLoss.dimension).toBe('3d');
+      expect(graph.terrainDepth.depth?.format).toBe('depth32float');
       expect(graph.bakedSunDirection).toBeUndefined();
       applyState(graph, PRESETS['golden-hour'], output.size);
       expect(graph.lutPhase).toBe('stale');
+      // Golden hour looks at the horizon: a sector of the terrain ring grid, not the whole circle.
+      expect(graph.terrainColumns).toBeGreaterThan(0);
+      expect(graph.terrainColumns).toBeLessThan(4096);
       bakeLuts(gpu, graph);
       expect(graph.lutPhase).toBe('ready');
       expect(() => frame(gpu, (current) => renderGraph(current, graph, output))).not.toThrow();

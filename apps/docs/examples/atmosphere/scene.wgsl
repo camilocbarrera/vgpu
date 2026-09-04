@@ -1,5 +1,5 @@
 import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, AERIAL_MAX_DISTANCE, Atmosphere, Camera, FrameConstants, PI, TERRAIN_TRANSMITTANCE_ENTRIES, cameraRay, raySphere, sampleTransmittance, skyViewUvFast } from "./atmosphere-common.wgsl";
-import { TERRAIN_MAX_DISTANCE, TERRAIN_MAX_HEIGHT, sampleTerrainAlbedoNoise, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
+import { TERRAIN_MAX_HEIGHT, TERRAIN_NEAR, sampleTerrainAlbedoNoise, sampleTerrainHeight, sampleTerrainNormal, terrainAlbedo } from "./terrain.wgsl";
 import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
@@ -15,6 +15,7 @@ import { Clouds, cloudShadow } from "./clouds-common.wgsl";
 @group(0) @binding(10) var<storage, read> frame: FrameConstants;
 @group(0) @binding(11) var terrainAlbedoMap: texture_2d<f32>;
 @group(0) @binding(12) var aerialLossLut: texture_3d<f32>;
+@group(0) @binding(13) var terrainDepth: texture_depth_2d;
 
 fn height(xz: vec2f) -> f32 { return sampleTerrainHeight(terrainMap, lutSampler, xz); }
 
@@ -26,7 +27,6 @@ fn terrainSunTransmittance(surfaceHeight: f32) -> vec3f {
   return mix(frame.terrainSunTransmittance[index].rgb, frame.terrainSunTransmittance[next].rgb, fract(x));
 }
 
-const TERRAIN_STEPS: i32 = 200;
 const SHADOW_STEPS: i32 = 12;
 
 struct TerrainHit { distance: f32, position: vec3f, height: f32 };
@@ -91,40 +91,16 @@ fn sunGlare(p: Atmosphere, dir: vec3f) -> vec3f {
 /** Altitude of a planet-centric point above the sphere; xz doubles as the tangent-plane terrain coordinate. */
 fn altitudeOf(p: Atmosphere, position: vec3f) -> f32 { return length(position) - p.groundRadius; }
 
-/** Sphere-tracing style march with distance-proportional steps and a bisection refinement. */
-fn marchTerrain(p: Atmosphere, origin: vec3f, dir: vec3f) -> TerrainHit {
-  var hit = TerrainHit(-1.0, vec3f(0.0), 0.0);
-  let startAltitude = altitudeOf(p, origin);
-  if (startAltitude > TERRAIN_MAX_HEIGHT && dir.y >= 0.0) { return hit; }
-  var t = 0.0;
-  var previousT = 0.0;
-  // Skip the empty air above the highest possible peak.
-  if (startAltitude > TERRAIN_MAX_HEIGHT) { t = (startAltitude - TERRAIN_MAX_HEIGHT) / max(-dir.y, 1e-3); previousT = t; }
-  for (var i = 0; i < TERRAIN_STEPS; i += 1) {
-    if (t > TERRAIN_MAX_DISTANCE) { break; }
-    let position = origin + dir * t;
-    let altitude = altitudeOf(p, position);
-    // Rising rays that cleared the highest possible peak can never come back down to the terrain.
-    if (altitude > TERRAIN_MAX_HEIGHT && dir.y >= 0.0) { break; }
-    let delta = altitude - height(position.xz);
-    if (delta < 0.0) {
-      var lo = previousT;
-      var hi = t;
-      for (var k = 0; k < 8; k += 1) {
-        let mid = 0.5 * (lo + hi);
-        let midPosition = origin + dir * mid;
-        if (altitudeOf(p, midPosition) - height(midPosition.xz) < 0.0) { hi = mid; } else { lo = mid; }
-      }
-      let finalPosition = origin + dir * hi;
-      return TerrainHit(hi, finalPosition, height(finalPosition.xz));
-    }
-    previousT = t;
-    // Distance-proportional steps reach TERRAIN_MAX_DISTANCE within the budget even for grazing rays;
-    // the clearance term slows down near the surface and the bisection above recovers precision.
-    let distanceStep = 0.012 + t * 0.035;
-    t += max(0.5 * distanceStep, min(delta * 0.7, distanceStep));
-  }
-  return hit;
+/**
+ * The terrain surface under a pixel, from the depth the ring grid left in the prepass (terrain-depth.wgsl):
+ * reversed-Z with depth = TERRAIN_NEAR / view depth, so the point lies on the pixel's ray at that view depth.
+ */
+fn terrainHit(p: Atmosphere, origin: vec3f, dir: vec3f, pixel: vec2i) -> TerrainHit {
+  let depth = textureLoad(terrainDepth, pixel, 0);
+  if (depth <= 0.0) { return TerrainHit(-1.0, vec3f(0.0), 0.0); }
+  let distance = TERRAIN_NEAR / (depth * dot(dir, camera.forward));
+  let position = origin + dir * distance;
+  return TerrainHit(distance, position, altitudeOf(p, position));
 }
 
 /** Cheap soft shadow toward the sun; step size grows with distance. */
@@ -144,13 +120,13 @@ fn terrainShadow(p: Atmosphere, position: vec3f, sunDir: vec3f) -> f32 {
   return shadow;
 }
 
-@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+@fragment fn fs_main(@builtin(position) fragCoord: vec4f, @location(0) uv: vec2f) -> @location(0) vec4f {
   let p = atmosphere;
   let dir = cameraRay(camera, vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0));
   let origin = camera.position;
   let viewHeight = length(origin);
   let tSphere = raySphere(origin, dir, p.groundRadius);
-  let terrain = marchTerrain(p, origin, dir);
+  let terrain = terrainHit(p, origin, dir, vec2i(fragCoord.xy));
   let hitsGround = tSphere >= 0.0 || terrain.distance >= 0.0;
   let sky = sampleSkyView(dir, viewHeight, hitsGround);
   // The sky-view LUT knows nothing about terrain: take out the single scattering the aerial pass found in terrain

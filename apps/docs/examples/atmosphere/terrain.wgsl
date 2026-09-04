@@ -7,6 +7,11 @@ export const TERRAIN_MAP_EXTENT: f32 = 200.0;
 export const TERRAIN_MAP_SIZE: f32 = 2048.0;
 /** The sun-shadow height map (terrain-shadow.wgsl) covers the same square at this resolution. */
 export const TERRAIN_SHADOW_MAP_SIZE: f32 = 512.0;
+/** Ring grid of the terrain mesh (terrain-mesh.wgsl): azimuth columns around the camera axis and rings per column. */
+export const TERRAIN_MESH_COLUMNS: u32 = 4096u;
+export const TERRAIN_MESH_RINGS: u32 = 512u;
+/** Near plane (km) of the terrain depth prepass: reversed-Z, depth = TERRAIN_NEAR / view depth. */
+export const TERRAIN_NEAR: f32 = 0.001;
 const TERRAIN_SCALE: f32 = 1.0 / 16.0;
 const OCTAVES: i32 = 6;
 const ROTATE = mat2x2f(vec2f(0.8, 0.6), vec2f(-0.6, 0.8));
