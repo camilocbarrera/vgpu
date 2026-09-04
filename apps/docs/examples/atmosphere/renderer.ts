@@ -160,19 +160,77 @@ export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   };
 }
 
-export function createRenderer({ canvas }: { readonly canvas: HTMLCanvasElement }) {
+type RendererRun = (canvas: HTMLCanvasElement) => Promise<() => void>;
+
+/**
+ * A canvas context is shared even when separate vgpu instances configure it.
+ * Keep each renderer's complete lifetime serialized so a late Strict Mode
+ * cleanup cannot unconfigure the context owned by the replacement renderer.
+ */
+const canvasRendererLifetimes = new WeakMap<HTMLCanvasElement, Promise<void>>();
+
+export function createRenderer(
+  { canvas }: { readonly canvas: HTMLCanvasElement },
+  start: RendererRun = run,
+) {
   let cleanup: (() => void) | undefined;
   let disposed = false;
-  const ready = run(canvas).then((nextCleanup) => {
-    if (disposed) nextCleanup();
-    else cleanup = nextCleanup;
+  let released = false;
+  let releaseLifetime!: () => void;
+
+  const previousLifetime = canvasRendererLifetimes.get(canvas) ?? Promise.resolve();
+  const lifetime = new Promise<void>((resolve) => {
+    releaseLifetime = resolve;
   });
+  const queuedLifetime = previousLifetime.catch(() => undefined).then(() => lifetime);
+  canvasRendererLifetimes.set(canvas, queuedLifetime);
+
+  const release = () => {
+    if (released) return;
+    released = true;
+    releaseLifetime();
+    if (canvasRendererLifetimes.get(canvas) === queuedLifetime) {
+      canvasRendererLifetimes.delete(canvas);
+    }
+  };
+
+  const ready = previousLifetime
+    .catch(() => undefined)
+    .then(async () => {
+      if (disposed) {
+        release();
+        return;
+      }
+
+      const nextCleanup = await start(canvas);
+      if (disposed) {
+        try {
+          nextCleanup();
+        } finally {
+          release();
+        }
+      } else {
+        cleanup = nextCleanup;
+      }
+    })
+    .catch((error: unknown) => {
+      release();
+      if (!disposed) throw error;
+    });
+
   return {
     ready,
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      cleanup?.();
+      if (!cleanup) return;
+      const disposeRenderer = cleanup;
+      cleanup = undefined;
+      try {
+        disposeRenderer();
+      } finally {
+        release();
+      }
     },
   };
 }

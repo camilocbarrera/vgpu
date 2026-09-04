@@ -1,10 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { frame, init, target } from 'vgpu/mock';
 import { cameraUniforms, sunDirection } from './camera';
-import { CLOUD_CONVERGENCE_FRAMES, applyState, bakeLuts, createGraph, renderGraph } from './renderer';
+import { CLOUD_CONVERGENCE_FRAMES, applyState, bakeLuts, createGraph, createRenderer, renderGraph } from './renderer';
 import { LUT_SIZES, PRESETS } from './tuning';
 
 const dot = (a: readonly number[], b: readonly number[]) => a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 describe('atmosphere camera', () => {
   it('builds an orthonormal basis that looks along yaw/pitch', () => {
@@ -69,5 +77,54 @@ describe('atmosphere graph on the mock adapter', () => {
     } finally {
       gpu.dispose();
     }
+  });
+});
+
+describe('atmosphere renderer lifecycle', () => {
+  it('finishes a stale Strict Mode cleanup before reconfiguring the same canvas', async () => {
+    const canvas = {} as HTMLCanvasElement;
+    const firstInitialization = deferred<() => void>();
+    const firstCleanup = vi.fn();
+    const secondCleanup = vi.fn();
+    const firstStart = vi.fn(() => firstInitialization.promise);
+    const secondStart = vi.fn(async () => secondCleanup);
+
+    const first = createRenderer({ canvas }, firstStart);
+    await vi.waitFor(() => expect(firstStart).toHaveBeenCalledOnce());
+    first.dispose();
+
+    const second = createRenderer({ canvas }, secondStart);
+    await Promise.resolve();
+    expect(secondStart).not.toHaveBeenCalled();
+
+    firstInitialization.resolve(firstCleanup);
+    await first.ready;
+    await second.ready;
+
+    expect(firstCleanup).toHaveBeenCalledOnce();
+    expect(secondStart).toHaveBeenCalledOnce();
+    expect(firstCleanup.mock.invocationCallOrder[0]).toBeLessThan(secondStart.mock.invocationCallOrder[0]!);
+
+    second.dispose();
+    expect(secondCleanup).toHaveBeenCalledOnce();
+  });
+
+  it('holds the canvas until an initialized renderer is disposed', async () => {
+    const canvas = {} as HTMLCanvasElement;
+    const firstCleanup = vi.fn();
+    const secondCleanup = vi.fn();
+    const first = createRenderer({ canvas }, async () => firstCleanup);
+    const secondStart = vi.fn(async () => secondCleanup);
+    const second = createRenderer({ canvas }, secondStart);
+
+    await first.ready;
+    await Promise.resolve();
+    expect(secondStart).not.toHaveBeenCalled();
+
+    first.dispose();
+    await second.ready;
+    expect(secondStart).toHaveBeenCalledOnce();
+
+    second.dispose();
   });
 });
