@@ -2,6 +2,9 @@
 // cluster. Everything is generated once on the CPU with seeded randomness, so
 // every reload (and the thumbnail) produces the same field, then uploaded as
 // storage buffers the compute pass reads every frame.
+//
+// Inspired by the star-field hero on openai.com/index/gpt-6-astra; the
+// strokes, palette and code here are original.
 
 export const PATH_SAMPLES = 512;
 /** Floats per `Star` in simulate.wgsl (96 bytes). */
