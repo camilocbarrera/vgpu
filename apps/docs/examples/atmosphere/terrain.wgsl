@@ -5,6 +5,8 @@ export const TERRAIN_MAX_HEIGHT: f32 = 3.2;
 /** The baked heightmap covers a square of this many km centred on the camera origin. */
 export const TERRAIN_MAP_EXTENT: f32 = 200.0;
 export const TERRAIN_MAP_SIZE: f32 = 2048.0;
+/** The sun-shadow height map (terrain-shadow.wgsl) covers the same square at this resolution. */
+export const TERRAIN_SHADOW_MAP_SIZE: f32 = 512.0;
 const TERRAIN_SCALE: f32 = 1.0 / 16.0;
 const OCTAVES: i32 = 6;
 const ROTATE = mat2x2f(vec2f(0.8, 0.6), vec2f(-0.6, 0.8));
@@ -51,6 +53,11 @@ fn terrainMapUv(xz: vec2f) -> vec2f { return xz / TERRAIN_MAP_EXTENT + 0.5; }
 
 /** Height (km) from the baked map; bilinear, clamped to the map edge where the terrain has already faded out. */
 export fn sampleTerrainHeight(map: texture_2d<f32>, mapSampler: sampler, xz: vec2f) -> f32 {
+  return textureSampleLevel(map, mapSampler, terrainMapUv(xz), 0.0).r;
+}
+
+/** Altitude (km) below which the air above xz is in terrain shadow, from the map baked by terrain-shadow.wgsl. */
+export fn sampleTerrainShadowHeight(map: texture_2d<f32>, mapSampler: sampler, xz: vec2f) -> f32 {
   return textureSampleLevel(map, mapSampler, terrainMapUv(xz), 0.0).r;
 }
 

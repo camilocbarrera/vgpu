@@ -1,4 +1,5 @@
-import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, cameraRay, integrateScattering, meanTransmittance } from "./atmosphere-common.wgsl";
+import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PLANET_RADIUS_OFFSET, cameraRay, meanTransmittance, miePhase, rayleighPhase, raySphere, sampleMedium, sampleMultiScatter, sampleTransmittance } from "./atmosphere-common.wgsl";
+import { sampleTerrainShadowHeight } from "./terrain.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
 @group(0) @binding(1) var<uniform> camera: Camera;
@@ -6,6 +7,70 @@ import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, cameraRay, in
 @group(0) @binding(3) var multiScatterLut: texture_2d<f32>;
 @group(0) @binding(4) var lutSampler: sampler;
 @group(0) @binding(5) var aerialLut: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(6) var terrainShadowMap: texture_2d<f32>;
+@group(0) @binding(7) var aerialLossLut: texture_storage_3d<rgba16float, write>;
+
+struct AerialResult { luminance: vec3f, loss: vec3f, transmittance: vec3f };
+
+/** Height of the sample above the terrain shadow boundary: positive sees the sun, negative is in shadow. */
+fn shadowClearance(p: Atmosphere, position: vec3f, viewHeight: f32) -> f32 {
+  return viewHeight - p.groundRadius - sampleTerrainShadowHeight(terrainShadowMap, lutSampler, position.xz);
+}
+
+/**
+ * The integrateScattering loop of atmosphere-common.wgsl (Mie/Rayleigh phase, multiple scattering, no ground) with
+ * one addition: every sample also asks the terrain shadow map whether it sees the sun, and only lit samples add
+ * single scattering. The single scattering removed this way is accumulated separately, so sky pixels, which read the
+ * terrain-agnostic sky-view LUT, can take it out too. The multiple-scattering ambient stays unshadowed.
+ */
+fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampleCount: f32) -> AerialResult {
+  var result = AerialResult(vec3f(0.0), vec3f(0.0), vec3f(1.0));
+  let tBottom = raySphere(origin, dir, p.groundRadius);
+  let tTop = raySphere(origin, dir, p.atmosphereRadius);
+  var tMax = 0.0;
+  if (tBottom < 0.0) {
+    if (tTop < 0.0) { return result; }
+    tMax = tTop;
+  } else {
+    tMax = tBottom;
+    if (tTop > 0.0) { tMax = min(tTop, tBottom); }
+  }
+  tMax = min(tMax, tMaxMax);
+
+  let cosTheta = dot(dir, p.sunDirection);
+  let phaseMie = miePhase(p.mieG, cosTheta);
+  let phaseRayleigh = rayleighPhase(cosTheta);
+  let dt = tMax / sampleCount;
+  var throughput = vec3f(1.0);
+  var previousClearance = shadowClearance(p, origin, length(origin));
+  for (var i = 0.0; i < sampleCount; i += 1.0) {
+    let t = (i + 0.3) * dt;
+    let position = origin + t * dir;
+    let medium = sampleMedium(p, position);
+    let viewHeight = length(position);
+    let up = position / viewHeight;
+    let sunZenithCos = dot(p.sunDirection, up);
+    let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, viewHeight, sunZenithCos);
+    let earthShadow = select(1.0, 0.0, raySphere(position + up * PLANET_RADIUS_OFFSET, p.sunDirection, p.groundRadius) >= 0.0);
+    // The shadow edge is softened over the clearance change between neighbouring samples: the integral then varies
+    // continuously while the camera turns and the samples slide across the boundary, instead of flipping per sample.
+    let clearance = shadowClearance(p, position, viewHeight);
+    let softness = 0.5 * abs(clearance - previousClearance) + 1e-3;
+    let terrainLit = smoothstep(-softness, softness, clearance);
+    previousClearance = clearance;
+    let multiScatter = sampleMultiScatter(p, multiScatterLut, lutSampler, viewHeight, sunZenithCos);
+    let direct = p.sunIlluminance * (earthShadow * sunTransmittance * (medium.mie * phaseMie + medium.rayleigh * phaseRayleigh));
+    let ambient = p.sunIlluminance * (multiScatter * medium.scattering);
+    let extinction = max(medium.extinction, vec3f(1e-7));
+    let stepTransmittance = exp(-extinction * dt);
+    let integral = throughput * (1.0 - stepTransmittance) / extinction;
+    result.luminance += (direct * terrainLit + ambient) * integral;
+    result.loss += direct * (1.0 - terrainLit) * integral;
+    throughput *= stepTransmittance;
+  }
+  result.transmittance = throughput;
+  return result;
+}
 
 /** Froxel volume: xy = screen, z = quadratic depth slices. rgb = in-scattered luminance, a = 1 - transmittance. */
 @compute @workgroup_size(4, 4, 4)
@@ -17,6 +82,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   slice = slice * slice * AERIAL_LUT_SIZE;
   let tMax = slice * AERIAL_KM_PER_SLICE;
   let sampleCount = max(1.0, f32(id.z + 1u) * 2.0);
-  let result = integrateScattering(p, camera.position, dir, p.sunDirection, tMax, sampleCount, true, false, true, transmittanceLut, multiScatterLut, lutSampler);
+  let result = integrateAerial(p, camera.position, dir, tMax, sampleCount);
   textureStore(aerialLut, id, vec4f(result.luminance, 1.0 - meanTransmittance(result.transmittance)));
+  textureStore(aerialLossLut, id, vec4f(result.loss, 0.0));
 }
