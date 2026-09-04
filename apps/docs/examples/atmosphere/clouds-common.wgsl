@@ -1,12 +1,16 @@
 import { remap } from "./noise-common.wgsl";
 
-/** Cloud layer description shared by the cloud raymarch and the terrain cloud shadow. Distances in km. */
+/** Cloud layer description shared by the cloud raymarch and the cloud shadow map. Distances in km. */
 export struct Clouds {
   bottom: f32, top: f32, coverage: f32, density: f32,
   shapeScale: f32, detailScale: f32, weatherScale: f32, wind: f32,
   detailStrength: f32, groundRadius: f32, curlStrength: f32, detailLodDistance: f32,
-  typeBias: f32, seed: f32, pad0: f32, pad1: f32,
+  /** shadows: 1 when the clouds shade the terrain and the air (cloud-shadow.wgsl), 0 to switch that off. */
+  typeBias: f32, seed: f32, shadows: f32, pad1: f32,
 };
+
+/** The cloud shadow map (cloud-shadow.wgsl) covers the terrain map's square at this resolution. */
+export const CLOUD_SHADOW_MAP_SIZE: f32 = 512.0;
 
 /** Mean of the detail fbm over the noise volume (measured 0.494 over the 32-cube): what the erosion applies where its pattern has faded out. */
 const DETAIL_FBM_MEAN: f32 = 0.5;
@@ -133,12 +137,8 @@ export fn cloudRange(c: Clouds, origin: vec3f, dir: vec3f, viewHeight: f32) -> M
   return MarchRange(0.0, exit, true);
 }
 
-/** 2D approximation of the cloud shadow on the ground: coverage where the sun ray crosses mid-layer. */
-export fn cloudShadow(weather: texture_2d<f32>, weatherSampler: sampler, c: Clouds, position: vec3f, altitude: f32, sunDir: vec3f) -> f32 {
-  if (sunDir.y <= 0.02) { return 1.0; }
-  let mid = 0.5 * (c.bottom + c.top);
-  let t = max(0.0, (mid - altitude) / sunDir.y);
-  let w = sampleWeather(weather, weatherSampler, c, (position + sunDir * t).xz);
-  let coverage = saturate(remap(w.r, 0.3, 0.75, 0.0, 1.0) * c.coverage * 1.2);
-  return 1.0 - 0.85 * smoothstep(0.35, 0.75, coverage);
+/** Sun transmittance of the cloud layer above a terrain position, from the map; 1 when cloud shadows are off. */
+export fn sampleCloudShadow(c: Clouds, map: texture_2d<f32>, mapSampler: sampler, xz: vec2f, terrainMapExtent: f32) -> f32 {
+  if (c.shadows < 0.5) { return 1.0; }
+  return textureSampleLevel(map, mapSampler, xz / terrainMapExtent + 0.5, 0.0).r;
 }

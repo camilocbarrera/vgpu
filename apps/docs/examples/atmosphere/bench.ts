@@ -1,7 +1,7 @@
 import { frame as createFrame, target as createTarget, type Frame, type Gpu } from 'vgpu';
 import {
   CLOUD_CONVERGENCE_FRAMES, applyState, bakeLuts, createGraph, destroyGraph, encodeAerial, encodeClouds, encodeFrameConstants, encodePresent,
-  encodeScene, encodeSkyView, encodeTerrainShadow, finishFrame, renderGraph,
+  encodeCloudShadow, encodeScene, encodeSkyView, encodeTerrainShadow, finishFrame, renderGraph,
 } from './renderer';
 import { DEFAULT_PRESET, PRESETS } from './tuning';
 
@@ -68,6 +68,7 @@ export async function runBench(gpu: Gpu, cssSize: readonly [number, number], dpr
     await time('luts: aerial + frame constants + sky-view', passFrame((frame) => { encodeAerial(graph); encodeFrameConstants(graph); encodeSkyView(frame, graph); }));
     await time('present: tonemap + cloud upsample', passFrame((frame) => encodePresent(frame, graph, output)));
     await time('terrain shadow map (only when the sun moves)', () => { graph.bakedSunDirection = undefined; encodeTerrainShadow(graph); });
+    await time('cloud shadow map (every frame)', () => encodeCloudShadow(graph));
     destroyGraph(graph);
     output.color.destroy();
   }

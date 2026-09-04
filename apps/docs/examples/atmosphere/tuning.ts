@@ -25,6 +25,8 @@ export interface AtmosphereState {
   cloudType: number;
   /** Weather seed: any value picks a different patch of the tileable weather map. */
   cloudSeed: number;
+  /** Whether the clouds shade the terrain and the air below them. */
+  cloudShadows: boolean;
   /** Scene time in seconds; drives the wind that advects the clouds. */
   time: number;
   tonemap: Tonemap;
@@ -79,11 +81,11 @@ export const CLOUD_TUNING = {
 } as const;
 
 export const PRESETS = {
-  'golden-hour': { sunElevation: 4, sunAzimuth: 58, altitudeKm: 0.08, yaw: 40, pitch: 9, exposureEv: 5, haze: 2, cloudCoverage: 0.65, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
-  noon: { sunElevation: 62, sunAzimuth: 40, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 3, haze: 2, cloudCoverage: 0.45, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
-  twilight: { sunElevation: -4, sunAzimuth: 10, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 8, haze: 2, cloudCoverage: 0.35, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
-  'high-altitude': { sunElevation: 18, sunAzimuth: 35, altitudeKm: 10, yaw: 0, pitch: -4, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
-  stratosphere: { sunElevation: 25, sunAzimuth: 60, altitudeKm: 35, yaw: 0, pitch: -8, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, cloudDetail: 1, cloudType: 0, cloudSeed: 0, time: 0, tonemap: 'agx' },
+  'golden-hour': { sunElevation: 4, sunAzimuth: 58, altitudeKm: 0.08, yaw: 40, pitch: 9, exposureEv: 5, haze: 2, cloudCoverage: 0.65, cloudDetail: 1, cloudType: 0, cloudSeed: 0, cloudShadows: true, time: 0, tonemap: 'agx' },
+  noon: { sunElevation: 62, sunAzimuth: 40, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 3, haze: 2, cloudCoverage: 0.45, cloudDetail: 1, cloudType: 0, cloudSeed: 0, cloudShadows: true, time: 0, tonemap: 'agx' },
+  twilight: { sunElevation: -4, sunAzimuth: 10, altitudeKm: 0.08, yaw: 0, pitch: 6, exposureEv: 8, haze: 2, cloudCoverage: 0.35, cloudDetail: 1, cloudType: 0, cloudSeed: 0, cloudShadows: true, time: 0, tonemap: 'agx' },
+  'high-altitude': { sunElevation: 18, sunAzimuth: 35, altitudeKm: 10, yaw: 0, pitch: -4, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, cloudDetail: 1, cloudType: 0, cloudSeed: 0, cloudShadows: true, time: 0, tonemap: 'agx' },
+  stratosphere: { sunElevation: 25, sunAzimuth: 60, altitudeKm: 35, yaw: 0, pitch: -8, exposureEv: 3.5, haze: 2, cloudCoverage: 0.5, cloudDetail: 1, cloudType: 0, cloudSeed: 0, cloudShadows: true, time: 0, tonemap: 'agx' },
 } as const satisfies Record<string, AtmosphereState>;
 
 export type PresetName = keyof typeof PRESETS;

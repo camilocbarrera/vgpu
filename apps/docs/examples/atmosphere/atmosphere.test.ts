@@ -57,6 +57,7 @@ describe('atmosphere graph on the mock adapter', () => {
       expect(graph.terrainMap.size).toEqual([2048, 2048]);
       expect([...graph.terrainMap.usage]).toContain('storage_binding');
       expect(graph.terrainShadowMap.size).toEqual([512, 512]);
+      expect(graph.cloudShadowMap.size).toEqual([512, 512]);
       expect([...graph.terrainShadowMap.usage]).toContain('storage_binding');
       expect(graph.aerialLoss.dimension).toBe('3d');
       expect(graph.terrainDepth.depth?.format).toBe('depth32float');

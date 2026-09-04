@@ -76,6 +76,19 @@ export function installControls(canvas: HTMLCanvasElement, initial: AtmosphereSt
   tonemapRow.append(tonemapText, select);
   host.append(tonemapRow);
 
+  const shadowsRow = document.createElement('label');
+  Object.assign(shadowsRow.style, { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' });
+  const shadowsText = document.createElement('span');
+  shadowsText.textContent = 'Cloud shadows';
+  const shadows = document.createElement('input');
+  shadows.type = 'checkbox';
+  shadows.checked = state.cloudShadows;
+  shadows.setAttribute('aria-label', 'Cloud shadows');
+  shadows.style.accentColor = '#ffb86b';
+  shadows.addEventListener('change', () => { state.cloudShadows = shadows.checked; });
+  shadowsRow.append(shadowsText, shadows);
+  host.append(shadowsRow);
+
   const hint = document.createElement('div');
   Object.assign(hint.style, { display: 'flex', justifyContent: 'space-between', opacity: '0.6', fontWeight: '500' });
   const hintText = document.createElement('span');

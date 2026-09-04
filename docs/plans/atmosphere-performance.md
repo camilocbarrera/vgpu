@@ -53,6 +53,7 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
 8. Treat camera rotation as a change as well and drop the reprojection. Done.
 9. Same erosion LOD in both modes, so moving never changes cloud shape or density. Done.
 10. Erosion at its mean beyond the LOD, so distance never changes cloud density either. Done; separate commit so it can be reverted on taste.
+11. Cloud shadows on the terrain and the haze from a per-frame transmittance map. Done.
 
 ## Results
 
@@ -79,6 +80,8 @@ Same machine and method as the baseline. ms per frame.
 | 9 one detail LOD for both modes | 2.2 | 1.44 | 0.39 | 1.81 | 1.33 | 0.23 | on battery. Step 6 had the fast mode fade erosion detail from 16 km and the rest from 32 km, so any camera or sun move made far clouds lose their erosion (and, since erosion removes density, gain density) and grow it back on convergence, worst with the detail slider at 1.5. The LOD is now 32 km in both modes; the fast mode costs 1.84 ms instead of 1.71 for it. Ghost against converged stills during a yaw sweep: 0.37 /255 before, 0.09 after at 10 km; 0.06 at golden hour with detail 1.5. What remains is the step count |
 
 | 10 erosion continues at its mean beyond the detail LOD | 2.2 | 1.44 | 0.39 | 1.81 | 1.33 | 0.23 | on battery. Past the coarse LOD ring the erosion used to be dropped, so a cloud gained density with distance and the detail slider thinned near clouds only. It now applies the mean erosion (the detail fbm averages 0.494 over its volume) where the pattern has faded, so the amount of matter no longer depends on distance and a cloud crossing a LOD ring keeps its density. No texture reads added; ghost during the yaw sweep unchanged at 0.06 |
+
+| 11 cloud shadow map | 2.6 | 1.44 | 0.39 | 2.16 | 1.33 | 0.24 | on battery. Feature, not a saving: a 512x512 map of the cloud layer's sun transmittance over the terrain, rebuilt every frame (0.59 ms) because the wind moves the clouds, read by the terrain shading and by the aerial perspective for the air under the layer, so the haze carries the clouds' shadows too. Switchable from the panel; off, the pass is skipped |
 
 Measuring temporal behaviour: `node scripts/render-atmosphere.mjs --preset golden-hour --sun 1.5 --ev 6.5 --temporal 56
 --jump 36:altitude=0.4 --region 480,240,480,70` renders live-loop frames headless and prints, per frame, the mean

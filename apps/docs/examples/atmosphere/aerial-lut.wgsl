@@ -1,5 +1,6 @@
 import { AERIAL_KM_PER_SLICE, AERIAL_LUT_SIZE, Atmosphere, Camera, PLANET_RADIUS_OFFSET, cameraRay, meanTransmittance, miePhase, rayleighPhase, raySphere, sampleMedium, sampleMultiScatter, sampleTransmittance } from "./atmosphere-common.wgsl";
-import { sampleTerrainShadowHeight } from "./terrain.wgsl";
+import { TERRAIN_MAP_EXTENT, sampleTerrainShadowHeight } from "./terrain.wgsl";
+import { Clouds, sampleCloudShadow } from "./clouds-common.wgsl";
 
 @group(0) @binding(0) var<uniform> atmosphere: Atmosphere;
 @group(0) @binding(1) var<uniform> camera: Camera;
@@ -9,6 +10,8 @@ import { sampleTerrainShadowHeight } from "./terrain.wgsl";
 @group(0) @binding(5) var aerialLut: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(6) var terrainShadowMap: texture_2d<f32>;
 @group(0) @binding(7) var aerialLossLut: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(8) var<uniform> clouds: Clouds;
+@group(0) @binding(9) var cloudShadowMap: texture_2d<f32>;
 
 struct AerialResult { luminance: vec3f, loss: vec3f, transmittance: vec3f };
 
@@ -19,9 +22,10 @@ fn shadowClearance(p: Atmosphere, position: vec3f, viewHeight: f32) -> f32 {
 
 /**
  * The integrateScattering loop of atmosphere-common.wgsl (Mie/Rayleigh phase, multiple scattering, no ground) with
- * one addition: every sample also asks the terrain shadow map whether it sees the sun, and only lit samples add
- * single scattering. The single scattering removed this way is accumulated separately, so sky pixels, which read the
- * terrain-agnostic sky-view LUT, can take it out too. The multiple-scattering ambient stays unshadowed.
+ * one addition: every sample also asks the terrain shadow map whether it sees the sun, and the air under the cloud
+ * layer asks the cloud shadow map how much of it, so only lit samples add single scattering. The single scattering
+ * removed this way is accumulated separately, so sky pixels, which read the terrain-agnostic sky-view LUT, can take
+ * it out too. The multiple-scattering ambient stays unshadowed.
  */
 fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampleCount: f32) -> AerialResult {
   var result = AerialResult(vec3f(0.0), vec3f(0.0), vec3f(1.0));
@@ -56,16 +60,18 @@ fn integrateAerial(p: Atmosphere, origin: vec3f, dir: vec3f, tMaxMax: f32, sampl
     // continuously while the camera turns and the samples slide across the boundary, instead of flipping per sample.
     let clearance = shadowClearance(p, position, viewHeight);
     let softness = 0.5 * abs(clearance - previousClearance) + 1e-3;
-    let terrainLit = smoothstep(-softness, softness, clearance);
+    var lit = smoothstep(-softness, softness, clearance);
     previousClearance = clearance;
+    // The cloud shadow map is taken from the terrain surface; the air below the layer sees nearly the same column.
+    if (viewHeight - p.groundRadius < clouds.bottom) { lit *= sampleCloudShadow(clouds, cloudShadowMap, lutSampler, position.xz, TERRAIN_MAP_EXTENT); }
     let multiScatter = sampleMultiScatter(p, multiScatterLut, lutSampler, viewHeight, sunZenithCos);
     let direct = p.sunIlluminance * (earthShadow * sunTransmittance * (medium.mie * phaseMie + medium.rayleigh * phaseRayleigh));
     let ambient = p.sunIlluminance * (multiScatter * medium.scattering);
     let extinction = max(medium.extinction, vec3f(1e-7));
     let stepTransmittance = exp(-extinction * dt);
     let integral = throughput * (1.0 - stepTransmittance) / extinction;
-    result.luminance += (direct * terrainLit + ambient) * integral;
-    result.loss += direct * (1.0 - terrainLit) * integral;
+    result.luminance += (direct * lit + ambient) * integral;
+    result.loss += direct * (1.0 - lit) * integral;
     throughput *= stepTransmittance;
   }
   result.transmittance = throughput;
