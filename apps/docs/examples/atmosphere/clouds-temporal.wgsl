@@ -4,7 +4,7 @@
 // clouds-march.wgsl maps compact texels to history texels, clouds-resolve.wgsl maps them back.
 
 /**
- * Previous frame's camera and this frame's update: one texel in `refreshPeriod` (16 at rest, 2 right after a change
+ * Previous frame's camera and this frame's update: one texel in `refreshPeriod` (16 at rest, 1 right after a change
  * of camera altitude or lighting) is re-marched, the rest reproject from the history through the world point at the
  * depth the history stored. `blend` is the weight of a re-marched texel against its reprojected history: 1 right
  * after a change (and in stills), then 1/n for the n-th refresh since, down to a floor, so the march noise and the

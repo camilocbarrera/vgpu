@@ -133,9 +133,10 @@ export interface AtmosphereGraph {
   /** Live rendering blends re-marched cloud texels into their jittered history; stills keep it off to stay deterministic. */
   accumulate: boolean;
   /**
-   * Frames left of fast cloud refresh: a lighting, cloud or altitude change stales the whole history, so the next
-   * CLOUD_FAST_REFRESH_PERIOD frames re-march one texel in two (a checkerboard) with full blend instead of one in
-   * sixteen accumulated. Two frames of a fine checkerboard read as a quick crossfade; four read as a dot pattern.
+   * Frames left of fast cloud refresh: a lighting, cloud or altitude change stales the whole history, so the frame
+   * re-marches every texel with full blend instead of one in sixteen accumulated. The march is latency-bound, so all
+   * texels cost little more than half of them, and with nothing reprojected a change cannot ghost at all: a
+   * checkerboard refresh was tried and its reprojected half misregistered by a few pixels along cloud edges.
    */
   cloudChangeFrames: number;
   /** Frames since the fast refresh last ended: the accumulation weight of a re-marched texel is 1/(refreshes + 1) down to CLOUD_BLEND_FLOOR. */
@@ -147,7 +148,7 @@ export interface AtmosphereGraph {
 
 /** Frames needed for every cloud texel to be re-marched at least once, at rest and right after a change. */
 export const CLOUD_CONVERGENCE_FRAMES = 16;
-export const CLOUD_FAST_REFRESH_PERIOD = 2;
+export const CLOUD_FAST_REFRESH_PERIOD = 1;
 /** Smallest weight of a re-marched texel against its history at rest; keeps the slow wind advection from lagging. */
 const CLOUD_BLEND_FLOOR = 0.1;
 
@@ -500,16 +501,16 @@ export function encodeScene(frame: Frame, graph: AtmosphereGraph): void {
 }
 
 /**
- * Temporal cloud update in two passes: the frame's live texels (one in sixteen at rest, one in two for two frames
- * after a change) are marched packed into a viewport of the compact size, then the resolve pass scatters them into
- * the history and reprojects the rest from last frame's buffers.
+ * Temporal cloud update in two passes: the frame's live texels (one in sixteen at rest, all of them on a frame that
+ * follows a change) are marched packed into a viewport of the compact size, then the resolve pass scatters them
+ * into the history and reprojects the rest from last frame's buffers.
  */
 export function encodeClouds(frame: Frame, graph: AtmosphereGraph): void {
   const fast = graph.cloudChangeFrames > 0;
   const period = fast ? CLOUD_FAST_REFRESH_PERIOD : CLOUD_CONVERGENCE_FRAMES;
   const size = graph.cloudsTargets.write.size;
   graph.reprojection.set(reprojectionUniforms({ previous: graph.previousCamera, frame: graph.frame, accumulate: graph.accumulate, fast, restFrames: graph.cloudRestFrames, size }));
-  // At rest the erosion detail survives twice as far; the fast mode marches eight times the texels and keeps it short.
+  // At rest the erosion detail survives twice as far; the fast mode marches every texel and keeps it short.
   graph.clouds.set({ detailLodDistance: CLOUD_TUNING.detailLodDistance * (fast ? 1 : 2) });
   graph.cloudResolveEffect.set({ history: graph.cloudsTargets.read, historyDepth: graph.cloudsTargets.read.colors[1] });
   const compact = compactCloudSize(size, period);
@@ -561,7 +562,7 @@ interface ReprojectionState {
 }
 
 /**
- * Fast (right after a change): one texel in two, full blend, no jitter, short march. At rest: one in sixteen, each
+ * Fast (right after a change): every texel, full blend, no jitter, short march. At rest: one in sixteen, each
  * re-marched texel weighted 1/(refreshes since the change + 1) down to CLOUD_BLEND_FLOOR, so the march noise and the
  * sub-texel jitter average into a supersampled image, and the long march. Stills always use full blend and no jitter.
  */

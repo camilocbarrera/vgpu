@@ -1,6 +1,8 @@
 // Headless renders of the atmosphere example for visual verification.
 //   node scripts/render-atmosphere.mjs [--out dir] [--preset name|all] [--size WxH] [--debug transmittance|multiscatter|sky-view|weather|terrain] [--bench N] [--accumulate N]
 //   temporal stability: --temporal N [--region x,y,w,h] [--jump frame:override=value]  (e.g. --jump 40:altitude=0.4)
+//   continuous change:  --temporal N --sweep override=from..to [--every K]  (e.g. --sweep altitude=0.08..2): every K-th
+//                       frame is saved next to a converged still of the same state and their difference image
 //   overrides: --sun <deg> --azimuth <deg> --altitude <km> --yaw <deg> --pitch <deg> --ev <stops> --haze <x> --coverage <0..1> --detail <x> --type <-1..1> --seed <n> --time <s> --tonemap agx|aces|neutral|none
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -79,26 +81,61 @@ async function temporal(gpu, target, state, name, args) {
   const region = args.region ?? [0, 0, width, height];
   const whole = [0, 0, width, height];
   const jump = args.jump;
+  const sweep = args.sweep;
   const keep = [0, jump ? jump.frame - 1 : -1, jump ? jump.frame : -1, jump ? jump.frame + 1 : -1, args.temporal - 1];
   const recent = [];
   let previous;
-  console.log(`- ${name}: temporal stability over ${args.temporal} frames at ${width}x${height}, region ${region.join(',')}${jump ? `, jump at frame ${jump.frame}: ${JSON.stringify(jump.overrides)}` : ''}`);
-  console.log('  frame  mad(all)  mad(region)  noise(region)');
+  const stateAt = (i) => {
+    if (sweep) {
+      // Altitude sweeps geometrically like the slider; everything else linearly.
+      const t = i / Math.max(1, args.temporal - 1);
+      const value = sweep.key === 'altitudeKm' ? sweep.from * Math.pow(sweep.to / sweep.from, t) : sweep.from + (sweep.to - sweep.from) * t;
+      return { ...state, [sweep.key]: value };
+    }
+    return jump && i >= jump.frame ? { ...state, ...jump.overrides } : state;
+  };
+  console.log(`- ${name}: temporal stability over ${args.temporal} frames at ${width}x${height}, region ${region.join(',')}${jump ? `, jump at frame ${jump.frame}: ${JSON.stringify(jump.overrides)}` : ''}${sweep ? `, sweep ${sweep.key} ${sweep.from} -> ${sweep.to}` : ''}`);
+  console.log(sweep ? '  frame     value  mad(all)  mad(region)  ghost(all)  ghost(region)' : '  frame  mad(all)  mad(region)  noise(region)');
   for (let i = 0; i < args.temporal; i++) {
-    const current = jump && i >= jump.frame ? { ...state, ...jump.overrides } : state;
+    const current = stateAt(i);
     applyState(graph, current, target.size);
     frame(gpu, (f) => renderGraph(f, graph, target));
     await gpu.gpu.queue.onSubmittedWorkDone();
     const pixels = await target.read();
     recent.push(pixels);
     if (recent.length > 8) recent.shift();
-    if (previous) {
+    if (sweep) {
+      // Every K-th frame: the live frame against a converged still of the same state; the difference is the ghost.
+      if (i % (args.every ?? 8) === 0 || i === args.temporal - 1) {
+        const referenceTarget = createTarget(gpu, { size: target.size, format: 'rgba8unorm', label: 'atmosphere-reference' });
+        await renderStill(gpu, referenceTarget, current);
+        const reference = await referenceTarget.read();
+        referenceTarget.color.destroy();
+        const tag = `${name}.sweep.${String(i).padStart(3, '0')}`;
+        await writePng(path.join(outDir, `${tag}.png`), pixels, width, height);
+        await writePng(path.join(outDir, `${tag}.reference.png`), reference, width, height);
+        await writePng(path.join(outDir, `${tag}.diff.png`), diffImage(pixels, reference), width, height);
+        console.log(`  ${String(i).padStart(5)}  ${current[sweep.key].toFixed(3).padStart(8)}  ${(previous ? meanAbsDiff(previous, pixels, width, whole) : 0).toFixed(2).padStart(8)}  ${(previous ? meanAbsDiff(previous, pixels, width, region) : 0).toFixed(2).padStart(11)}  ${meanAbsDiff(pixels, reference, width, whole).toFixed(2).padStart(10)}  ${meanAbsDiff(pixels, reference, width, region).toFixed(2).padStart(13)}`);
+      }
+    } else if (previous) {
       const noise = recent.length === 8 ? temporalNoise(recent, width, region).toFixed(2) : '   -';
       console.log(`  ${String(i).padStart(5)}  ${meanAbsDiff(previous, pixels, width, whole).toFixed(2).padStart(8)}  ${meanAbsDiff(previous, pixels, width, region).toFixed(2).padStart(11)}  ${String(noise).padStart(13)}`);
     }
     previous = pixels;
-    if (keep.includes(i)) await writePng(path.join(outDir, `${name}.temporal.${String(i).padStart(3, '0')}.png`), pixels, width, height);
+    if (!sweep && keep.includes(i)) await writePng(path.join(outDir, `${name}.temporal.${String(i).padStart(3, '0')}.png`), pixels, width, height);
   }
+}
+
+/** Absolute difference amplified 4x, opaque, so a ghost of a few sRGB steps is visible. */
+function diffImage(a, b) {
+  const out = new Uint8Array(a.length);
+  for (let i = 0; i < a.length; i += 4) {
+    out[i] = Math.min(255, Math.abs(a[i] - b[i]) * 4);
+    out[i + 1] = Math.min(255, Math.abs(a[i + 1] - b[i + 1]) * 4);
+    out[i + 2] = Math.min(255, Math.abs(a[i + 2] - b[i + 2]) * 4);
+    out[i + 3] = 255;
+  }
+  return out;
 }
 
 function meanAbsDiff(a, b, width, [x0, y0, w, h]) {
@@ -171,7 +208,7 @@ function describe(pixels, [width, height]) {
 }
 
 function parseArgs(argv) {
-  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, bench: 0, accumulate: 0, temporal: 0, region: undefined, jump: undefined, overrides: {} };
+  const parsed = { out: undefined, preset: undefined, size: undefined, debug: undefined, bench: 0, accumulate: 0, temporal: 0, region: undefined, jump: undefined, sweep: undefined, every: undefined, overrides: {} };
   const numeric = { sun: 'sunElevation', azimuth: 'sunAzimuth', altitude: 'altitudeKm', yaw: 'yaw', pitch: 'pitch', ev: 'exposureEv', haze: 'haze', coverage: 'cloudCoverage', detail: 'cloudDetail', type: 'cloudType', seed: 'cloudSeed', time: 'time' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -183,6 +220,13 @@ function parseArgs(argv) {
     else if (arg === '--accumulate') parsed.accumulate = Number(argv[++i]);
     else if (arg === '--temporal') parsed.temporal = Number(argv[++i]);
     else if (arg === '--region') parsed.region = argv[++i].split(',').map(Number);
+    else if (arg === '--every') parsed.every = Number(argv[++i]);
+    else if (arg === '--sweep') {
+      const [key, range] = argv[++i].split('=');
+      const [from, to] = range.split('..').map(Number);
+      if (!numeric[key]) throw new Error(`Unknown override '${key}' in --sweep.`);
+      parsed.sweep = { key: numeric[key], from, to };
+    }
     else if (arg === '--jump') {
       const [frameText, assignment] = argv[++i].split(':');
       const [key, value] = assignment.split('=');

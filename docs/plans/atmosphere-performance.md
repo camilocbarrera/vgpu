@@ -49,6 +49,7 @@ slower on this machine (14.3 ms full frame), one more reason the bench does not 
 5. Compact the cloud march: render the live texels of the frame into a small buffer and resolve into the history.
    Done; the pass turned out latency-bound, see the finding below the results.
 6. Let the temporal accumulation converge at rest and spend the freed budget on quality there. Done.
+7. Refresh every cloud texel on the frames that follow a change, so nothing is reprojected while parameters move. Done.
 
 ## Results
 
@@ -68,11 +69,15 @@ Same machine and method as the baseline. ms per frame.
 
 | 6 rest-time convergence: 1/n accumulation, hashed golden-ratio noise, double steps and detail at rest | 2.2 | 1.44 | 0.39 | 1.78 | 1.33 | 0.23 | on battery. A re-marched texel now weighs 1/(refreshes since the last change + 1) against its history, down to 0.1, instead of a fixed 0.5 that never let the march noise average out (the noise, interleaved gradient noise, also carried a diagonal weave). The march offset is a pcg2d hash per texel stepped by the golden ratio per frame; the light march jitters only its three near samples (jittering the 160 to 640 m ones sprayed the lighting into speckle). While it can afford to, the march at rest doubles its step budget and keeps erosion detail out to 32 km. Measured with the new `--temporal` mode of scripts/render-atmosphere.mjs: frame-to-frame difference at rest 0.01/255 in both the far-cloud band and the cloud interior, temporal noise 0.02 to 0.05; an altitude jump converges in 2 frames |
 
+| 7 fast mode refreshes every texel | 2.2 | 1.46 | 0.39 | 1.79 | 1.32 | 0.23 | on battery. A continuous altitude sweep still showed a dotted fringe along cloud edges: the checkerboard's reprojected half misregistered by a few pixels where the stored depth mixes sky and cloud. The march being latency-bound, marching every texel on a change costs 1.71 ms against 1.12 for half of them, and nothing reprojected cannot ghost. Ghost against a converged still during the sweep: 0.5 to 0.7 /255 before, 0.08 to 0.16 after (the remainder is the shorter march of the fast mode against the reference's long one) |
+
 Measuring temporal behaviour: `node scripts/render-atmosphere.mjs --preset golden-hour --sun 1.5 --ev 6.5 --temporal 56
 --jump 36:altitude=0.4 --region 480,240,480,70` renders live-loop frames headless and prints, per frame, the mean
 absolute sRGB difference to the previous frame (whole frame and region) and the temporal noise of the region over the
-last 8 frames; `--jump` changes one parameter at a frame to see the transient. Exact numbers where screenshots only
-gave impressions.
+last 8 frames; `--jump` changes one parameter at a frame to see the transient. `--sweep altitude=0.08..2 --every 10`
+changes a parameter continuously instead and, every K frames, saves the live frame next to a converged still of the
+same state and their amplified difference: the ghost, as an image and as a number. Exact numbers where screenshots
+only gave impressions.
 
 Finding from step 4, revised by step 5: marching every cloud texel cost 1.68 ms against 1.17 for one in sixteen,
 and packing the live texels only brought the pass to 0.86 ms. The pass is latency-bound, not throughput-bound: a
@@ -80,7 +85,7 @@ long ray through thick cloud is a chain of ~160 steps each with several dependen
 light march, and with only 19k texels in flight the GPU cannot hide that chain. Further cloud savings have to shorten
 the per-ray chain (fewer steps, cheaper density far away, a shorter light march), not the texel count.
 
-After steps 1 to 6 the live frame is about 1.8 ms of GPU work at 60 fps against 8.7 ms at 120 fps before (0.5 ms of
-it is the quality bought back at rest): about a tenth of the GPU load. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
+After steps 1 to 7 the live frame is about 1.8 ms of GPU work at 60 fps against 8.7 ms at 120 fps before (0.5 ms of
+it is the quality bought back at rest), 2.2 ms while a parameter is being dragged: about a tenth of the GPU load. The cloud march is now 70 % of the frame; the terrain (depth prepass plus shading) 14 %.
 The depth prepass is also the entry point for rasterized models: anything that writes into it inherits the aerial
 perspective, the cloud occlusion and the sky compositing.
