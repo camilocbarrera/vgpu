@@ -35,3 +35,4 @@ Filled in as each step lands. Baseline first.
 | Step | golden-hour ms (clouds) | stratosphere ms (clouds) | mean err | max err | pixels > 2 | Commit |
 |------|-------------------------|--------------------------|----------|---------|------------|--------|
 | 0 baseline | 247 (86) | 135 (78) | 0 | 0 | 0 % | |
+| 1 phases per pixel | 248 (94) | 142 (90) | 0 | 0 | 0 % | no measurable change: within bench noise, the compiler was already hoisting the loop-invariant phases |

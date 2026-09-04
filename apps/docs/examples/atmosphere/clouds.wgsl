@@ -97,17 +97,26 @@ fn lightOpticalDepth(position: vec3f, sunDir: vec3f, viewDistance: f32) -> f32 {
   return depth * EXTINCTION;
 }
 
-/** Sum of attenuated scattering octaves; higher octaves see less extinction and a flatter phase. */
-fn multiScatter(opticalDepth: f32, cosTheta: f32) -> f32 {
-  var sum = 0.0;
+/** Per-octave phase times scattering weight. Depends only on the ray/sun angle, so it is built once per pixel. */
+fn octavePhases(cosTheta: f32) -> array<f32, MS_OCTAVES> {
+  var phases: array<f32, MS_OCTAVES>;
   var scatter = 1.0;
-  var extinction = 1.0;
   var phaseScale = 1.0;
   for (var i = 0; i < MS_OCTAVES; i += 1) {
-    sum += scatter * exp(-opticalDepth * extinction) * dualLobePhase(cosTheta, phaseScale);
+    phases[i] = scatter * dualLobePhase(cosTheta, phaseScale);
     scatter *= MS_SCATTER;
-    extinction *= MS_EXTINCTION;
     phaseScale *= MS_PHASE;
+  }
+  return phases;
+}
+
+/** Sum of attenuated scattering octaves; higher octaves see less extinction and a flatter phase. */
+fn multiScatter(opticalDepth: f32, phases: array<f32, MS_OCTAVES>) -> f32 {
+  var sum = 0.0;
+  var extinction = 1.0;
+  for (var i = 0; i < MS_OCTAVES; i += 1) {
+    sum += phases[i] * exp(-opticalDepth * extinction);
+    extinction *= MS_EXTINCTION;
   }
   return sum;
 }
@@ -189,6 +198,7 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
   if (!range.valid || range.end <= range.start || clouds.coverage <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
 
   let cosTheta = dot(dir, p.sunDirection);
+  let phases = octavePhases(cosTheta);
   let skyAmbient = textureSampleLevel(skyViewLut, lutSampler, skyViewUv(p, viewHeight, 0.5, 0.0, false), 0.0).rgb;
   let groundSunCos = max(p.sunDirection.y, 0.0);
   let groundBounce = 0.15 * p.sunIlluminance * sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius, p.sunDirection.y) * groundSunCos / PI;
@@ -232,7 +242,7 @@ fn marchClouds(p: Atmosphere, dir: vec3f, fragCoord: vec2f, uv: vec2f) -> vec4f 
     let earthShadow = select(1.0, 0.0, raySphere(position + up * PLANET_RADIUS_OFFSET, p.sunDirection, p.groundRadius) >= 0.0);
     let sunTransmittance = sampleTransmittance(p, transmittanceLut, lutSampler, p.groundRadius + altitude, sunZenithCos) * earthShadow;
     let opticalDepth = lightOpticalDepth(position, p.sunDirection, t);
-    let sunScatter = multiScatter(opticalDepth, cosTheta);
+    let sunScatter = multiScatter(opticalDepth, phases);
     let ambient = skyAmbient * mix(0.18, 0.75, hf) + groundBounce * (1.0 - hf) * 0.5;
     let extinction = EXTINCTION * sampleDensity;
     let scattered = ALBEDO * extinction * (p.sunIlluminance * sunTransmittance * sunScatter + ambient);
