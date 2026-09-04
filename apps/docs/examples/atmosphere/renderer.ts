@@ -141,10 +141,13 @@ const FRAME_CONSTANTS_BYTES = 64 + 64 * 16;
 export async function run(canvas: HTMLCanvasElement): Promise<() => void> {
   const { init } = await import('vgpu');
   const { installControls } = await import('./controls');
+  // `?bench` in the URL times the passes of a frame on this GPU (bench.ts) before the live loop starts.
+  const bench = typeof location !== 'undefined' && new URLSearchParams(location.search).has('bench') ? await import('./bench') : undefined;
   const gpu = await init();
   const surface = createSurface(gpu, canvas, { dpr: [1, 1.5] });
   const graph = await createGraph(gpu, surface, 'atmosphere-live');
   graph.accumulate = true;
+  if (bench) bench.mountBenchReport(canvas, await bench.runBench(gpu, [canvas.clientWidth, canvas.clientHeight]));
   const controls = installControls(canvas, { ...PRESETS[DEFAULT_PRESET] });
   let disposed = false;
   let sawInitialResize = false;
@@ -264,7 +267,7 @@ export async function renderStill(gpu: Gpu, output: Target, state: AtmosphereSta
   if (debug) {
     applyState(graph, state, output.size);
     bakeLuts(gpu, graph);
-    createFrame(gpu, (frame) => frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect)));
+    createFrame(gpu, (frame) => encodeSkyView(frame, graph));
     const sources = { transmittance: graph.transmittance, multiscatter: graph.multiScatter, weather: graph.weatherMap, terrain: graph.terrainMap, 'sky-view': graph.skyView } as const;
     const gains = { transmittance: 1, multiscatter: 1, weather: 1, terrain: 0.3, 'sky-view': 2 ** state.exposureEv } as const;
     graph.lutPreview.set({ preview: { gain: gains[debug], channel: 0, pad: [0, 0] }, lut: sources[debug], linearSampler: graph.sampler });
@@ -376,28 +379,61 @@ export function applyState(graph: AtmosphereGraph, state: AtmosphereState, size:
 /**
  * Per-frame work: compute dispatches submit immediately, so they run before this frame's passes.
  * A stale medium re-encodes transmittance in this frame and dispatches multi-scatter on the next one.
+ * Each pass is its own function so bench.ts can time them one at a time.
  */
 export function renderGraph(frame: Frame, graph: AtmosphereGraph, output: Output): void {
   if (graph.lutPhase === 'transmittance') dispatchMultiScatter(graph);
-  // The terrain shadow map depends only on the sun (the heightmap is static): rebuild it when the sun moves.
-  if (!sameDirection(graph.bakedSunDirection, graph.sunDirection)) {
-    const shadowGroups = TERRAIN_SHADOW_MAP_SIZE / WEATHER_WORKGROUP;
-    graph.terrainShadowCompute.dispatch(shadowGroups, shadowGroups, 1);
-    graph.bakedSunDirection = graph.sunDirection;
-  }
+  encodeTerrainShadow(graph);
+  encodeAerial(graph);
+  encodeFrameConstants(graph);
+  if (graph.lutPhase === 'stale') encodeTransmittance(frame, graph);
+  encodeSkyView(frame, graph);
+  encodeScene(frame, graph);
+  encodeClouds(frame, graph);
+  encodePresent(frame, graph, output);
+  finishFrame(graph);
+}
+
+/** The terrain shadow map depends only on the sun (the heightmap is static): rebuilt when the sun moves. */
+export function encodeTerrainShadow(graph: AtmosphereGraph): void {
+  if (sameDirection(graph.bakedSunDirection, graph.sunDirection)) return;
+  const groups = TERRAIN_SHADOW_MAP_SIZE / WEATHER_WORKGROUP;
+  graph.terrainShadowCompute.dispatch(groups, groups, 1);
+  graph.bakedSunDirection = graph.sunDirection;
+}
+
+export function encodeAerial(graph: AtmosphereGraph): void {
   const groups = LUT_SIZES.aerial / AERIAL_WORKGROUP;
   graph.aerialCompute.dispatch(groups, groups, groups);
-  // Reads the sky-view LUT of the previous frame; stills pre-render one sky-view pass so it is already current.
+}
+
+/** Reads the sky-view LUT of the previous frame; stills pre-render one sky-view pass so it is already current. */
+export function encodeFrameConstants(graph: AtmosphereGraph): void {
   graph.frameConstantsCompute.dispatch(1);
-  if (graph.lutPhase === 'stale') encodeTransmittance(frame, graph);
+}
+
+export function encodeSkyView(frame: Frame, graph: AtmosphereGraph): void {
   frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect));
+}
+
+export function encodeScene(frame: Frame, graph: AtmosphereGraph): void {
   frame.pass({ target: graph.scene, clear: CLEAR }, (pass) => pass.draw(graph.sceneEffect));
-  // Sixteenth-rate cloud update: this frame's texels are marched, the rest are reprojected from last frame's buffer.
+}
+
+/** Sixteenth-rate cloud update: this frame's texels are marched, the rest are reprojected from last frame's buffer. */
+export function encodeClouds(frame: Frame, graph: AtmosphereGraph): void {
   graph.reprojection.set(reprojectionUniforms(graph.previousCamera, graph.frame, graph.accumulate));
   graph.cloudsEffect.set({ history: graph.cloudsTargets.read });
-  graph.presentEffect.set({ cloudsHdr: graph.cloudsTargets.write });
   frame.pass({ target: graph.cloudsTargets.write, clear: [0, 0, 0, 1] }, (pass) => pass.draw(graph.cloudsEffect));
+}
+
+export function encodePresent(frame: Frame, graph: AtmosphereGraph, output: Output): void {
+  graph.presentEffect.set({ cloudsHdr: graph.cloudsTargets.write });
   frame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(graph.presentEffect));
+}
+
+/** Swaps the cloud history and advances the temporal sequence; once per frame, after the passes. */
+export function finishFrame(graph: AtmosphereGraph): void {
   graph.cloudsTargets.swap();
   graph.previousCamera = graph.currentCamera;
   graph.frame += 1;
@@ -408,7 +444,7 @@ function renderState(gpu: Gpu, graph: AtmosphereGraph, output: Target, state: At
   applyState(graph, state, output.size);
   if (graph.lutPhase !== 'ready') bakeLuts(gpu, graph);
   // The per-frame constants read the sky-view LUT before this frame's pass writes it: make it current first.
-  createFrame(gpu, (frame) => frame.pass({ target: graph.skyView, clear: CLEAR }, (pass) => pass.draw(graph.skyViewEffect)));
+  createFrame(gpu, (frame) => encodeSkyView(frame, graph));
   for (let i = 0; i < CLOUD_CONVERGENCE_FRAMES; i++) createFrame(gpu, (frame) => renderGraph(frame, graph, output));
 }
 
@@ -454,7 +490,7 @@ function sameDirection(a: Vec3 | undefined, b: Vec3): boolean {
   return a !== undefined && a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 }
 
-function destroyGraph(graph: AtmosphereGraph): void {
+export function destroyGraph(graph: AtmosphereGraph): void {
   for (const target of [graph.transmittance, graph.skyView, graph.scene, graph.cloudsTargets.read, graph.cloudsTargets.write]) target.color.destroy();
   for (const texture of [graph.multiScatter, graph.aerial, graph.aerialLoss, graph.shapeNoise, graph.detailNoise, graph.weatherMap, graph.curlNoise, graph.terrainMap, graph.terrainAlbedoMap, graph.terrainShadowMap]) texture.destroy();
 }
