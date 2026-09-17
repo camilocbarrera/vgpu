@@ -110,7 +110,9 @@ test('hover movement produces an impulse, resets the coast age and settles', () 
   const next = animation.update(1 / 60);
   expect(next.repelImpulse).toBe(0);
   expect(next.repelEnabled).toBe(1);
-  expect(next.repelAge).toBeCloseTo(0, 6);
+  // The age advances before it is read, so the frame after an impulse has
+  // already coasted the stored state by one step instead of reporting 0.
+  expect(next.repelAge).toBeCloseTo(1 / 60, 6);
   // Pressing (dragging) suspends the repel; a still pointer keeps coasting.
   animation.setPointer(0.5, 0.5, true);
   expect(animation.update(1 / 60).repelImpulse).toBe(0);

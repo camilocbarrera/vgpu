@@ -10,10 +10,14 @@ import {
   mulberry32,
   PATH_SAMPLES,
   paletteColor,
+  parseCubicPath,
   repelMass,
   samplePath,
+  SPIRAL_PATHS,
   STAR_FLOATS,
   starCountFor,
+  strokeFlowSpeed,
+  STROKE_SEGMENTS,
   STROKES,
 } from './field';
 
@@ -117,4 +121,37 @@ test('helpers match the shader-side math', () => {
   expect(starCountFor(STROKES[0]!, 4)).toBe(880);
   expect(backgroundCountFor(880, true)).toBe(120);
   expect(backgroundCountFor(880, false)).toBe(0);
+});
+
+test('the "6" strokes parse into continuous cubic runs', () => {
+  expect(STROKE_SEGMENTS).toHaveLength(STROKES.length);
+  SPIRAL_PATHS.forEach((path, index) => {
+    const segments = parseCubicPath(path);
+    expect(segments).toEqual(STROKE_SEGMENTS[index]);
+    expect(segments.length).toBeGreaterThan(0);
+    for (let i = 1; i < segments.length; i += 1) {
+      expect(segments[i]!.x0).toBe(segments[i - 1]!.x3);
+      expect(segments[i]!.y0).toBe(segments[i - 1]!.y3);
+    }
+  });
+  expect(parseCubicPath('M0 0C1 1 2 2 3 3 4 4 5 5 6 6')).toHaveLength(2);
+  expect(() => parseCubicPath('M0 0L1 1')).toThrow('no cubic segments');
+  expect(() => parseCubicPath('M0 0Q1 1 2 2')).toThrow('Unsupported SVG path command');
+});
+
+test('every stroke flows toward the core regardless of how its path was authored', () => {
+  const field = generateField();
+  for (const layer of field.layers) {
+    if (layer.isCore) continue;
+    const spec = STROKES[layer.index]!;
+    expect(Math.abs(layer.speed)).toBeCloseTo(Math.abs(spec.speed), 6);
+    expect(layer.speed).toBe(strokeFlowSpeed(field.paths, layer.sampleBase, spec.speed));
+    expect(strokeFlowSpeed(field.paths, layer.sampleBase, spec.speed, false)).toBe(-layer.speed);
+  }
+  // A path that ends farther out than it starts is re-signed to flow inward.
+  const outward = new Float32Array(PATH_SAMPLES * 4);
+  outward[0] = 1;
+  outward[4 * (PATH_SAMPLES - 1)] = 5;
+  expect(strokeFlowSpeed(outward, 0, 0.02)).toBe(-0.02);
+  expect(strokeFlowSpeed(outward, 0, -0.02)).toBe(-0.02);
 });

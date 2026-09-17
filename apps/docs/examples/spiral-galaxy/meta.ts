@@ -2,7 +2,7 @@ export const meta = {
   slug: 'spiral-galaxy',
   title: 'Spiral Galaxy',
   description:
-    'A launch-page star-field hero built end to end on vgpu: a compute pass flows 4,600 stars along procedural spiral strokes, converges them from a scattered sky and runs a pointer-repel simulation; additive quads draw them into an HDR scene; a bloom, lens-flare and dirty-glass chain finishes with ACES tone mapping. Drag to rotate, hover to scatter.',
+    'A launch-page star-field hero built end to end on vgpu: a compute pass flows 4,600 stars along the five spiral strokes of a "6", converges them from a scattered sky and runs a pointer-repel simulation; additive quads draw them into an HDR scene; a bloom, lens-flare and dirty-glass chain finishes with an ambient glow, vignette and ACES tone mapping. Drag to rotate, hover to scatter.',
   tags: [
     'particles',
     'compute',

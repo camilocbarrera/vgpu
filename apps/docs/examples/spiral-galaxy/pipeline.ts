@@ -1,7 +1,7 @@
 // GPU resources and the per-frame chain shared by the browser renderer and the
 // thumbnail: simulate (compute) → stars (additive quads into an HDR scene) →
-// bloom (half- and quarter-resolution Gaussian pairs) → composite (flare,
-// dirty glass, ACES) into the output.
+// bloom (half- and quarter-resolution Gaussian pairs) → composite (ambient
+// glow, flare, dirty glass, vignette, ACES) into the output.
 
 import {
   compute,
@@ -60,6 +60,12 @@ export interface Look {
     readonly ghosts: number;
     readonly secondary: number;
   };
+  readonly ambient: {
+    readonly color: string;
+    readonly opacity: number;
+    /** Normalised radius where the glow starts; 0 is the centre, 1 the corner. */
+    readonly start: number;
+  };
   readonly dirtyGlass: {
     readonly enabled: boolean;
     readonly distortion: number;
@@ -71,11 +77,11 @@ export interface Look {
 }
 
 export const DEFAULT_LOOK: Look = {
-  bloomIntensity: 0.5,
+  bloomIntensity: 0.7,
   bloomThreshold: 0.08,
   bloomSmoothing: 0.18,
   exposure: 1,
-  cameraY: 0.2,
+  cameraY: 1.2,
   densityFalloff: 0.22,
   sizeFalloff: 0.45,
   lensFlare: {
@@ -88,6 +94,9 @@ export const DEFAULT_LOOK: Look = {
     ghosts: 0.1,
     secondary: 0.55,
   },
+  // Calibrated against the launch page's own pixels. Its gradient box spans the whole
+  // article, so inside the hero viewport the ramp is steeper than a viewport-sized box.
+  ambient: { color: '#23435F', opacity: 0.62, start: 0.2 },
   dirtyGlass: { enabled: true, distortion: 0.68, grain: 0.031, procedural: 0.35, texture: 0, drift: 0.28 },
 };
 
@@ -197,8 +206,10 @@ export function createEffects(gpu: Gpu, field: StarField, resources: Resources, 
       label: 'spiral-galaxy-bright',
       set: { samp, bright: { threshold: look.bloomThreshold, smoothing: look.bloomSmoothing } },
     }),
+    // Initial struct values must be complete; setBindings replaces the texel
+    // size with the real target dimensions before the first draw.
     blur: BLURS.map((options, i) =>
-      effect(gpu, blurWgsl, { label: `spiral-galaxy-blur-${i}`, set: { samp, blur: options } }),
+      effect(gpu, blurWgsl, { label: `spiral-galaxy-blur-${i}`, set: { samp, blur: { ...options, texelSize: [1, 1] } } }),
     ),
     dirt: effect(gpu, dirtWgsl, { label: 'spiral-galaxy-dirt', set: { dirt: { size: DIRT_SIZE } } }),
     composite: effect(gpu, compositeWgsl, {
@@ -230,6 +241,12 @@ export function createEffects(gpu: Gpu, field: StarField, resources: Resources, 
           coreLayer: Math.max(0, field.coreLayer),
           dirtOffset: [0, 0],
           pad: [0, 0],
+          ambientColor: srgbColor(look.ambient.color),
+          ambientOpacity: look.ambient.opacity,
+          ambientStart: look.ambient.start,
+          pad2: 0,
+          pad3: 0,
+          pad4: 0,
         },
       },
     }),
@@ -282,16 +299,27 @@ function destroy(resource: unknown): void {
   (resource as { destroy?: () => void } | undefined)?.destroy?.();
 }
 
-/** Orthographic world extent: taller on portrait viewports so the arms still fit. */
-export function worldSize(size: readonly [number, number]): [number, number] {
+/** Hex to 0-1 sRGB. The ambient glow is composited in display space, so it stays sRGB. */
+function srgbColor(hex: string): [number, number, number] {
+  const value = Number.parseInt(hex.replace('#', ''), 16);
+  return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
+}
+
+/**
+ * Orthographic world extent: taller on portrait viewports so the arms still fit.
+ * `scale` above 1 widens the view, which pulls the field away from the edges.
+ */
+export function worldSize(size: readonly [number, number], scale = 1): [number, number] {
   const aspect = size[0] / Math.max(1, size[1]);
-  const height = aspect < 0.72 ? 12.7 : 10.9;
+  const height = (aspect < 0.72 ? 12.7 : 10.9) * Math.max(scale, 0.1);
   return [height * aspect, height];
 }
 
 export interface ViewOptions {
   readonly pixelRatio: number;
   readonly repelRadius: number;
+  /** Above 1 zooms out; used by the Open Graph poster framing. */
+  readonly worldScale?: number;
 }
 
 export function setBindings(
@@ -301,7 +329,7 @@ export function setBindings(
   view: ViewOptions,
 ): void {
   const size = targets.scene.size;
-  const world = worldSize(size);
+  const world = worldSize(size, view.worldScale ?? 1);
   effects.simulate.set({
     params: {
       viewport: [size[0], size[1]],
@@ -413,4 +441,3 @@ export function renderChain(currentFrame: Frame, effects: Effects, targets: Targ
   currentFrame.pass({ target: targets.far[1], clear: CLEAR }, (pass) => pass.draw(effects.blur[3]!));
   currentFrame.pass({ target: output, clear: CLEAR }, (pass) => pass.draw(effects.composite));
 }
-

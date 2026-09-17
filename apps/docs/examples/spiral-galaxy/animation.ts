@@ -88,7 +88,7 @@ export function createAnimation(field: StarField, options: AnimationOptions = {}
   const duration = clamp(options.introDuration ?? 5.5, 1, 10);
   const flowSpeed = reduced ? 0 : clamp(options.flowSpeed ?? 0.8, 0, 3);
   const twinkleSpeed = reduced ? 0 : clamp(options.twinkleSpeed ?? 0.62, 0, 2);
-  const intensity = clamp(options.intensity ?? 1.2, 0.1, 3);
+  const intensity = clamp(options.intensity ?? 1.35, 0.1, 3);
   const rotationLag = clamp(options.rotationLag ?? 0.68, 0, 1);
   const faceForward = options.faceForward ?? true;
   let repelEnabled = !reduced && (options.particleRepel ?? true);
@@ -168,8 +168,12 @@ export function createAnimation(field: StarField, options: AnimationOptions = {}
     });
 
     // Pointer repel: hovering (not dragging) pushes stars along the pointer path.
-    const age = motionAge;
+    // The age is advanced *before* it is used, so a frame that also carries an impulse
+    // still coasts the stored state forward by one frame. Reading it beforehand would
+    // pass age 0 on every moving frame, and coast(state, mass, 0) is the identity --
+    // velocity would build up while the offset never integrated, which reads as lag.
     motionAge = Math.min(SETTLE_SECONDS, motionAge + dt);
+    const age = motionAge;
     let impulseX = 0;
     let impulseY = 0;
     let hasImpulse = false;

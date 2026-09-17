@@ -27,6 +27,13 @@ struct Params {
   coreLayer: u32,
   dirtOffset: vec2f,
   pad: vec2f,
+  ambientColor: vec3f,
+  ambientOpacity: f32,
+  /** Normalised radius where the ambient glow starts (1 - feather / corner distance). */
+  ambientStart: f32,
+  pad2: f32,
+  pad3: f32,
+  pad4: f32,
 }
 
 @group(0) @binding(0) var scene: texture_2d<f32>;
@@ -38,6 +45,32 @@ struct Params {
 @group(0) @binding(6) var<uniform> params: Params;
 
 const FLARE_TINT = vec3f(0.956, 0.956, 0.956);
+
+// The launch page paints a deep-navy ambient glow and a vignette as CSS layers behind
+// a transparent canvas, i.e. after tone mapping. Our surface is opaque, so both live
+// here instead -- and are applied in display space so the colour matches.
+fn ambientBackdrop(uv: vec2f) -> vec3f {
+  // "ellipse farthest-corner at center": the corner sits at normalised radius 1.
+  let p = (uv - 0.5) * 2.0;
+  let radius = length(p) * 0.70710678;
+  let span = max(1.0 - params.ambientStart, 0.0001);
+  let amount = clamp((radius - params.ambientStart) / span, 0.0, 1.0);
+  return params.ambientColor * amount * params.ambientOpacity;
+}
+
+/** Piecewise-linear match of radial-gradient(transparent 47%, .18 72%, .78 100%). */
+fn vignetteAlpha(uv: vec2f) -> f32 {
+  var q = uv - 0.5;
+  q.x *= params.aspect;
+  let radius = length(q) / max(length(vec2f(0.5 * params.aspect, 0.5)), 0.0001);
+  if (radius <= 0.47) {
+    return 0.0;
+  }
+  if (radius <= 0.72) {
+    return 0.18 * (radius - 0.47) / 0.25;
+  }
+  return 0.18 + 0.6 * clamp((radius - 0.72) / 0.28, 0.0, 1.0);
+}
 
 fn sceneColor(uv: vec2f) -> vec3f {
   let at = clamp(uv, vec2f(0.001), vec2f(0.999));
@@ -170,5 +203,6 @@ fn secondaryFlare(center: vec2f, uv: vec2f) -> f32 {
   optical += vec3f((grain - 0.5) * params.grain) * (0.18 + reveal * 0.82) * params.dirtEnabled;
 
   let mapped = tonemapAces(max(optical, vec3f(0.0)) * params.exposure);
-  return vec4f(linearToSrgb3(mapped), 1.0);
+  let display = linearToSrgb3(mapped) + ambientBackdrop(uv);
+  return vec4f(display * (1.0 - vignetteAlpha(uv)), 1.0);
 }

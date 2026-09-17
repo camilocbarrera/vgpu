@@ -171,6 +171,7 @@ export function createRenderer({ canvas, container = canvas.parentElement ?? und
     await prewarm(effects, targets, resources, canvasSurface);
     if (disposed) return;
     bakeDirt(gpu, effects, resources);
+    applySettings();
 
     input = installFieldInput(canvas, animation);
     gui = createGui(container, settings, {

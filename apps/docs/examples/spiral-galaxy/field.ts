@@ -1,10 +1,11 @@
-// Deterministic star field: five procedural spiral strokes plus a core
-// cluster. Everything is generated once on the CPU with seeded randomness, so
-// every reload (and the thumbnail) produces the same field, then uploaded as
-// storage buffers the compute pass reads every frame.
+// Deterministic star field: five spiral strokes plus a core cluster. Everything
+// is generated once on the CPU with seeded randomness, so every reload (and the
+// thumbnail) produces the same field, then uploaded as storage buffers the
+// compute pass reads every frame.
 //
-// Inspired by the star-field hero on openai.com/index/gpt-6-astra; the
-// strokes, palette and code here are original.
+// Reproduces the star-field hero on openai.com/index/gpt-6-astra. The stroke
+// paths below and the palette are the launch page's own values; the renderer,
+// shaders and the rest of this code are an independent implementation.
 
 export const PATH_SAMPLES = 512;
 /** Floats per `Star` in simulate.wgsl (96 bytes). */
@@ -17,35 +18,107 @@ export const PROJECTED_FLOATS = 12;
 export const MAX_FLARE_SOURCES = 8;
 
 export interface StrokeSpec {
-  /** Start angle in radians; the stroke winds inward as t grows. */
-  readonly theta: number;
-  readonly sweep: number;
-  readonly outerRadius: number;
-  readonly innerRadius: number;
   /** Depth wave amplitude in world units, scaled by `rotationDepth`. */
   readonly depth: number;
-  /** Flow speed in stroke lengths per second, before `flowSpeed`. */
+  /** Initial flow phase along the stroke. */
+  readonly phase: number;
+  /** Flow speed in stroke lengths per second, before `flowSpeed`. The sign is
+   *  recomputed from the geometry so every stroke flows inward. */
   readonly speed: number;
   readonly strong: boolean;
 }
 
-// Log-spiral arms around the core; the three strong strokes carry the eye,
-// the two weak ones fill the gaps.
-export const STROKES: readonly StrokeSpec[] = [
-  { theta: 0.35 * Math.PI, sweep: 1.7 * Math.PI, outerRadius: 5.3, innerRadius: 0.75, depth: 0.62, speed: 0.025, strong: true },
-  { theta: 1.35 * Math.PI, sweep: 1.45 * Math.PI, outerRadius: 4.7, innerRadius: 1.1, depth: -0.46, speed: 0.018, strong: false },
-  { theta: 0.85 * Math.PI, sweep: 1.9 * Math.PI, outerRadius: 3.7, innerRadius: 0.55, depth: 0.78, speed: 0.021, strong: true },
-  { theta: 1.85 * Math.PI, sweep: 1.6 * Math.PI, outerRadius: 3.2, innerRadius: 0.8, depth: -0.7, speed: 0.016, strong: false },
-  { theta: 0.1 * Math.PI, sweep: 2.3 * Math.PI, outerRadius: 1.9, innerRadius: 0.2, depth: 0.42, speed: 0.03, strong: true },
+/**
+ * The five SVG strokes that draw the "6" the stars orbit along (viewBox 231x325),
+ * taken verbatim from the launch page. Each stroke becomes one star layer.
+ */
+export const SPIRAL_PATHS: readonly string[] = [
+  "M128.472 2.36011C65.4727 24.3601 10.7725 93.1601 9.97246 162.36C8.97246 248.86 79.4138 262.86 87.9725 262.86C116.973 262.86 135.973 244.36 135.973 221.36C135.973 189.86 102.973 193.86 102.973 209.36",
+  "M224.973 31.8602C132.473 3.86011 29.9727 75.8601 29.9727 159.86C29.9727 247.86 98.4726 259.86 126.473 247.86",
+  "M126.473 215.359C124.639 222.692 117.073 237.159 101.473 236.359C89.1905 235.729 76.0585 219.995 76.4724 195.859C76.4724 165.859 100.473 142.859 132.473 142.859C171.973 142.859 213.473 171.36 213.473 231.36C213.473 276.36 170.473 328.36 85.9727 316.86",
+  "M106.973 237.36C81.9727 240.36 61.4727 222.86 61.4727 184.86C61.4727 153.36 91.9727 123.36 132.473 123.36C172.973 123.36 227.973 149.86 227.973 225.36C227.973 287.36 168.473 322.36 121.473 322.36C53.4727 322.36 10.9727 264.86 2.47266 208.36",
+  "M114.973 211.36C114.973 225.86 92.4727 226.86 92.4727 205.36C92.4727 183.86 109.938 175.36 127.973 175.36C146.008 175.36 174.473 195.86 174.473 230.86C174.473 264.36 148.473 281.86 133.973 287.36C119.473 292.86 81.6727 296.56 54.4727 269.36",
 ];
 
+export const STROKES: readonly StrokeSpec[] = [
+  { depth: 0.62, phase: 0.16, speed: 0.025, strong: true },
+  { depth: -0.46, phase: 0.72, speed: -0.018, strong: false },
+  { depth: 0.78, phase: 0.38, speed: 0.021, strong: true },
+  { depth: -0.7, phase: 0.58, speed: -0.016, strong: false },
+  { depth: 0.42, phase: 0.08, speed: 0.03, strong: true },
+];
+
+/** The "6" viewBox is 231x325; the glyph core sits at (114.973, 211.36) and spans 9.7 world units. */
+const VIEWBOX_SCALE = 9.7 / 325;
+const CORE_X = 114.973;
+const CORE_Y = 211.36;
+
+interface CubicSegment {
+  readonly x0: number; readonly y0: number;
+  readonly x1: number; readonly y1: number;
+  readonly x2: number; readonly y2: number;
+  readonly x3: number; readonly y3: number;
+}
+
+/** Minimal SVG path reader: these five strokes are a single `M` followed by cubic `C` runs. */
+export function parseCubicPath(d: string): readonly CubicSegment[] {
+  const tokens = d.match(/[A-Za-z]|-?\d*\.?\d+(?:[eE][-+]?\d+)?/g) ?? [];
+  const segments: CubicSegment[] = [];
+  let index = 0;
+  let command = "";
+  let x = 0;
+  let y = 0;
+  const next = () => {
+    const value = Number(tokens[index++]);
+    if (!Number.isFinite(value)) throw new Error("Malformed SVG path near token " + index);
+    return value;
+  };
+  while (index < tokens.length) {
+    if (/[A-Za-z]/.test(tokens[index]!)) command = tokens[index++]!;
+    if (command === "M") {
+      x = next();
+      y = next();
+      // Repeated coordinate pairs after a moveto are implicit linetos.
+      command = "L";
+    } else if (command === "L") {
+      x = next();
+      y = next();
+    } else if (command === "C") {
+      const x1 = next(); const y1 = next();
+      const x2 = next(); const y2 = next();
+      const x3 = next(); const y3 = next();
+      segments.push({ x0: x, y0: y, x1, y1, x2, y2, x3, y3 });
+      x = x3;
+      y = y3;
+    } else {
+      throw new Error("Unsupported SVG path command " + command);
+    }
+  }
+  if (segments.length === 0) throw new Error("SVG path produced no cubic segments");
+  return segments;
+}
+
+export const STROKE_SEGMENTS: readonly (readonly CubicSegment[])[] = SPIRAL_PATHS.map(parseCubicPath);
+
+/** Evaluates the stroke at `t` (uniform in segment parameter) and maps it into world space. */
+function strokePoint(segments: readonly CubicSegment[], t: number, out: [number, number]): [number, number] {
+  const scaled = clamp(t, 0, 1) * segments.length;
+  const index = Math.min(Math.floor(scaled), segments.length - 1);
+  const s = segments[index]!;
+  const local = scaled - index;
+  const u = 1 - local;
+  const a = u * u * u;
+  const b = 3 * u * u * local;
+  const c = 3 * u * local * local;
+  const d = local * local * local;
+  out[0] = (a * s.x0 + b * s.x1 + c * s.x2 + d * s.x3 - CORE_X) * VIEWBOX_SCALE;
+  out[1] = (CORE_Y - (a * s.y0 + b * s.y1 + c * s.y2 + d * s.y3)) * VIEWBOX_SCALE;
+  return out;
+}
 /** sRGB palette; converted to linear when written into the star buffer. */
-export const PALETTE = ['#7fd4ff', '#8ab4ff', '#ff8a2a', '#ffb15c', '#f7f8ff'] as const;
+export const PALETTE = ['#6DCBF4', '#7AB1FE', '#F87915', '#FA994C', '#F5F6FB'] as const;
 /** Palette seed of each stroke's hero star, so every flare source has its own tint. */
 const HERO_COLOR_SEEDS = [0.08, 0.58, 0.22, 0.68, 0.44];
-
-const SQUASH = 0.74;
-const TILT = -0.42;
 
 export interface FieldOptions {
   /** Stars per stroke = (strong ? 220 : 170) × density. */
@@ -141,32 +214,19 @@ export function repelMass(size: number): number {
   return lerp(0.65, 2.4, smoothstep(size, 1, 14));
 }
 
-function strokePoint(spec: StrokeSpec, t: number, out: [number, number]): [number, number] {
-  const theta = spec.theta + t * spec.sweep;
-  const radius =
-    lerp(spec.outerRadius, spec.innerRadius, t ** 0.92) *
-    (1 + 0.05 * Math.sin(3.1 * theta + spec.depth * 4));
-  const x = Math.cos(theta) * radius;
-  const y = Math.sin(theta) * radius * SQUASH;
-  const c = Math.cos(TILT);
-  const s = Math.sin(TILT);
-  out[0] = x * c - y * s;
-  out[1] = x * s + y * c;
-  return out;
-}
-
 /**
  * Resamples a stroke by arc length into `PATH_SAMPLES` xyz points and adds the
  * depth wave that gives the field its parallax when rotated.
  */
 export function buildPath(spec: StrokeSpec, layerIndex: number, rotationDepth: number): Float32Array<ArrayBuffer> {
+  const segments = STROKE_SEGMENTS[layerIndex] ?? STROKE_SEGMENTS[0]!;
   const fine = 2048;
   const xs = new Float64Array(fine + 1);
   const ys = new Float64Array(fine + 1);
   const lengths = new Float64Array(fine + 1);
   const point: [number, number] = [0, 0];
   for (let i = 0; i <= fine; i += 1) {
-    strokePoint(spec, i / fine, point);
+    strokePoint(segments, i / fine, point);
     xs[i] = point[0];
     ys[i] = point[1];
     if (i > 0) lengths[i] = lengths[i - 1]! + Math.hypot(xs[i]! - xs[i - 1]!, ys[i]! - ys[i - 1]!);
@@ -262,10 +322,23 @@ export function backgroundCountFor(starCount: number, enabled: boolean): number 
   return enabled ? Math.ceil((0.12 * starCount) / 0.88) : 0;
 }
 
+/**
+ * Signed flow speed for a stroke: `flowInward` keeps stars travelling toward the
+ * core, so the authored magnitude is re-signed from where the stroke actually ends.
+ */
+export function strokeFlowSpeed(paths: Float32Array, sampleBase: number, speed: number, flowInward = true): number {
+  const first = 4 * sampleBase;
+  const last = 4 * (sampleBase + PATH_SAMPLES - 1);
+  const startRadius = paths[first]! ** 2 + paths[first + 1]! ** 2;
+  const endRadius = paths[last]! ** 2 + paths[last + 1]! ** 2;
+  const endsInside = endRadius < startRadius;
+  return Math.abs(speed) * ((flowInward ? endsInside : !endsInside) ? 1 : -1);
+}
+
 /** Builds the star layers along the spiral strokes plus the center cluster. */
 export function generateField(options: FieldOptions = {}): StarField {
   const density = clamp(options.density ?? 4, 0.25, 6);
-  const starSize = clamp(options.starSize ?? 1.5, 0.25, 3);
+  const starSize = clamp(options.starSize ?? 2.05, 0.25, 3);
   const scatter = clamp(options.scatter ?? 0.4, 0, 0.45);
   const falloff = clamp(options.densityFalloff ?? 0.22, 0, 1);
   const rotationDepth = clamp(options.rotationDepth ?? 1.4, 0, 2);
@@ -352,7 +425,7 @@ export function generateField(options: FieldOptions = {}): StarField {
       index: layerIndex,
       isCore: false,
       strong: spec.strong,
-      speed: Math.abs(spec.speed),
+      speed: strokeFlowSpeed(paths, sampleBase, spec.speed),
       lag: 0.18 + 0.17 * layerIndex,
       sampleBase,
       heroIndex,

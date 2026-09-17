@@ -39,11 +39,10 @@ export async function renderThumbnail(gpu: Gpu, output: Target, options: ThumbOp
     await prewarm(effects, targets, resources, output);
     bakeDirt(gpu, effects, resources);
 
-    // Advance the intro deterministically, then hold a gentle tilt so the
-    // depth of the strokes reads in a still image.
+    // Advance the intro deterministically and hold the settled, front-on view
+    // so the "6" the strokes draw reads in a still image.
     const time = options.time ?? 7;
     const dt = options.dt ?? 1 / 60;
-    animation.rotate(-0.28, 0.42);
     for (let elapsed = 0; elapsed < time; elapsed += STEP) animation.update(Math.min(STEP, time - elapsed));
     animation.settle();
 
